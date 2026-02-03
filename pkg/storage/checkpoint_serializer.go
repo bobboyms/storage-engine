@@ -67,6 +67,9 @@ func SerializeBPlusTree(tree *btree.BPlusTree, lastLSN uint64) ([]byte, error) {
 
 // SerializeNode serializa um nó e seus filhos recursivamente
 func SerializeNode(w io.Writer, node *btree.Node) error {
+	node.RLock()
+	defer node.RUnlock()
+
 	// Node Header:
 	// [Type (1 byte)] [N (4 bytes)]
 	var nodeType uint8 = NodeTypeInternal

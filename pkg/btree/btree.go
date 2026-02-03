@@ -1,9 +1,11 @@
 package btree
 
 import (
+	"fmt"
 	"sort"
 	"sync" // Added for Latch Crabbing
 
+	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
@@ -40,11 +42,28 @@ func (b *BPlusTree) Insert(key types.Comparable, dataPtr int64) error {
 
 // Replace forcily updates the key's value (used for MVCC Updates on Unique Index)
 func (b *BPlusTree) Replace(key types.Comparable, dataPtr int64) error {
-	// Force uniqueKey=false to allow overwrite
-	return b.insertHelper(key, dataPtr, false)
+	return b.Upsert(key, func(oldValue int64, exists bool) (int64, error) {
+		return dataPtr, nil
+	})
+}
+
+// Upsert executes a function on the current value (if exists) and sets the new value.
+// The callback is executed while holding the leaf lock, enabling atomic Read-Modify-Write.
+func (b *BPlusTree) Upsert(key types.Comparable, fn func(oldValue int64, exists bool) (newValue int64, err error)) error {
+	return b.upsertHelper(key, fn)
 }
 
 func (b *BPlusTree) insertHelper(key types.Comparable, dataPtr int64, uniqueKey bool) error {
+	return b.Upsert(key, func(oldValue int64, exists bool) (int64, error) {
+		if exists && uniqueKey {
+			return 0, &errors.DuplicateKeyError{Key: fmt.Sprintf("%v", key)}
+		}
+		return dataPtr, nil
+	})
+}
+
+func (b *BPlusTree) upsertHelper(key types.Comparable, fn func(oldValue int64, exists bool) (newValue int64, err error)) error {
+
 	b.mu.Lock()
 	root := b.Root
 	root.Lock()
@@ -59,16 +78,17 @@ func (b *BPlusTree) insertHelper(key types.Comparable, dataPtr int64, uniqueKey 
 		newRoot.Lock()
 		root.Unlock()
 
-		return b.insertTopDown(newRoot, key, dataPtr, uniqueKey)
+		return b.upsertTopDown(newRoot, key, fn)
 	}
 
 	b.mu.Unlock()
-	return b.insertTopDown(root, key, dataPtr, uniqueKey)
+	return b.upsertTopDown(root, key, fn)
 }
 
-// insertTopDown realiza a inserção descendo a árvore e dividindo nós cheios preventivamente.
+// upsertTopDown realiza a inserção descendo a árvore e dividindo nós cheios preventivamente.
 // Assume que 'curr' já está trancado (Lock) pelo chamador.
-func (b *BPlusTree) insertTopDown(curr *Node, key types.Comparable, dataPtr int64, uniqueKey bool) error {
+func (b *BPlusTree) upsertTopDown(curr *Node, key types.Comparable, fn func(oldValue int64, exists bool) (newValue int64, err error)) error {
+
 	// Garante unlock do nó atual no final (ou em caso de erro)
 	// Se passarmos o lock para o filho, `curr` mudará, então cuidado com defer.
 	// Vamos gerenciar os unlocks manualmente para latch crabbing.
@@ -112,7 +132,7 @@ func (b *BPlusTree) insertTopDown(curr *Node, key types.Comparable, dataPtr int6
 	// Chegamos na folha e ela está lockada.
 	// Como usamos split preventivo, é garantido que ela não está cheia.
 	// Podemos inserir diretamente.
-	return curr.InsertNonFull(key, dataPtr, uniqueKey)
+	return curr.UpsertNonFull(key, fn)
 }
 
 // Search busca uma chave na árvore de forma concorrente (RLock coupling)
@@ -145,6 +165,38 @@ func (b *BPlusTree) Search(key types.Comparable) (*Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Get retorna o valor associado à chave de forma thread-safe (usando latching interno)
+func (b *BPlusTree) Get(key types.Comparable) (int64, bool) {
+	b.mu.RLock()
+	curr := b.Root
+	curr.RLock()
+	b.mu.RUnlock()
+
+	for !curr.Leaf {
+		// Encontra filho
+		i := 0
+		for i < curr.N && key.Compare(curr.Keys[i]) >= 0 {
+			i++
+		}
+		child := curr.Children[i]
+		child.RLock()
+
+		// Latch Crabbing: Solta o pai, mantém o filho
+		curr.RUnlock()
+		curr = child
+	}
+
+	// Busca na folha
+	defer curr.RUnlock()
+
+	for j := 0; j < curr.N; j++ {
+		if key.Compare(curr.Keys[j]) == 0 {
+			return curr.DataPtrs[j], true
+		}
+	}
+	return 0, false
 }
 
 // FindLeafLowerBoundSafe busca o nó folha para scan de forma segura.

@@ -150,6 +150,66 @@ func (n *Node) InsertNonFull(key types.Comparable, dataPtr int64, uniqueKey bool
 	return n.Children[i].InsertNonFull(key, dataPtr, uniqueKey)
 }
 
+// UpsertNonFull realiza a inserção ou atualização na folha, executando o callback
+func (n *Node) UpsertNonFull(key types.Comparable, fn func(oldValue int64, exists bool) (newValue int64, err error)) error {
+	i := n.N - 1
+
+	if n.Leaf {
+		// Encontra posição de inserção
+		idx := sort.Search(n.N, func(j int) bool {
+			return n.Keys[j].Compare(key) >= 0
+		})
+
+		// Se a chave já existe
+		if idx < n.N && n.Keys[idx].Compare(key) == 0 {
+			// Callback com exists=true
+			newValue, err := fn(n.DataPtrs[idx], true)
+			if err != nil {
+				return err
+			}
+			n.DataPtrs[idx] = newValue
+			return nil
+		}
+
+		// Callback com exists=false
+		newValue, err := fn(0, false)
+		if err != nil {
+			return err
+		}
+
+		// Abre espaço para a nova chave
+		n.Keys = append(n.Keys, nil)
+		n.DataPtrs = append(n.DataPtrs, 0)
+		copy(n.Keys[idx+1:], n.Keys[idx:])
+		copy(n.DataPtrs[idx+1:], n.DataPtrs[idx:])
+
+		n.Keys[idx] = key
+		n.DataPtrs[idx] = newValue
+		n.N++
+		return nil
+	}
+
+	// Nó interno: encontra o filho correto (código similar ao InsertNonFull, mas chama UpsertNonFull recursivamente)
+	// Como upsertTopDown já cuida da descida, UpsertNonFull só deve ser chamado em FOLHA no design atual (Split Preventivo).
+	// Mas se houvesse lógica recursiva aqui (sem split preventivo), precisaríamos replicar logic.
+	// No btree.go, usamos upsertTopDown que desce até a folha.
+	// O UpsertNonFull foi chamado em curr (que é garantido ser folha no upsertTopDown).
+	// Portanto, não precisamos implementar a parte de nó interno aqui se apenas usarmos com upsertTopDown.
+	// Mas para ser consistente com InsertNonFull:
+	for i >= 0 && key.Compare(n.Keys[i]) < 0 {
+		i--
+	}
+	i++
+
+	if n.Children[i].N == 2*n.T-1 {
+		n.SplitChild(i)
+		if key.Compare(n.Keys[i]) >= 0 {
+			i++
+		}
+	}
+	return n.Children[i].UpsertNonFull(key, fn)
+}
+
 func (n *Node) SplitChild(i int) {
 	t := n.T
 	y := n.Children[i]

@@ -57,9 +57,11 @@ func (t *Table) RUnlock() {
 	t.mu.RUnlock()
 }
 
-// GetIndex retorna o índice pelo nome.
-// IMPORTANTE: O chamador DEVE ter o lock da tabela antes de chamar este método.
+// GetIndex retorna o índice pelo nome de forma thread-safe (Schema Lock)
 func (t *Table) GetIndex(indexName string) (*Index, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	index, ok := t.Indices[indexName]
 	if !ok {
 		return nil, &errors.IndexNotFoundError{
@@ -69,9 +71,11 @@ func (t *Table) GetIndex(indexName string) (*Index, error) {
 	return index, nil
 }
 
-// GetIndices retorna todos os índices da tabela.
-// IMPORTANTE: O chamador DEVE ter o lock da tabela antes de chamar este método.
+// GetIndices retorna todos os índices da tabela de forma thread-safe (Schema Lock)
 func (t *Table) GetIndices() []*Index {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	indices := make([]*Index, 0, len(t.Indices))
 	for _, idx := range t.Indices {
 		indices = append(indices, idx)

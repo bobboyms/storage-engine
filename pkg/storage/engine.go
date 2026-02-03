@@ -145,9 +145,8 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	// Adquire read lock na tabela específica (Schema Lock)
-	table.RLock()
-	defer table.RUnlock()
+	// Não precisamos travessar a tabela inteira (Table RLock removido em favor de concurrency granular)
+	// se.TableMetaData já proteje o acesso ao mapa de tabelas.
 
 	// Obtém o índice (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
@@ -212,44 +211,27 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		wal.ReleaseEntry(entry)
 	}
 
-	// 2. Verifica se já existe (UPDATE vs INSERT) para Chain
-	// Como estamos com RLock, podemos ler a árvore.
-	// Se existe, a nova versão deve apontar para a antiga (Chain).
-	// Se não existe, PrevOffset = -1.
-
-	// A árvore aponta para o HEAD (versão mais recente).
-	// Precisamos pegar o offset atual antes de sobrescrever.
-
-	var prevOffset int64 = -1
-
-	node, found := index.Tree.Search(key)
-	if found {
-		_, idx := node.FindLeafLowerBound(key)
-		if idx < node.N && node.Keys[idx].Compare(key) == 0 {
-			// Found existing key
-			prevOffset = node.DataPtrs[idx]
-		}
-	}
-
-	// 3. Escreve no Heap com LSN e PrevOffset (Version Chain)
-	offset, err := se.Heap.Write(bsonData, currentLSN, prevOffset)
-	if err != nil {
-		return fmt.Errorf("heap write failed: %w", err)
-	}
-
-	// 4. Modifica Memória (B+ Tree)
-	// Agora a árvore aponta para o novo registro (HEAD)
-	err = index.Tree.Insert(key, offset)
-	if err != nil {
-		// Se for erro de chave duplicada (Unique Index), é um UPDATE.
-		// Precisamos forçar a atualização do ponteiro na B-Tree.
-		if _, ok := err.(*errors.DuplicateKeyError); ok {
-			err = index.Tree.Replace(key, offset)
+	// 2 ~ 4. Atomic Upsert (Write Heap -> Update Tree)
+	// Usamos Upsert para garantir atomocidade no acesso à versão anterior e atualização do ponteiro HEAD.
+	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
+		var prevOffset int64 = -1
+		if exists {
+			prevOffset = oldOffset
 		}
 
+		// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
+		// TODO: Otimização futura - Se heap write for lento, refatorar.
+		// Mas como é append-only bufio, deve ser rápido.
+		offset, err := se.Heap.Write(bsonData, currentLSN, prevOffset)
 		if err != nil {
-			return err
+			return 0, fmt.Errorf("heap write failed: %w", err)
 		}
+
+		return offset, nil
+	})
+
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -268,12 +250,7 @@ func (tx *Transaction) Get(tableName string, indexName string, key types.Compara
 		return "", false, err
 	}
 
-	// Em MVCC, leituras concorrem com escritas.
-	// O Table Lock atual é global para a tabela.
-	// PROVISÓRIO: Mantemos RLock para garantir que a árvore não mude drasticamente (embora BTree tenha latching).
-	// No futuro, podemos relaxar isso.
-	table.RLock()
-	defer table.RUnlock()
+	// Lock-Free Read: Não travamos a tabela. Usamos latching interno da árvore.
 
 	// Obtém o índice (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
@@ -281,58 +258,48 @@ func (tx *Transaction) Get(tableName string, indexName string, key types.Compara
 		return "", false, err
 	}
 
-	// Busca na árvore
-	// O Search retorna o nó folha onde a chave pode estar
-	node, found := index.Tree.Search(key)
+	// Busca na árvore thread-safe
+	currentOffset, found := index.Tree.Get(key)
 	if !found {
 		return "", false, nil
 	}
 
-	// Temos o nó, busco exato
-	_, idx := node.FindLeafLowerBound(key)
-
-	if idx < node.N && node.Keys[idx].Compare(key) == 0 {
-		// B-Tree points to the HEAD (newest) version of the record chain.
-		currentOffset := node.DataPtrs[idx]
-
-		// Version Chain Traversal (Time Travel)
-		for currentOffset != -1 {
-			docBytes, header, err := se.Heap.Read(currentOffset)
-			if err != nil {
-				return "", true, fmt.Errorf("failed to read from heap: %w", err)
-			}
-
-			// Visibility Check
-			if tx.IsVisible(header.CreateLSN) {
-				// 1. Se Valid=true, está viva.
-				// 2. Se Valid=false (Delete), verificamos SE a deleção aconteceu DEPOIS do snapshot.
-
-				isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
-
-				if isVisibleVersion {
-					// Encontramos a versão visível!
-					jsonStr, err := BsonToJson(docBytes)
-					if err == nil {
-						return jsonStr, true, nil
-					}
-					return string(docBytes), true, nil
-				} else {
-					// A versão existe e é visível quanto a CRIAÇÃO, mas já estava DELETADA no snapshot.
-					// Portanto, para este snapshot, a chave não existe.
-					return "", false, nil
-				}
-			}
-
-			// Se a versão atual é MUITO NOVA (CreateLSN > SnapshotLSN),
-			// precisamos olhar a versão anterior na corrente.
-			currentOffset = header.PrevOffset
+	// Version Chain Traversal (Time Travel)
+	for currentOffset != -1 {
+		docBytes, header, err := se.Heap.Read(currentOffset)
+		if err != nil {
+			return "", true, fmt.Errorf("failed to read from heap: %w", err)
 		}
 
-		// Chegamos ao fim da chain sem achar versão visível
-		return "", false, nil
+		// Visibility Check
+		if tx.IsVisible(header.CreateLSN) {
+			// 1. Se Valid=true, está viva.
+			// 2. Se Valid=false (Delete), verificamos SE a deleção aconteceu DEPOIS do snapshot.
+
+			isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
+
+			if isVisibleVersion {
+				// Encontramos a versão visível!
+				jsonStr, err := BsonToJson(docBytes)
+				if err == nil {
+					return jsonStr, true, nil
+				}
+				return string(docBytes), true, nil
+			} else {
+				// A versão existe e é visível quanto a CRIAÇÃO, mas já estava DELETADA no snapshot.
+				// Portanto, para este snapshot, a chave não existe.
+				return "", false, nil
+			}
+		}
+
+		// Se a versão atual é MUITO NOVA (CreateLSN > SnapshotLSN),
+		// precisamos olhar a versão anterior na corrente.
+		currentOffset = header.PrevOffset
 	}
 
+	// Chegamos ao fim da chain sem achar versão visível
 	return "", false, nil
+
 }
 
 // Get wrapper para conveniência (Autocommit / Snapshot instantâneo)
@@ -353,9 +320,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 		return nil, err
 	}
 
-	// Adquire read lock na tabela específica
-	table.RLock()
-	defer table.RUnlock()
+	// Lock-Free Scan: Cursor thread-safe cuida dos locks de folha
 
 	results := []string{}
 	// Obtém o índice (já temos o lock da tabela)
@@ -499,9 +464,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		return false, err
 	}
 
-	// Adquire read lock na tabela específica (Schema Lock)
-	table.RLock()
-	defer table.RUnlock()
+	// Sem Table Lock. Upsert cuida disso.
 
 	// Obtém o índice (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
@@ -539,30 +502,38 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	}
 
 	// 2. Modifica Memória e Heap
-	// Primeiro precisamos pegar o offset para deletar do heap
-	node, _ := index.Tree.Search(key)
-	if node != nil {
-		_, idx := node.FindLeafLowerBound(key)
-		if idx < node.N && node.Keys[idx].Compare(key) == 0 {
-			offset := node.DataPtrs[idx]
+	// Usa Upsert para remover logicamente (ou manter apontando para Tombstone)
+	// Precisamos escrever o Tombstone no Heap e atualizar a árvore para apontar para ele.
+	// O Delete atual apenas marca no Heap, e NÃO remove da árvore (conforme comentários comentados abaixo).
+	// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
 
-			// Marca como deletado no heap, com o DeletedLSN atual.
-			// Em MVCC puro, deveríamos talvez escrever um registro Tombstone como Head da chain.
-			// Mas marcar isValid=false + DeleteLSN no head também funciona para parar a chain.
-			// A diferença e que overwrite inplace é destructive.
-			// Como o Heap é append-only para novos writes, aqui estamos violando isso alterando o passado?
-			// Sim, delete altera o registro existente.
-			// TODO Padrão: Write New Version (Tombstone) -> Point Tree to Tombstone.
-			// Para Phase 2 simplificado: Update in-place Head com DeleteLSN.
-			if err := se.Heap.Delete(offset, currentLSN); err != nil {
-				return false, fmt.Errorf("heap delete failed: %w", err)
-			}
-		} else {
-			// Chave não encontrada
-			return false, nil
+	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
+		if !exists {
+			return 0, nil // Key not found, nothing to delete
 		}
-	} else {
-		return false, nil
+
+		// Escreve registro de Delete no Heap (Tombstone)
+		// Delete no Heap requer o offset antigo? O método Heap.Delete atual pede offset.
+		// Wait, Heap.Delete(offset) marca o registro OLD como deletado?
+		// Engine.go original:
+		// offset := node.DataPtrs[idx]
+		// se.Heap.Delete(offset, currentLSN) -> Modifica in-place o header do registro antigo?
+		// Se Heap.Delete modifica in-place, então não criamos nova versão?
+		// Isso viola imutabilidade do WAL/AppendOnly.
+		// O comentário dizia: "Para Phase 2 simplificado: Update in-place Head com DeleteLSN."
+		// Se for in-place, não precisamos atualizar a árvore (ela aponta pro mesmo offset).
+		// ENTRETANTO, para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
+
+		if err := se.Heap.Delete(oldOffset, currentLSN); err != nil {
+			return 0, fmt.Errorf("heap delete failed: %w", err)
+		}
+
+		// Retorna o MESMO offset, pois a árvore não muda (aponta pro mesmo lugar, que agora está marcado deletado)
+		return oldOffset, nil
+	})
+
+	if err != nil {
+		return false, err
 	}
 
 	// MVCC Phase 2: Do NOT remove from B-Tree.
@@ -578,7 +549,8 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 }
 
 // CreateCheckpoint força a criação de checkpoints para todas as tabelas
-// Adquire read lock em cada tabela individualmente durante o checkpoint
+// Otimizado: Adquire lock apenas para capturar o LSN consistente,
+// realizando a serialização e I/O de forma concorrente com as escritas.
 func (se *StorageEngine) CreateCheckpoint() error {
 	for _, tableName := range se.TableMetaData.ListTables() {
 		table, err := se.TableMetaData.GetTableByName(tableName)
@@ -586,21 +558,22 @@ func (se *StorageEngine) CreateCheckpoint() error {
 			continue
 		}
 
-		// Adquire write lock na tabela durante o checkpoint para garantir consistência (snapshot)
-		table.Lock()
-
-		// Captura o LSN *após* adquirir o lock e drenar as escritas em andamento.
-		// Isso garante que o LSN reflete com precisão o estado congelado da tabela.
+		// Barrier rápida: Captura o LSN atual.
+		// Como o LSNTracker é atômico, poderíamos até fazer sem lock da tabela,
+		// mas o lock garante que não estamos no meio de uma alteração de esquema (Indices).
+		table.RLock()
 		currentLSN := se.lsnTracker.Current()
+		indices := table.GetIndices() // GetIndices já faz RLock interno, mas aqui aproveitamos o RLock atual
+		table.RUnlock()
 
-		// Usa GetIndices() que não adquire lock (já temos o lock)
-		for _, idx := range table.GetIndices() {
+		for _, idx := range indices {
+			// A serialização em disco agora corre em paralelo com novos Puts.
+			// O SerializeBPlusTree usa RLock nos nós (Latch Crabbing) para garantir
+			// que a estrutura do arquivo seja consistente, mesmo que "fuzzy" (possa conter dados de LSNs posteriores).
 			if err := se.Checkpoint.CreateCheckpoint(tableName, idx.Name, idx.Tree, currentLSN); err != nil {
-				table.Unlock()
 				return err
 			}
 		}
-		table.Unlock()
 	}
 	return nil
 }
