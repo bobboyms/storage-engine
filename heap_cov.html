@@ -1,0 +1,393 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>heap: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/bobboyms/storage-engine/pkg/heap/heap.go (78.6%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package heap
+
+import (
+        "encoding/binary"
+        "fmt"
+        "io"
+        "os"
+        "sync"
+)
+
+const (
+        HeapMagic       = 0x48454150 // ASCII for "HEAP"
+        HeapVersion     = 3          // Bump to version 3 for MVCC Version Chains
+        HeaderSize      = 14         // Magic(4) + Version(2) + NextOffset(8)
+        EntryHeaderSize = 29         // Length(4) + Valid(1) + CreateLSN(8) + DeleteLSN(8) + PrevOffset(8)
+)
+
+type RecordHeader struct {
+        Valid      bool
+        CreateLSN  uint64
+        DeleteLSN  uint64 // LSN of the deletion (if valid=false)
+        PrevOffset int64  // Pointer to the previous version (-1 if start of chain)
+}
+
+// HeapManager gerencia o armazenamento de documentos em disco
+type HeapManager struct {
+        file       *os.File
+        filename   string
+        mutex      sync.RWMutex
+        nextOffset int64
+}
+
+// NewHeapManager abre ou cria um novo arquivo de heap no caminho especificado
+func NewHeapManager(path string) (*HeapManager, error) <span class="cov8" title="1">{
+        file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("failed to open heap file: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">info, err := file.Stat()
+        if err != nil </span><span class="cov0" title="0">{
+                file.Close()
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">hm := &amp;HeapManager{
+                file:     file,
+                filename: path,
+        }
+
+        if info.Size() == 0 </span><span class="cov8" title="1">{
+                // New file, write header
+                if err := hm.writeHeader(); err != nil </span><span class="cov0" title="0">{
+                        file.Close()
+                        return nil, err
+                }</span>
+                <span class="cov8" title="1">hm.nextOffset = int64(HeaderSize)</span>
+        } else<span class="cov8" title="1"> {
+                // Existing file, recover next offset from header or scan
+                if err := hm.readHeader(); err != nil </span><span class="cov8" title="1">{
+                        file.Close()
+                        return nil, err
+                }</span>
+
+                // Ensure file pointer is at end for appending if we ever need to
+                // but since we track nextOffset, we can seek as needed.
+                // Let's verify file integrity vs header nextOffset broadly if we wanted,
+                // but for now trust the header or file size.
+                <span class="cov8" title="1">if info.Size() &gt; hm.nextOffset </span><span class="cov8" title="1">{
+                        // Maybe a crash happened before header update?
+                        // We can set nextOffset to file size to be safe (append only)
+                        hm.nextOffset = info.Size()
+                }</span>
+        }
+
+        <span class="cov8" title="1">return hm, nil</span>
+}
+
+// writeHeader initializes the file header
+func (h *HeapManager) writeHeader() error <span class="cov8" title="1">{
+        h.mutex.Lock()
+        defer h.mutex.Unlock()
+
+        if _, err := h.file.Seek(0, 0); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, uint32(HeapMagic)); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, uint16(HeapVersion)); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        // Initial nextOffset starts after header
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, int64(HeaderSize)); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Ensure persist
+        <span class="cov8" title="1">return h.file.Sync()</span>
+}
+
+// readHeader reads initial metadata
+func (h *HeapManager) readHeader() error <span class="cov8" title="1">{
+        if _, err := h.file.Seek(0, 0); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">var magic uint32
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;magic); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if magic != HeapMagic </span><span class="cov8" title="1">{
+                return fmt.Errorf("invalid heap file magic")
+        }</span>
+
+        <span class="cov8" title="1">var version uint16
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;version); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if version != HeapVersion </span><span class="cov8" title="1">{
+                return fmt.Errorf("unsupported heap version: %d (expected %d)", version, HeapVersion)
+        }</span>
+
+        <span class="cov8" title="1">var nextOffset int64
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;nextOffset); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">h.nextOffset = nextOffset
+        return nil</span>
+}
+
+// updateNextOffset updates the offset in the header
+func (h *HeapManager) updateNextOffset() error <span class="cov8" title="1">{
+        // Must be called under lock
+        pos, err := h.file.Seek(6, 0) // Skip Magic(4) + Version(2)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if pos != 6 </span><span class="cov0" title="0">{
+                return fmt.Errorf("seek failed")
+        }</span>
+        <span class="cov8" title="1">return binary.Write(h.file, binary.LittleEndian, h.nextOffset)</span>
+}
+
+// Write appends a document to the heap and returns its offset
+// Updated for MVCC Phase 2: accepts prevOffset for chaining
+func (h *HeapManager) Write(doc []byte, createLSN uint64, prevOffset int64) (int64, error) <span class="cov8" title="1">{
+        h.mutex.Lock()
+        defer h.mutex.Unlock()
+
+        offset := h.nextOffset
+        fmt.Printf("Heap.Write: Offset=%d, CreateLSN=%d, PrevOffset=%d, DocLen=%d\n", offset, createLSN, prevOffset, len(doc))
+
+        if _, err := h.file.Seek(offset, 0); err != nil </span><span class="cov8" title="1">{
+                return 0, err
+        }</span>
+        // ... rest of write
+
+        <span class="cov8" title="1">docLen := uint32(len(doc))
+
+        // Write Length
+        if err := binary.Write(h.file, binary.LittleEndian, docLen); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Write Valid flag (1 = Active/Valid)
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, uint8(1)); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Write CreateLSN
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, createLSN); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Write DeleteLSN (0 initially)
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, uint64(0)); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Write PrevOffset
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, prevOffset); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Write Data
+        <span class="cov8" title="1">if _, err := h.file.Write(doc); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        // Update next offset
+        <span class="cov8" title="1">h.nextOffset += int64(EntryHeaderSize + int(docLen))
+
+        if err := h.updateNextOffset(); err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+
+        <span class="cov8" title="1">return offset, nil</span>
+}
+
+// Read retrieves a document from the given offset
+// Updated for MVCC: returns RecordHeader
+func (h *HeapManager) Read(offset int64) ([]byte, *RecordHeader, error) <span class="cov8" title="1">{
+        h.mutex.RLock()
+        defer h.mutex.RUnlock()
+
+        if _, err := h.file.Seek(offset, 0); err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var docLen uint32
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;docLen); err != nil </span><span class="cov0" title="0">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var valid uint8
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;valid); err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var createLSN uint64
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;createLSN); err != nil </span><span class="cov0" title="0">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var deleteLSN uint64
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;deleteLSN); err != nil </span><span class="cov0" title="0">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var prevOffset int64
+        if err := binary.Read(h.file, binary.LittleEndian, &amp;prevOffset); err != nil </span><span class="cov0" title="0">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">header := &amp;RecordHeader{
+                Valid:      valid == 1,
+                CreateLSN:  createLSN,
+                DeleteLSN:  deleteLSN,
+                PrevOffset: prevOffset,
+        }
+        // fmt.Printf("Heap.Read: Offset=%d, Valid=%v, Create=%d, Delete=%d, Prev=%d\n", offset, header.Valid, header.CreateLSN, header.DeleteLSN, header.PrevOffset)
+
+        doc := make([]byte, docLen)
+        if _, err := io.ReadFull(h.file, doc); err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">return doc, header, nil</span>
+}
+
+// Delete marks a document as deleted (lazy deletion)
+// Updated using LSN: writes DeleteLSN.
+// Note: This modifies the record in-place.
+func (h *HeapManager) Delete(offset int64, deleteLSN uint64) error <span class="cov8" title="1">{
+        h.mutex.Lock()
+        defer h.mutex.Unlock()
+
+        fmt.Printf("Heap.Delete: Offset=%d, DeleteLSN=%d\n", offset, deleteLSN)
+
+        // Offset + 4 (Length) -&gt; Valid byte
+        validOffset := offset + 4
+        // Offset + 4 (Length) + 1 (Valid) + 8 (CreateLSN) -&gt; DeleteLSN
+        deleteLSNOffset := offset + 4 + 1 + 8
+
+        // 1. Mark Invalid
+        if _, err := h.file.Seek(validOffset, 0); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, uint8(0)); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // 2. Set DeleteLSN
+        <span class="cov8" title="1">if _, err := h.file.Seek(deleteLSNOffset, 0); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := binary.Write(h.file, binary.LittleEndian, deleteLSN); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (h *HeapManager) Close() error <span class="cov8" title="1">{
+        h.mutex.Lock()
+        defer h.mutex.Unlock()
+        return h.file.Close()
+}</span>
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

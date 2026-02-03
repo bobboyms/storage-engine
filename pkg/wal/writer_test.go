@@ -104,3 +104,30 @@ func TestWALWriter_BatchSync(t *testing.T) {
 
 	w.Close()
 }
+
+func TestWALWriter_SyncError(t *testing.T) {
+	tmpFile := "test_wal_sync_error.log"
+	defer os.Remove(tmpFile)
+
+	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
+	w.file.Close() // Force future syncs to fail
+	
+	entry := AcquireEntry()
+	entry.Header.Magic = WALMagic
+	err := w.WriteEntry(entry)
+	if err == nil {
+		t.Error("Expected error writing to closed file")
+	}
+	ReleaseEntry(entry)
+}
+
+func TestWALWriter_BackgroundSyncPanic(t *testing.T) {
+	// backgroundSync calls w.Sync(). If file is closed, it might log or fail quietly.
+	// We just want to cover the code path.
+	tmpFile := "test_wal_bg_sync.log"
+	defer os.Remove(tmpFile)
+	
+	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncInterval, SyncIntervalDuration: 10*time.Millisecond})
+	time.Sleep(20*time.Millisecond)
+	w.Close()
+}

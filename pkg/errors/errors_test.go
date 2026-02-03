@@ -1,22 +1,21 @@
 package errors
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestErrorStrings(t *testing.T) {
+func TestErrors_ErrorMethod(t *testing.T) {
 	errs := []error{
-		&TableAlreadyExistsError{Name: "users"},
-		&TableNotFoundError{Name: "users"},
+		&TableAlreadyExistsError{Name: "t1"},
+		&TableNotFoundError{Name: "t1"},
 		&TwoPrimarykeysError{Total: 2},
-		&PrimarykeyNotDefinedError{TableName: "users"},
-		&DuplicateKeyError{Key: "10"},
-		&IndexNotFoundError{Name: "email"},
+		&PrimarykeyNotDefinedError{TableName: "t1"},
+		&DuplicateKeyError{Key: "k1"},
+		&IndexNotFoundError{Name: "i1"},
+		&InvalidKeyTypeError{Name: "i1", TypeName: "int"},
 	}
 
-	for _, err := range errs {
-		if err.Error() == "" {
-			t.Errorf("Error string for %T should not be empty", err)
+	for _, e := range errs {
+		if e.Error() == "" {
+			t.Errorf("Error() returned empty string for %T", e)
 		}
 	}
 }

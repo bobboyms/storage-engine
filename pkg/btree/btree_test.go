@@ -944,3 +944,100 @@ func TestUniqueKey_WithVarchar(t *testing.T) {
 		t.Fatalf("expected DuplicateKeyError, got %T", err)
 	}
 }
+
+// =============================================
+// TESTES PARA COBERTURA (BRANCHES RAROS)
+// =============================================
+
+func TestNode_Search(t *testing.T) {
+	tVal := 3
+	leaf := newNodeWithData(tVal, true, []int{10, 20}, []int64{1, 2}, nil)
+	parent := newNodeWithData(tVal, false, []int{15}, nil, []*Node{leaf, NewNode(tVal, true)})
+
+	// Search recursivo no Node
+	res, found := parent.Search(types.IntKey(10))
+	if !found || res != leaf {
+		t.Error("Node.Search failed to find key in recursive call")
+	}
+
+	_, found = parent.Search(types.IntKey(99))
+	if found {
+		t.Error("Node.Search found nonexistent key")
+	}
+}
+
+func TestNode_UpsertNonFull_Internal(t *testing.T) {
+	tVal := 2 // T=2, max=3 keys
+	child := newNodeWithData(tVal, true, []int{10}, []int64{1}, nil)
+	parent := newNodeWithData(tVal, false, []int{20}, nil, []*Node{child, NewNode(tVal, true)})
+
+	// UpsertNonFull num nó interno (geralmente não ocorre via btree logic, mas testamos o branch)
+	err := parent.UpsertNonFull(types.IntKey(15), func(oldv int64, exists bool) (int64, error) {
+		return 150, nil
+	})
+	if err != nil {
+		t.Fatalf("UpsertNonFull failed: %v", err)
+	}
+
+	_, found := child.Search(types.IntKey(15))
+	if !found {
+		t.Errorf("Value not inserted in child")
+	}
+}
+
+func TestNode_BorrowFromPrev_Internal(t *testing.T) {
+	tVal := 2 // T=2, min=1 key (exceto root), max=3 keys
+
+	// Irmão rico (2 chaves)
+	c0 := NewNode(tVal, true)
+	c1 := NewNode(tVal, true)
+	c2 := NewNode(tVal, true)
+	richSibling := newNodeWithData(tVal, false, []int{5, 10}, nil, []*Node{c0, c1, c2})
+
+	// Nó alvo pobre (0 chaves - simulado)
+	c3 := NewNode(tVal, true)
+	poorTarget := NewNode(tVal, false)
+	poorTarget.Children = append(poorTarget.Children, c3)
+	poorTarget.N = 0
+
+	// Pai
+	parent := newNodeWithData(tVal, false, []int{15}, nil, []*Node{richSibling, poorTarget})
+
+	// Força borrowFromPrev no nível interno (i=1)
+	parent.borrowFromPrev(1)
+
+	if poorTarget.N != 1 {
+		t.Errorf("Expected target to have 1 key, got %d", poorTarget.N)
+	}
+	if poorTarget.Keys[0].Compare(types.IntKey(15)) != 0 {
+		t.Errorf("Expected key 15 borrowed from parent, got %v", poorTarget.Keys[0])
+	}
+	if parent.Keys[0].Compare(types.IntKey(10)) != 0 {
+		t.Errorf("Expected parent key updated to 10, got %v", parent.Keys[0])
+	}
+}
+
+func TestBPlusTree_GetAndReplace(t *testing.T) {
+	tree := NewTree(3)
+	tree.Insert(types.IntKey(10), 100)
+	
+	val, found := tree.Get(types.IntKey(10))
+	if !found || val != 100 {
+		t.Errorf("Get failed: found=%v, val=%v", found, val)
+	}
+	
+	err := tree.Replace(types.IntKey(10), 200)
+	if err != nil {
+		t.Fatalf("Replace failed: %v", err)
+	}
+	
+	val, _ = tree.Get(types.IntKey(10))
+	if val != 200 {
+		t.Errorf("Expected 200 after Replace, got %v", val)
+	}
+
+	_, found = tree.Get(types.IntKey(99))
+	if found {
+		t.Error("Get found nonexistent key")
+	}
+}

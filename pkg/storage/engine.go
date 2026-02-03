@@ -332,7 +332,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 	defer c.Close() // Libera cursor
 
 	// Otimiza scan se possível (=, >, >=, BETWEEN)
-	if condition.ShouldSeek() {
+	if condition != nil && condition.ShouldSeek() {
 		startKey := condition.GetStartKey()
 		c.Seek(startKey)
 
@@ -393,11 +393,11 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 			key := c.Key()
 
 			// Para < e <=, podemos parar cedo
-			if !condition.ShouldContinue(key) {
+			if condition != nil && !condition.ShouldContinue(key) {
 				break
 			}
 
-			if condition.Matches(key) {
+			if condition == nil || condition.Matches(key) {
 				currentOffset := c.Value()
 
 				// Version Chain Traversal

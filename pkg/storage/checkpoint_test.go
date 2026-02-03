@@ -87,3 +87,112 @@ func TestCheckpointManager_CleanupOldDetailed(t *testing.T) {
 		t.Errorf("Expected load LSN 20, got %d", lsn)
 	}
 }
+
+func TestCheckpoint_SerializeFails(t *testing.T) {
+	// Call internal serialize functions with invalid data for coverage
+	_, err := deserializeKey([]byte{}) // Empty
+	if err == nil {
+		t.Error("Expected error for empty key data")
+	}
+
+	_, err = deserializeKey([]byte{99, 1, 2, 3}) // Unknown tag 99
+	if err == nil {
+		t.Error("Expected error for unknown tag")
+	}
+
+	// Partial read tests
+	_, err = deserializeKey([]byte{1, 1}) // Int needs 8 bytes + 1 tag
+	if err == nil {
+		t.Error("Expected error for partial int")
+	}
+
+	_, err = deserializeKey([]byte{2, 5, 0}) // Varchar says 5 bytes but provided 0
+	if err == nil {
+		t.Error("Expected error for partial varchar")
+	}
+}
+
+func TestCheckpoint_MultiLevel(t *testing.T) {
+	// Create a tree with enough keys to force internal nodes
+	tree := btree.NewTree(2) // T=2, max keys = 3
+	for i := 1; i <= 10; i++ {
+		tree.Insert(types.IntKey(i), int64(i*100))
+	}
+
+	// Serialize
+	data, err := SerializeBPlusTree(tree, 99)
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	// Deserialize
+	restored, lsn, err := DeserializeBPlusTree(data)
+	if err != nil {
+		t.Fatalf("Deserialize failed: %v", err)
+	}
+
+	if lsn != 99 {
+		t.Errorf("Expected LSN 99, got %d", lsn)
+	}
+
+	// Verify data
+	for i := 1; i <= 10; i++ {
+		v, found := restored.Get(types.IntKey(i))
+		if !found || v != int64(i*100) {
+			t.Errorf("Restored tree missing or wrong value for key %d", i)
+		}
+	}
+}
+
+func TestCheckpoint_SerializeErrors(t *testing.T) {
+	// Root nil
+	_, err := SerializeBPlusTree(&btree.BPlusTree{Root: nil}, 0)
+	if err == nil {
+		t.Error("Expected error for nil root")
+	}
+
+	// Invalid magic
+	_, _, err = DeserializeBPlusTree([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	if err == nil {
+		t.Error("Expected error for invalid magic")
+	}
+}
+
+func TestCheckpoint_AllTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	cm := NewCheckpointManager(tmpDir)
+
+	testCases := []struct {
+		name string
+		key  types.Comparable
+		val  int64
+	}{
+		{"Int", types.IntKey(1), 100},
+		{"Varchar", types.VarcharKey("hello"), 200},
+		{"Bool", types.BoolKey(true), 300},
+		{"Float", types.FloatKey(3.14), 400},
+		{"Date", types.DateKey(time.Now()), 500},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := btree.NewTree(3)
+			tree.Insert(tc.key, tc.val)
+
+			tableName := "table_" + tc.name
+			if err := cm.CreateCheckpoint(tableName, "idx", tree, 1); err != nil {
+				t.Fatalf("CreateCheckpoint failed: %v", err)
+			}
+
+			restored, _, err := cm.LoadLatestCheckpoint(tableName, "idx")
+			if err != nil {
+				t.Fatalf("LoadLatestCheckpoint failed: %v", err)
+			}
+
+			v, found := restored.Get(tc.key)
+			if !found || v != tc.val {
+				t.Errorf("Expected found=true, val=%v; got found=%v, val=%v", tc.val, found, v)
+			}
+		})
+	}
+}

@@ -153,3 +153,40 @@ func TestWALReader_InvalidMagic(t *testing.T) {
 		t.Errorf("Expected ErrInvalidMagic, got %v", err)
 	}
 }
+
+func TestWALReader_InvalidPayloadLen(t *testing.T) {
+	tmpFile := "test_wal_payload_len.log"
+	defer os.Remove(tmpFile)
+
+	f, _ := os.Create(tmpFile)
+	header := make([]byte, HeaderSize)
+	binary.LittleEndian.PutUint32(header[0:4], WALMagic)
+	binary.LittleEndian.PutUint32(header[16:20], 2*1024*1024*1024) // 2GB
+	f.Write(header)
+	f.Close()
+
+	r, _ := NewWALReader(tmpFile)
+	defer r.Close()
+
+	_, err := r.ReadEntry()
+	if err != ErrInvalidPayloadLen {
+		t.Errorf("Expected ErrInvalidPayloadLen, got %v", err)
+	}
+}
+
+func TestWALReader_UnexpectedHeaderEOF(t *testing.T) {
+	tmpFile := "test_wal_header_eof.log"
+	defer os.Remove(tmpFile)
+
+	f, _ := os.Create(tmpFile)
+	f.Write([]byte{0x57, 0x41, 0x4C}) // "WAL" (3 bytes, but Header is 24)
+	f.Close()
+
+	r, _ := NewWALReader(tmpFile)
+	defer r.Close()
+
+	_, err := r.ReadEntry()
+	if err == nil || err == io.EOF {
+		t.Errorf("Expected error reading partial header, got %v", err)
+	}
+}

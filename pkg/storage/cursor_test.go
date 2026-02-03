@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/btree"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -374,5 +375,140 @@ func TestCursor_SeekNil(t *testing.T) {
 	}
 	if cursor.Key().Compare(types.IntKey(10)) != 0 {
 		t.Fatalf("Expected first key 10, got %v", cursor.Key())
+	}
+}
+
+func TestCursor_SeekEndOfLeaf(t *testing.T) {
+	// Força Seek para o exato final de uma folha (idx >= leaf.N)
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("test", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 2) // T=2, max=3 keys por folha
+
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+
+	// Folha 1: 10, 20, 30
+	// Split ocorre ao inserir 40
+	se.Put("test", "id", types.IntKey(10), "")
+	se.Put("test", "id", types.IntKey(20), "")
+	se.Put("test", "id", types.IntKey(30), "")
+	se.Put("test", "id", types.IntKey(40), "")
+	se.Put("test", "id", types.IntKey(50), "")
+
+	index, _ := se.TableMetaData.GetIndexByName("test", "id")
+	cursor := se.Cursor(index.Tree)
+
+	// Chave maior que todas na primeira folha mas inexistente
+	// FindLeafLowerBound pode retornar a folha 1 com idx=3 (N=3)
+	// Isso deve forçar a navegação para a folha 2
+	cursor.Seek(types.IntKey(35))
+	if !cursor.Valid() {
+		t.Fatal("Expected cursor to be valid")
+	}
+	if cursor.Key().Compare(types.IntKey(40)) != 0 {
+		t.Fatalf("Expected key 40, got %v", cursor.Key())
+	}
+}
+
+func TestCursor_NextEmptyNodes(t *testing.T) {
+	// Difícil de criar com Put/Del normal, mas vamos garantir o branch Coverage
+	// de navegar através de múltiplas folhas.
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("test", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 2)
+
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+
+	for i := 1; i <= 10; i++ {
+		se.Put("test", "id", types.IntKey(i), "")
+	}
+
+	index, _ := se.TableMetaData.GetIndexByName("test", "id")
+	cursor := se.Cursor(index.Tree)
+	cursor.Seek(types.IntKey(1))
+
+	for i := 1; i <= 10; i++ {
+		if !cursor.Valid() {
+			t.Fatalf("Expected valid cursor at index %d", i)
+		}
+		cursor.Next()
+	}
+
+	if cursor.Valid() {
+		t.Error("Expected cursor to be invalid after end")
+	}
+}
+
+func TestCursor_ComplexNavigation(t *testing.T) {
+	// Este teste usa manipulação manual dos nós para atingir branches difíceis de Seek e Next
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("test", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 2)
+
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+
+	se.Put("test", "id", types.IntKey(10), "")
+	se.Put("test", "id", types.IntKey(20), "")
+
+	index, _ := se.TableMetaData.GetIndexByName("test", "id")
+	tree := index.Tree
+
+	// Agora temos um Root que é Leaf. Vamos forçar um estado onde ele aponta para outro mas está "vazio"
+	// Na verdade, vamos criar duas folhas e linká-las.
+	leaf1 := tree.Root
+	leaf2 := btree.NewNode(2, true)
+	leaf2.Keys = append(leaf2.Keys, types.IntKey(30))
+	leaf2.DataPtrs = append(leaf2.DataPtrs, 0)
+	leaf2.N = 1
+
+	leaf1.Next = leaf2
+
+	// Cenário 1: Seek em nó vazio que tem Next
+	// Backup original N
+	oldN := leaf1.N
+	leaf1.N = 0
+
+	cursor := se.Cursor(tree)
+	cursor.Seek(types.IntKey(5))
+
+	if !cursor.Valid() {
+		t.Error("Expected cursor to be valid by navigating to nextLeaf")
+	} else if cursor.Key().Compare(types.IntKey(30)) != 0 {
+		t.Errorf("Expected to find 30 in next leaf, got %v", cursor.Key())
+	}
+
+	// Cenário 2: Next através de nó vazio
+	leaf1.N = oldN
+	cursor.Seek(types.IntKey(10))
+
+	// Insere DOIS nós vazios no meio
+	midEmpty1 := btree.NewNode(2, true)
+	midEmpty1.N = 0
+	midEmpty2 := btree.NewNode(2, true)
+	midEmpty2.N = 0
+
+	midEmpty1.Next = midEmpty2
+	midEmpty2.Next = leaf2
+	leaf1.Next = midEmpty1
+
+	cursor.Next() // de 10 para 20
+	cursor.Next() // de 20 para 30 (pulando DOIS vazios)
+
+	if !cursor.Valid() || cursor.Key().Compare(types.IntKey(30)) != 0 {
+		t.Errorf("Expected 30 after skipping two empty nodes, got valid=%v", cursor.Valid())
+	}
+
+	// Cenário 3: Seek com múltiplos vazios
+	leaf1.N = 0
+	midEmpty1.N = 0
+	midEmpty2.N = 0
+	cursor.Seek(types.IntKey(5))
+	if !cursor.Valid() || cursor.Key().Compare(types.IntKey(30)) != 0 {
+		t.Errorf("Seek failed through multiple empty nodes")
 	}
 }

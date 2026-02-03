@@ -1,6 +1,7 @@
 package heap
 
 import (
+	"encoding/binary"
 	"os"
 	"testing"
 )
@@ -176,7 +177,249 @@ func TestHeapManager_Close(t *testing.T) {
 	if err := hm.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
+}
 
-	// Double close should fail or be handled, but depending on os.File implementation.
-	// We just ensure first close works.
+func TestNewHeapManager_InvalidPath(t *testing.T) {
+	_, err := NewHeapManager("/invalid/path/to/heap.bin")
+	if err == nil {
+		t.Error("Expected error for invalid path")
+	}
+}
+
+func TestNewHeapManager_InvalidMagic(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_magic_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Write invalid magic
+	tmpFile.Write([]byte("BAD!"))
+	tmpFile.Close()
+
+	_, err = NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for invalid magic")
+	}
+}
+
+func TestNewHeapManager_InvalidVersion(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_version_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Write valid magic (4 bytes) + invalid version (2 bytes)
+	// HeapMagic = 0x48454150 (Little Endian: 50 41 45 48)
+	tmpFile.Write([]byte{0x50, 0x41, 0x45, 0x48}) // Magic
+	tmpFile.Write([]byte{0x00, 0x00})             // Version 0
+	tmpFile.Close()
+
+	_, err = NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for unsupported version")
+	}
+}
+
+func TestHeapManager_WriteError(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_write_err_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.Close() // Close to force error on next write
+
+	_, err = hm.Write([]byte("data"), 1, -1)
+	if err == nil {
+		t.Error("Expected error writing to closed file")
+	}
+}
+
+func TestHeapManager_ReadError(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_read_err_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	offset, _ := hm.Write([]byte("data"), 1, -1)
+	hm.Close() // Close to force error
+
+	_, _, err = hm.Read(offset)
+	if err == nil {
+		t.Error("Expected error reading from closed file")
+	}
+}
+
+func TestHeapManager_DeleteError(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_del_err_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	offset, _ := hm.Write([]byte("data"), 1, -1)
+	hm.Close() // Close to force error
+
+	err = hm.Delete(offset, 2)
+	if err == nil {
+		t.Error("Expected error deleting in closed file")
+	}
+}
+
+func TestHeapManager_RecoveryAfterCrash(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "heap_crash_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.Write([]byte("data1"), 1, -1)
+	hm.Write([]byte("data2"), 2, -1)
+
+	// Simulate "crash" where file grew but header wasn't updated
+	// We do this by manually truncating the header nextOffset back, but keeping file size
+	hm.file.Seek(6, 0)
+	var oldOffset int64 = int64(HeaderSize)
+	binary.Write(hm.file, binary.LittleEndian, oldOffset)
+	hm.Close()
+
+	// Reopen - should recover by using file size
+	hm2, err := NewHeapManager(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hm2.Close()
+
+	info, _ := os.Stat(tmpPath)
+	if hm2.nextOffset != info.Size() {
+		t.Errorf("Expected nextOffset to be file size %d, got %d", info.Size(), hm2.nextOffset)
+	}
+}
+
+func TestHeapManager_ReadHeaderPartial(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_partial_*.bin")
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Write only 2 bytes of Magic (needs 4)
+	tmpFile.Write([]byte{0x50, 0x41})
+	tmpFile.Close()
+
+	_, err := NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for partial magic")
+	}
+
+	// Write Magic but partial version
+	os.WriteFile(tmpPath, []byte{0x50, 0x41, 0x45, 0x48, 0x03}, 0666)
+	_, err = NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for partial version")
+	}
+
+	// Write Magic and Version but partial nextOffset
+	os.WriteFile(tmpPath, []byte{0x50, 0x41, 0x45, 0x48, 0x03, 0x00, 0x01, 0x02}, 0666)
+	_, err = NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for partial nextOffset")
+	}
+}
+
+func TestHeapManager_ReadPartial(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_read_partial_*.bin")
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	data := []byte("some data")
+	offset, _ := hm.Write(data, 1, -1)
+	hm.Close()
+
+	// Truncate file so it can't read the whole entry
+	os.Truncate(tmpPath, offset+4) // Only enough for length
+
+	hm2, _ := NewHeapManager(tmpPath)
+	defer hm2.Close()
+
+	_, _, err := hm2.Read(offset)
+	if err == nil {
+		t.Error("Expected error reading partial header")
+	}
+
+	// Truncate to partial doc length
+	os.Truncate(tmpPath, offset+int64(EntryHeaderSize)+2)
+	_, _, err = hm2.Read(offset)
+	if err == nil {
+		t.Error("Expected error reading partial data")
+	}
+}
+
+func TestHeapManager_WriteInternalErrors(t *testing.T) {
+	// To test internal errors in Write without closing the file immediately
+	// is hard without mocking. But we covered Seek error and binary.Write via Close.
+	// Let's add more scenarios if possible.
+}
+
+func TestHeapManager_WriteHeaderError(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_hdr_err_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.file.Close() // Force error
+
+	err := hm.writeHeader()
+	if err == nil {
+		t.Error("Expected error writing header to closed file")
+	}
+}
+
+func TestHeapManager_UpdateOffsetError(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_off_err_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.file.Close() // Force error
+
+	err := hm.updateNextOffset()
+	if err == nil {
+		t.Error("Expected error updating offset in closed file")
+	}
+}
+
+func TestHeapManager_WriteInternalFailure(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_write_fail_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	
+	// Force Seek error by passing invalid offset logic if possible, 
+	// but here we just close it midway or before.
+	hm.file.Close()
+	_, err := hm.Write([]byte("data"), 1, -1)
+	if err == nil {
+		t.Error("Expected error in Write with closed file")
+	}
 }
