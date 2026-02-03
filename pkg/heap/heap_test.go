@@ -423,3 +423,94 @@ func TestHeapManager_WriteInternalFailure(t *testing.T) {
 		t.Error("Expected error in Write with closed file")
 	}
 }
+
+func TestHeapManager_WriteReadOnlyError(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_ro_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.Write([]byte("initial"), 1, -1)
+	
+	// Close and reopen as read-only
+	hm.Close()
+	f, _ := os.OpenFile(tmpPath, os.O_RDONLY, 0444)
+	hm.file = f // Manually swap
+	
+	_, err := hm.Write([]byte("data"), 2, -1)
+	if err == nil {
+		t.Error("Expected error writing to read-only file")
+	}
+}
+
+func TestHeapManager_DeleteClosedError(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_del_closed_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.file.Close()
+
+	err := hm.Delete(14, 100)
+	if err == nil {
+		t.Error("Expected error in Delete with closed file")
+	}
+}
+
+func TestHeapManager_ReadClosedError(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_read_closed_*.bin")
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	hm, _ := NewHeapManager(tmpPath)
+	hm.file.Close()
+
+	_, _, err := hm.Read(14)
+	if err == nil {
+		t.Error("Expected error in Read with closed file")
+	}
+}
+
+func TestNewHeapManager_TooSmall(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_small_*.bin")
+	tmpPath := tmpFile.Name()
+	os.WriteFile(tmpPath, []byte{1, 2}, 0644) // Only 2 bytes
+	defer os.Remove(tmpPath)
+
+	_, err := NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for too small file")
+	}
+}
+
+func TestNewHeapManager_InvalidMagicInternal(t *testing.T) {
+	tmpFile, _ := os.CreateTemp("", "heap_magic_*.bin")
+	tmpPath := tmpFile.Name()
+	// Write wrong magic
+	f, _ := os.OpenFile(tmpPath, os.O_WRONLY, 0644)
+	binary.Write(f, binary.LittleEndian, uint32(0x12345678))
+	f.Close()
+	defer os.Remove(tmpPath)
+
+	_, err := NewHeapManager(tmpPath)
+	if err == nil {
+		t.Error("Expected error for invalid magic")
+	}
+}
+
+func TestHeapManager_WriteOffsetUpdateFail(t *testing.T) {
+	tmpPath := "test_off_fail.bin"
+	defer os.Remove(tmpPath)
+	hm, _ := NewHeapManager(tmpPath)
+	
+	// We can't easily make JUST updateNextOffset fail while others succeed
+	// But we can hit the failure of updateNextOffset inside Write.
+	hm.file.Close()
+	_, err := hm.Write([]byte("data"), 1, -1)
+	if err == nil {
+		t.Error("Expected error")
+	}
+}

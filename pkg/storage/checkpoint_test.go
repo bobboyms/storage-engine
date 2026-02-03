@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,14 +66,14 @@ func TestCheckpointManager_CleanupOldDetailed(t *testing.T) {
 	if err := cm.CreateCheckpoint(tableName, indexName, tree, 10); err != nil {
 		t.Fatalf("Create 10 failed: %v", err)
 	}
-	time.Sleep(10 * time.Millisecond) // Garante timestamp fs diferente se necessário (não usado aqui, mas bom prático)
+	time.Sleep(10 * time.Millisecond)
 
 	// Cria checkpoint LSN 20
 	if err := cm.CreateCheckpoint(tableName, indexName, tree, 20); err != nil {
 		t.Fatalf("Create 20 failed: %v", err)
 	}
 
-	// Verifica se LSN 10 foi deletado (assumindo que CreateCheckpoint chama cleanOldCheckpoints)
+	// Verifica se LSN 10 foi deletado
 	matches, _ := filepath.Glob(filepath.Join(tmpDir, "checkpoint_logs_ts_10.chk"))
 	if len(matches) != 0 {
 		t.Errorf("Old checkpoint (LSN 10) was not deleted")
@@ -194,5 +195,32 @@ func TestCheckpoint_AllTypes(t *testing.T) {
 				t.Errorf("Expected found=true, val=%v; got found=%v, val=%v", tc.val, found, v)
 			}
 		})
+	}
+}
+
+func TestCheckpoint_DeserializeMalformed(t *testing.T) {
+	// Wrong magic
+	data := make([]byte, 100)
+	binary.LittleEndian.PutUint32(data[0:4], 0xBAADFEED)
+	_, _, err := DeserializeBPlusTree(data)
+	if err == nil {
+		t.Error("Expected error for wrong magic")
+	}
+
+	// Truncated data
+	header := make([]byte, 24)
+	binary.LittleEndian.PutUint32(header[0:4], CheckpointMagic)
+	_, _, err = DeserializeBPlusTree(header[0:10])
+	if err == nil {
+		t.Error("Expected error for truncated header")
+	}
+}
+
+func TestCheckpoint_KeyTypeErrors(t *testing.T) {
+	// Unknown key type tag
+	data := []byte{99, 1, 2, 3} // tag 99
+	_, err := deserializeKey(data)
+	if err == nil {
+		t.Error("Expected error for unknown key type tag")
 	}
 }

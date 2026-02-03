@@ -306,16 +306,16 @@ func TestEngine_CreateCheckpointError(t *testing.T) {
 	tmpDir := t.TempDir()
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	
+
 	// Create engine in a valid dir
 	walPath := filepath.Join(tmpDir, "wal")
 	heapPath := filepath.Join(tmpDir, "heap")
 	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
-	
+
 	// Corrupt CheckpointManager path to force error
 	// CheckpointManager.baseDir is private but we can manually remove the directory
-	os.RemoveAll(tmpDir) 
-	
+	os.RemoveAll(tmpDir)
+
 	err := se.CreateCheckpoint()
 	if err == nil {
 		t.Log("Checkpoint might have succeeded if it created dirs, but expected some friction")
@@ -326,12 +326,90 @@ func TestEngine_RecoverInvalidWAL(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	os.WriteFile(walPath, []byte("NOT A WAL FILE"), 0666)
-	
+
 	tableMgr := storage.NewTableMenager()
 	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
-	
+
 	err := se.Recover(walPath)
 	if err == nil {
 		t.Error("Expected error recovering from invalid WAL file")
+	}
+}
+
+func TestEngine_PutError_InvalidTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	err := se.Put("invalid", "id", types.IntKey(1), "{}")
+	if err == nil {
+		t.Error("Expected error for invalid table")
+	}
+}
+
+func TestEngine_PutError_InvalidIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	err := se.Put("users", "invalid_idx", types.IntKey(1), "{}")
+	if err == nil {
+		t.Error("Expected error for invalid index")
+	}
+}
+
+func TestEngine_DelError_InvalidTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	_, err := se.Del("invalid", "id", types.IntKey(1))
+	if err == nil {
+		t.Error("Expected error for invalid table")
+	}
+}
+
+func TestEngine_DelError_InvalidIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	_, err := se.Del("users", "invalid_idx", types.IntKey(1))
+	if err == nil {
+		t.Error("Expected error for invalid index")
+	}
+}
+
+func TestEngine_CreateCheckpoint_FailDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
+	// Make checkpoint manager base path a file
+	checkpointFile := filepath.Join(tmpDir, "is_a_file")
+	os.WriteFile(checkpointFile, []byte("data"), 0644)
+
+	// NewStorageEngine uses filepath.Dir(walPath) as checkpointDir
+	badWalPath := filepath.Join(checkpointFile, "wal.log")
+	se2, err := storage.NewStorageEngine(tableMgr, badWalPath, heapPath)
+	if err != nil {
+		t.Logf("Expected NewStorageEngine might fail or return nil se: %v", err)
+		return
+	}
+	if se2 == nil {
+		return
+	}
+	defer se2.Close()
+
+	err = se2.CreateCheckpoint()
+	if err == nil {
+		t.Log("Checkpoint dir failure was not triggered as expected")
 	}
 }

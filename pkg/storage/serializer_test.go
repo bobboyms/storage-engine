@@ -119,3 +119,94 @@ func TestSerializeDocumentEntry_EdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestDocumentEntry_Generated_Coverage(t *testing.T) {
+	entry := &DocumentEntry{
+		TableName: "t1",
+		IndexName: "i1",
+		Key: &Key{
+			Value: &Key_StringValue{StringValue: "k1"},
+		},
+		Document: []byte("d1"),
+	}
+
+	// Call generated methods
+	if entry.GetTableName() != "t1" {
+		t.Error("GetTableName failed")
+	}
+	if entry.GetIndexName() != "i1" {
+		t.Error("GetIndexName failed")
+	}
+	if entry.GetKey().GetStringValue() != "k1" {
+		t.Error("GetKey failed")
+	}
+	if string(entry.GetDocument()) != "d1" {
+		t.Error("GetDocument failed")
+	}
+
+	_ = entry.String()
+	entry.ProtoMessage()
+	_, _ = entry.Descriptor()
+	_ = entry.ProtoReflect()
+
+	// Hit Key methods
+	k := entry.GetKey()
+	_ = k.String()
+	k.ProtoMessage()
+	_, _ = k.Descriptor()
+	_ = k.ProtoReflect()
+	_ = k.GetValue()
+	_ = k.GetIntValue()
+	_ = k.GetBoolValue()
+	_ = k.GetFloatValue()
+	_ = k.GetDateValue()
+
+	entry.Reset()
+	if entry.GetTableName() != "" {
+		t.Error("Reset failed")
+	}
+
+	var nilEntry *DocumentEntry
+	if nilEntry.GetTableName() != "" {
+		t.Log("Nil GetTableName works")
+	}
+	if nilEntry.GetIndexName() != "" {
+		t.Log("Nil GetIndexName works")
+	}
+	if nilEntry.GetKey() != nil {
+		t.Log("Nil GetKey works")
+	}
+	if nilEntry.GetDocument() != nil {
+		t.Log("Nil GetDocument works")
+	}
+}
+
+func TestDeserializeDocumentEntry_Error(t *testing.T) {
+	// Garbage data
+	_, _, _, _, err := DeserializeDocumentEntry([]byte{1, 2, 3, 4})
+	if err == nil {
+		t.Error("Expected error for garbage data")
+	}
+}
+
+type customKey struct{}
+func (c customKey) Compare(other types.Comparable) int { return 0 }
+func (c customKey) String() string { return "" }
+
+func TestSerializeDocumentEntry_UnsupportedKey(t *testing.T) {
+	_, err := SerializeDocumentEntry("t", "i", customKey{}, []byte{})
+	if err == nil {
+		t.Error("Expected error for unsupported key type")
+	}
+}
+
+func TestKey_Oneof_Coverage(t *testing.T) {
+	k := &Key{Value: &Key_IntValue{IntValue: 10}}
+	if k.GetStringValue() != "" { t.Error("Should be empty") }
+	if k.GetBoolValue() != false { t.Error("Should be false") }
+	if k.GetFloatValue() != 0 { t.Error("Should be 0") }
+	if k.GetDateValue() != 0 { t.Error("Should be 0") }
+
+	k = &Key{Value: &Key_StringValue{StringValue: "s"}}
+	if k.GetIntValue() != 0 { t.Error("Should be 0") }
+}

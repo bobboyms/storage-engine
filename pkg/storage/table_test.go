@@ -248,3 +248,17 @@ func TestGetIndexByName_Error_TableNotFound(t *testing.T) {
 		t.Fatal("Expected error for nonexistent table")
 	}
 }
+
+func TestTable_LockCoverage(t *testing.T) {
+	mgr := storage.NewTableMenager()
+	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	table, _ := mgr.GetTableByName("users")
+
+	table.Lock()
+	table.Unlock()
+
+	indices := table.GetIndices()
+	if len(indices) != 1 {
+		t.Errorf("Expected 1 index, got %d", len(indices))
+	}
+}

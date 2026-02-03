@@ -99,3 +99,32 @@ func TestSerializeDeserialize_AllTypes(t *testing.T) {
 	testType("Float", types.FloatKey(3.14159))
 	testType("Date", types.DateKey(time.Now()))
 }
+
+func TestSerializeDeserialize_ComplexTree(t *testing.T) {
+	// Create a large tree to hit multi-level logic and different node branches
+	tree := btree.NewTree(2) 
+	for i := 0; i < 50; i++ {
+		tree.Insert(types.IntKey(i), int64(i*10))
+	}
+
+	data, err := SerializeBPlusTree(tree, 123)
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	restored, lsn, err := DeserializeBPlusTree(data)
+	if err != nil {
+		t.Fatalf("Deserialize failed: %v", err)
+	}
+
+	if lsn != 123 {
+		t.Errorf("LSN mismatch")
+	}
+
+	for i := 0; i < 50; i++ {
+		v, found := restored.Get(types.IntKey(i))
+		if !found || v != int64(i*10) {
+			t.Errorf("Key %d mismatch", i)
+		}
+	}
+}

@@ -85,3 +85,16 @@ func TestDoesTheKeyExist(t *testing.T) {
 		})
 	}
 }
+
+func TestDoesTheKeyExist_Coverage(t *testing.T) {
+	doc := bson.D{{Key: "k1", Value: struct{}{}}} // default case
+	exists, dt := DoesTheKeyExist(doc, "k1")
+	if !exists || dt != TypeVarchar {
+		t.Errorf("Expected exists=true, dt=TypeVarchar, got %v, %v", exists, dt)
+	}
+
+	exists, _ = DoesTheKeyExist(doc, "k999")
+	if exists {
+		t.Error("Key should not exist")
+	}
+}

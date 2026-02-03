@@ -345,13 +345,41 @@ func TestWriteTransaction_CoverageCheat(t *testing.T) {
 	tmpDir := t.TempDir()
 	se, _ := NewStorageEngine(NewTableMenager(), filepath.Join(tmpDir, "wal"), filepath.Join(tmpDir, "heap"))
 	defer se.Close()
-	
+
 	tx := se.BeginWriteTransaction()
 	tx.rollbackWAL(100) // Covers rollbackWAL
-	
+
 	// Default case in getTypeFromKey
 	dt := getTypeFromKey(dummyKey{})
 	if dt != TypeVarchar {
 		t.Errorf("Expected fallback to TypeVarchar, got %v", dt)
+	}
+}
+
+func TestWriteTransaction_DelNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3)
+
+	se, _ := NewStorageEngine(tableMgr, filepath.Join(tmpDir, "wal"), filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	tx := se.BeginWriteTransaction()
+	err := tx.Del("users", "id", types.IntKey(999))
+	if err != nil {
+		t.Errorf("Del should not error for non-existent key: %v", err)
+	}
+	tx.Commit()
+}
+
+func TestWriteTransaction_DelInvalidTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	se, _ := NewStorageEngine(NewTableMenager(), filepath.Join(tmpDir, "wal"), filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	tx := se.BeginWriteTransaction()
+	err := tx.Del("invalid", "id", types.IntKey(1))
+	if err == nil {
+		t.Error("Expected error for invalid table")
 	}
 }

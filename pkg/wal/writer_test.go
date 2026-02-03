@@ -111,7 +111,7 @@ func TestWALWriter_SyncError(t *testing.T) {
 
 	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
 	w.file.Close() // Force future syncs to fail
-	
+
 	entry := AcquireEntry()
 	entry.Header.Magic = WALMagic
 	err := w.WriteEntry(entry)
@@ -126,8 +126,36 @@ func TestWALWriter_BackgroundSyncPanic(t *testing.T) {
 	// We just want to cover the code path.
 	tmpFile := "test_wal_bg_sync.log"
 	defer os.Remove(tmpFile)
-	
-	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncInterval, SyncIntervalDuration: 10*time.Millisecond})
-	time.Sleep(20*time.Millisecond)
+
+	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncInterval, SyncIntervalDuration: 10 * time.Millisecond})
+	time.Sleep(20 * time.Millisecond)
 	w.Close()
+}
+
+func TestWALWriter_CloseSyncError(t *testing.T) {
+	path := "test_close_sync.log"
+	defer os.Remove(path)
+
+	w, _ := NewWALWriter(path, DefaultOptions())
+	entry := AcquireEntry()
+	entry.Payload = []byte("data")
+	entry.Header.CRC32 = CalculateCRC32(entry.Payload)
+	w.WriteEntry(entry)
+
+	// Close file to force sync error
+	w.file.Close()
+
+	err := w.Close()
+	if err == nil {
+		t.Error("Expected error closing writer with closed file")
+	}
+}
+
+func TestNewWALWriter_Error(t *testing.T) {
+	// Trying to open a directory as a file for writing should fail
+	tmpDir := t.TempDir()
+	_, err := NewWALWriter(tmpDir, DefaultOptions())
+	if err == nil {
+		t.Error("Expected error opening directory as WAL file")
+	}
 }

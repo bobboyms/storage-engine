@@ -472,3 +472,24 @@ func TestNode_IsSafeForDelete(t *testing.T) {
 		t.Error("Node with 2 keys (min allowed) should NOT be safe for delete (needs merge/borrow)")
 	}
 }
+
+func TestTree_Get_Coverage(t *testing.T) {
+	tree := NewTree(3)
+	tree.Insert(types.IntKey(1), 100)
+	tree.Insert(types.IntKey(2), 200)
+
+	// Hit Get
+	val, found := tree.Get(types.IntKey(1))
+	if !found || val != 100 {
+		t.Errorf("Get(1) failed")
+	}
+
+	val, found = tree.Get(types.IntKey(999))
+	if found {
+		t.Errorf("Get(999) should not find anything")
+	}
+	
+	// Get on nil tree
+	var nilTree *BPlusTree
+	_, _ = nilTree.Get(types.IntKey(1))
+}

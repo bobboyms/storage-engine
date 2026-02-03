@@ -169,8 +169,15 @@ func (b *BPlusTree) Search(key types.Comparable) (*Node, bool) {
 
 // Get retorna o valor associado à chave de forma thread-safe (usando latching interno)
 func (b *BPlusTree) Get(key types.Comparable) (int64, bool) {
+	if b == nil {
+		return 0, false
+	}
 	b.mu.RLock()
 	curr := b.Root
+	if curr == nil {
+		b.mu.RUnlock()
+		return 0, false
+	}
 	curr.RLock()
 	b.mu.RUnlock()
 

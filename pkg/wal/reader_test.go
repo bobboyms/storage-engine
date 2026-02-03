@@ -190,3 +190,10 @@ func TestWALReader_UnexpectedHeaderEOF(t *testing.T) {
 		t.Errorf("Expected error reading partial header, got %v", err)
 	}
 }
+
+func TestNewWALReader_NonExistent(t *testing.T) {
+	_, err := NewWALReader("/path/to/nothing")
+	if err == nil {
+		t.Error("Expected error for non-existent file")
+	}
+}
