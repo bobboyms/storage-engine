@@ -9,7 +9,7 @@ import (
 )
 
 // Helper modificado para aceitar []int como chaves mas converter para []Comparable
-func newNodeWithData(t int, leaf bool, keys []int, data []int, children []*Node) *Node {
+func newNodeWithData(t int, leaf bool, keys []int, data []int64, children []*Node) *Node {
 	n := NewNode(t, leaf)
 	for _, k := range keys {
 		n.Keys = append(n.Keys, types.IntKey(k))
@@ -21,7 +21,7 @@ func newNodeWithData(t int, leaf bool, keys []int, data []int, children []*Node)
 }
 
 // Helper para chaves genéricas (usado nos testes de string)
-func newNodeWithKeys(t int, leaf bool, keys []types.Comparable, data []int, children []*Node) *Node {
+func newNodeWithKeys(t int, leaf bool, keys []types.Comparable, data []int64, children []*Node) *Node {
 	n := NewNode(t, leaf)
 	n.Keys = append(n.Keys, keys...)
 	n.DataPtrs = append(n.DataPtrs, data...)
@@ -34,7 +34,7 @@ func TestSplitChild_Leaf(t *testing.T) {
 	tVal := 3
 	childLeft := newNodeWithData(tVal, true,
 		[]int{10, 20, 30, 40, 50},
-		[]int{1, 2, 3, 4, 5},
+		[]int64{1, 2, 3, 4, 5},
 		nil,
 	)
 	oldNext := NewNode(tVal, true)
@@ -153,38 +153,38 @@ func TestInsertNonFull_LeafOrdering(t *testing.T) {
 	cases := []struct {
 		name      string
 		startKeys []int
-		startData []int
+		startData []int64
 		key       int
-		dataPtr   int
+		dataPtr   int64
 		wantKeys  []int
-		wantData  []int
+		wantData  []int64
 	}{
 		{
 			name:      "insert-begin",
 			startKeys: []int{20, 30, 40},
-			startData: []int{2, 3, 4},
+			startData: []int64{2, 3, 4},
 			key:       10,
 			dataPtr:   1,
 			wantKeys:  []int{10, 20, 30, 40},
-			wantData:  []int{1, 2, 3, 4},
+			wantData:  []int64{1, 2, 3, 4},
 		},
 		{
 			name:      "insert-middle",
 			startKeys: []int{10, 30, 40},
-			startData: []int{1, 3, 4},
+			startData: []int64{1, 3, 4},
 			key:       20,
 			dataPtr:   2,
 			wantKeys:  []int{10, 20, 30, 40},
-			wantData:  []int{1, 2, 3, 4},
+			wantData:  []int64{1, 2, 3, 4},
 		},
 		{
 			name:      "insert-end",
 			startKeys: []int{10, 20, 30},
-			startData: []int{1, 2, 3},
+			startData: []int64{1, 2, 3},
 			key:       40,
 			dataPtr:   4,
 			wantKeys:  []int{10, 20, 30, 40},
-			wantData:  []int{1, 2, 3, 4},
+			wantData:  []int64{1, 2, 3, 4},
 		},
 	}
 
@@ -213,9 +213,9 @@ func TestInsertNonFull_LeafOrdering(t *testing.T) {
 func TestInsertNonFull_InternalRouting(t *testing.T) {
 	makeParent := func() *Node {
 		tVal := 3
-		c0 := newNodeWithData(tVal, true, []int{5}, []int{50}, nil)
-		c1 := newNodeWithData(tVal, true, []int{15}, []int{150}, nil)
-		c2 := newNodeWithData(tVal, true, []int{25}, []int{250}, nil)
+		c0 := newNodeWithData(tVal, true, []int{5}, []int64{50}, nil)
+		c1 := newNodeWithData(tVal, true, []int{15}, []int64{150}, nil)
+		c2 := newNodeWithData(tVal, true, []int{25}, []int64{250}, nil)
 		parent := newNodeWithData(tVal, false, []int{10, 20}, nil, []*Node{c0, c1, c2})
 		return parent
 	}
@@ -267,7 +267,7 @@ func TestInsertNonFull_SplitPreventivo(t *testing.T) {
 	tVal := 3
 	fullChild := newNodeWithData(tVal, true,
 		[]int{10, 20, 30, 40, 50},
-		[]int{1, 2, 3, 4, 5},
+		[]int64{1, 2, 3, 4, 5},
 		nil,
 	)
 	parent := newNodeWithData(tVal, false, nil, nil, []*Node{fullChild})
@@ -297,7 +297,7 @@ func TestInsertNonFull_SplitBoundaryKey(t *testing.T) {
 		tVal := 3
 		fullChild := newNodeWithData(tVal, true,
 			[]int{10, 20, 30, 40, 50},
-			[]int{1, 2, 3, 4, 5},
+			[]int64{1, 2, 3, 4, 5},
 			nil,
 		)
 		return newNodeWithData(tVal, false, nil, nil, []*Node{fullChild})
@@ -345,7 +345,7 @@ func TestInsertNonFull_SplitBoundaryKey(t *testing.T) {
 
 func TestDelete_SimpleNoUnderflow(t *testing.T) {
 	tVal := 3 // min keys = 2
-	leaf := newNodeWithData(tVal, true, []int{10, 20, 30}, []int{1, 2, 3}, nil)
+	leaf := newNodeWithData(tVal, true, []int{10, 20, 30}, []int64{1, 2, 3}, nil)
 	tree := &BPlusTree{T: tVal, Root: leaf}
 
 	ok := tree.Root.remove(types.IntKey(20))
@@ -366,9 +366,9 @@ func TestDelete_SimpleNoUnderflow(t *testing.T) {
 
 func TestDelete_BorrowFromPrev(t *testing.T) {
 	tVal := 3
-	left := newNodeWithData(tVal, true, []int{5, 6, 7, 8}, []int{50, 60, 70, 80}, nil) // rico
-	target := newNodeWithData(tVal, true, []int{20, 30}, []int{200, 300}, nil)         // vai underflow
-	right := newNodeWithData(tVal, true, []int{40, 50}, []int{400, 500}, nil)
+	left := newNodeWithData(tVal, true, []int{5, 6, 7, 8}, []int64{50, 60, 70, 80}, nil) // rico
+	target := newNodeWithData(tVal, true, []int{20, 30}, []int64{200, 300}, nil)         // vai underflow
+	right := newNodeWithData(tVal, true, []int{40, 50}, []int64{400, 500}, nil)
 
 	parent := newNodeWithData(tVal, false, []int{20, 40}, nil, []*Node{left, target, right})
 
@@ -389,8 +389,8 @@ func TestDelete_BorrowFromPrev(t *testing.T) {
 
 func TestDelete_BorrowFromNext(t *testing.T) {
 	tVal := 3
-	target := newNodeWithData(tVal, true, []int{10, 20}, []int{100, 200}, nil) // vai underflow
-	right := newNodeWithData(tVal, true, []int{40, 50, 60, 70}, []int{400, 500, 600, 700}, nil)
+	target := newNodeWithData(tVal, true, []int{10, 20}, []int64{100, 200}, nil) // vai underflow
+	right := newNodeWithData(tVal, true, []int{40, 50, 60, 70}, []int64{400, 500, 600, 700}, nil)
 
 	parent := newNodeWithData(tVal, false, []int{40}, nil, []*Node{target, right})
 
@@ -411,9 +411,9 @@ func TestDelete_BorrowFromNext(t *testing.T) {
 
 func TestDelete_MergeLeaves(t *testing.T) {
 	tVal := 3
-	left := newNodeWithData(tVal, true, []int{10, 20}, []int{100, 200}, nil)
-	mid := newNodeWithData(tVal, true, []int{31, 32}, []int{310, 320}, nil)
-	right := newNodeWithData(tVal, true, []int{50, 60}, []int{500, 600}, nil)
+	left := newNodeWithData(tVal, true, []int{10, 20}, []int64{100, 200}, nil)
+	mid := newNodeWithData(tVal, true, []int{31, 32}, []int64{310, 320}, nil)
+	right := newNodeWithData(tVal, true, []int{50, 60}, []int64{500, 600}, nil)
 	left.Next = mid
 	mid.Next = right
 
@@ -441,8 +441,8 @@ func TestDelete_MergeLeaves(t *testing.T) {
 
 func TestDelete_RootCollapses(t *testing.T) {
 	tVal := 3
-	left := newNodeWithData(tVal, true, []int{10, 20}, []int{100, 200}, nil)
-	right := newNodeWithData(tVal, true, []int{30, 40}, []int{300, 400}, nil)
+	left := newNodeWithData(tVal, true, []int{10, 20}, []int64{100, 200}, nil)
+	right := newNodeWithData(tVal, true, []int{30, 40}, []int64{300, 400}, nil)
 	root := newNodeWithData(tVal, false, []int{30}, nil, []*Node{left, right})
 	tree := &BPlusTree{T: tVal, Root: root}
 
@@ -471,7 +471,7 @@ func TestDelete_RootCollapses(t *testing.T) {
 
 func TestDelete_MissingKey(t *testing.T) {
 	tVal := 3
-	leaf := newNodeWithData(tVal, true, []int{10, 20, 30}, []int{1, 2, 3}, nil)
+	leaf := newNodeWithData(tVal, true, []int{10, 20, 30}, []int64{1, 2, 3}, nil)
 	tree := &BPlusTree{T: tVal, Root: leaf}
 
 	ok := tree.Root.remove(types.IntKey(9999))
@@ -587,13 +587,13 @@ func TestVarcharKey_DeleteWithBorrowAndMerge(t *testing.T) {
 	// Cria estrutura manualmente para testar borrow
 	left := newNodeWithKeys(tVal, true,
 		[]types.Comparable{types.VarcharKey("a"), types.VarcharKey("b"), types.VarcharKey("c"), types.VarcharKey("d")},
-		[]int{1, 2, 3, 4}, nil)
+		[]int64{1, 2, 3, 4}, nil)
 	target := newNodeWithKeys(tVal, true,
 		[]types.Comparable{types.VarcharKey("m"), types.VarcharKey("n")},
-		[]int{13, 14}, nil)
+		[]int64{13, 14}, nil)
 	right := newNodeWithKeys(tVal, true,
 		[]types.Comparable{types.VarcharKey("x"), types.VarcharKey("y")},
-		[]int{24, 25}, nil)
+		[]int64{24, 25}, nil)
 
 	parent := newNodeWithKeys(tVal, false,
 		[]types.Comparable{types.VarcharKey("m"), types.VarcharKey("x")},
@@ -666,10 +666,10 @@ func TestFloatKey_DeleteWithMerge(t *testing.T) {
 	// Cria dois filhos com mínimo de chaves
 	left := newNodeWithKeys(tVal, true,
 		[]types.Comparable{types.FloatKey(1.0), types.FloatKey(2.0)},
-		[]int{1, 2}, nil)
+		[]int64{1, 2}, nil)
 	right := newNodeWithKeys(tVal, true,
 		[]types.Comparable{types.FloatKey(3.0), types.FloatKey(4.0)},
-		[]int{3, 4}, nil)
+		[]int64{3, 4}, nil)
 	left.Next = right
 
 	root := newNodeWithKeys(tVal, false,
@@ -784,7 +784,7 @@ func TestDateKey_Split(t *testing.T) {
 	// Insere 6 datas para forçar split
 	for i := 0; i < 6; i++ {
 		d := baseTime.Add(time.Duration(i) * 24 * time.Hour)
-		tree.Insert(types.DateKey(d), i)
+		tree.Insert(types.DateKey(d), int64(i))
 	}
 
 	if tree.Root.Leaf {
@@ -812,10 +812,10 @@ func TestDateKey_DeleteWithBorrow(t *testing.T) {
 	// Left tem 4 chaves (rico), target tem 2 (mínimo)
 	left := newNodeWithKeys(tVal, true,
 		[]types.Comparable{d1, d2, d3, d4},
-		[]int{1, 2, 3, 4}, nil)
+		[]int64{1, 2, 3, 4}, nil)
 	target := newNodeWithKeys(tVal, true,
 		[]types.Comparable{d5, d6},
-		[]int{5, 6}, nil)
+		[]int64{5, 6}, nil)
 
 	parent := newNodeWithKeys(tVal, false,
 		[]types.Comparable{d5},

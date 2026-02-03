@@ -53,7 +53,7 @@ func TestFindLeafLowerBound_MultipleLeaves(t *testing.T) {
 
 	// Insere dados suficientes para criar múltiplos níveis
 	for i := 1; i <= 15; i++ {
-		tree.Insert(types.IntKey(i*10), i*100)
+		tree.Insert(types.IntKey(i*10), int64(i*100))
 	}
 
 	// Busca por uma chave existente
@@ -84,7 +84,7 @@ func TestSearch_MultiLevel(t *testing.T) {
 
 	// Insere chaves e verifica cada uma
 	for i := 1; i <= 15; i++ {
-		tree.Insert(types.IntKey(i*10), i*100)
+		tree.Insert(types.IntKey(i*10), int64(i*100))
 	}
 
 	// Verifica algumas chaves
@@ -139,7 +139,7 @@ func TestDelete_CausesRebalancing(t *testing.T) {
 
 	// Insere muitos dados
 	for i := 1; i <= 20; i++ {
-		tree.Insert(types.IntKey(i), i*10)
+		tree.Insert(types.IntKey(i), int64(i*10))
 	}
 
 	// Remove chaves de forma a causar rebalanceamento
@@ -201,7 +201,7 @@ func TestDelete_FixSeparators(t *testing.T) {
 
 	// Insere dados
 	for i := 1; i <= 10; i++ {
-		tree.Insert(types.IntKey(i*10), i*100)
+		tree.Insert(types.IntKey(i*10), int64(i*100))
 	}
 
 	// Remove chaves
@@ -226,7 +226,7 @@ func TestDelete_AllKeys(t *testing.T) {
 
 	keys := []int{10, 20, 30, 40, 50}
 	for _, k := range keys {
-		tree.Insert(types.IntKey(k), k*10)
+		tree.Insert(types.IntKey(k), int64(k*10))
 	}
 
 	// Remove todas as chaves
@@ -254,7 +254,7 @@ func TestSearch_InternalNodeTraversal(t *testing.T) {
 
 	// Cria árvore com múltiplos níveis
 	for i := 1; i <= 20; i++ {
-		tree.Insert(types.IntKey(i*5), i*50)
+		tree.Insert(types.IntKey(i*5), int64(i*50))
 	}
 
 	// Busca chaves em diferentes posições
@@ -316,7 +316,7 @@ func TestLargeTreeOperations(t *testing.T) {
 
 	// Insere 100 elementos
 	for i := 1; i <= 100; i++ {
-		err := tree.Insert(types.IntKey(i), i*10)
+		err := tree.Insert(types.IntKey(i), int64(i*10))
 		if err != nil {
 			t.Fatalf("Failed to insert key %d: %v", i, err)
 		}
@@ -394,7 +394,7 @@ func TestInsert_ReverseOrder(t *testing.T) {
 
 	// Insere em ordem reversa
 	for i := 20; i >= 1; i-- {
-		tree.Insert(types.IntKey(i), i*10)
+		tree.Insert(types.IntKey(i), int64(i*10))
 	}
 
 	// Verifica todas as chaves

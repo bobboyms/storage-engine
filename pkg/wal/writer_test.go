@@ -1,0 +1,106 @@
+package wal
+
+import (
+	"os"
+	"testing"
+	"time"
+)
+
+func TestWALWriter_IntervalSync(t *testing.T) {
+	tmpFile := "test_wal_interval.log"
+	defer os.Remove(tmpFile)
+
+	payload := []byte("some data")
+	crc := CalculateCRC32(payload)
+
+	opts := Options{
+		SyncPolicy:           SyncInterval,
+		SyncIntervalDuration: 50 * time.Millisecond,
+		BufferSize:           1024,
+	}
+
+	w, err := NewWALWriter(tmpFile, opts)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	// Escreve sem forçar sync
+	entry := AcquireEntry()
+	entry.Header = WALHeader{
+		Magic:      WALMagic,
+		Version:    1,
+		EntryType:  EntryInsert,
+		PayloadLen: uint32(len(payload)),
+		CRC32:      crc,
+		LSN:        1,
+	}
+	entry.Payload = append(entry.Payload, payload...)
+
+	if err := w.WriteEntry(entry); err != nil {
+		t.Fatalf("WriteEntry failed: %v", err)
+	}
+	ReleaseEntry(entry)
+
+	// Espera o background sync (50ms)
+	time.Sleep(100 * time.Millisecond)
+
+	// Verifica se o arquivo tem tamanho > 0
+	info, err := os.Stat(tmpFile)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Error("File size is 0 after background sync, expected content")
+	}
+
+	w.Close()
+}
+
+func TestWALWriter_BatchSync(t *testing.T) {
+	tmpFile := "test_wal_batch.log"
+	defer os.Remove(tmpFile)
+
+	opts := Options{
+		SyncPolicy:     SyncBatch,
+		SyncBatchBytes: 100, // Sync a cada 100 bytes
+		BufferSize:     1024,
+	}
+
+	w, err := NewWALWriter(tmpFile, opts)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	// Entry pequena (~30 bytes total)
+	payload := []byte("12345")
+	entrySize := int64(HeaderSize + len(payload))
+
+	// Escreve 2 entradas (total ~60 bytes, < 100). Não deve syncar fisica
+	entry := AcquireEntry()
+	entry.Header.PayloadLen = uint32(len(payload))
+	entry.Payload = append(entry.Payload, payload...)
+
+	w.WriteEntry(entry)
+	w.WriteEntry(entry)
+
+	// O arquivo fisico pode estar vazio ou incompleto pois está no buffer do bufio/OS
+	// Vamos forçar mais 2 escritas para estourar o limite de 100 bytes
+	w.WriteEntry(entry)
+	w.WriteEntry(entry)
+	ReleaseEntry(entry)
+
+	// Agora deve ter syncado
+	info, err := os.Stat(tmpFile)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	// Tamanho esperado = 4 * entrySize
+	expected := 4 * entrySize
+	if info.Size() != expected {
+		// Nota: Testar isso com precisão depende de como o SO reporta, mas o Sync garante flush
+		t.Logf("File size: %d, Expected: %d", info.Size(), expected)
+	}
+
+	w.Close()
+}

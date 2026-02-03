@@ -3,6 +3,7 @@ package btree
 import (
 	"fmt"
 	"sort"
+	"sync" // Added for Latch Crabbing
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -11,11 +12,12 @@ import (
 type Node struct {
 	T        int                // Grau mínimo
 	Keys     []types.Comparable // Chaves
-	DataPtrs []int              // Ponteiros para os dados (apenas em folhas)
+	DataPtrs []int64            // Ponteiros para os dados (apenas em folhas)
 	Children []*Node            // Filhos (apenas em nós internos)
 	Leaf     bool               // Se é folha
 	N        int                // Número de chaves atual
 	Next     *Node              // Ponteiro para a próxima folha (lista ligada)
+	mu       sync.RWMutex       // Latch (Lock) para controle de concorrência granular
 }
 
 func NewNode(t int, leaf bool) *Node {
@@ -23,9 +25,50 @@ func NewNode(t int, leaf bool) *Node {
 		T:        t,
 		Leaf:     leaf,
 		Keys:     make([]types.Comparable, 0, 2*t-1),
-		DataPtrs: make([]int, 0, 2*t-1),
+		DataPtrs: make([]int64, 0, 2*t-1),
 		Children: make([]*Node, 0, 2*t),
 	}
+}
+
+// Métodos auxiliares de Lock para o Node
+
+func (n *Node) Lock() {
+	if n != nil {
+		n.mu.Lock()
+	}
+}
+
+func (n *Node) Unlock() {
+	if n != nil {
+		n.mu.Unlock()
+	}
+}
+
+func (n *Node) RLock() {
+	if n != nil {
+		n.mu.RLock()
+	}
+}
+
+func (n *Node) RUnlock() {
+	if n != nil {
+		n.mu.RUnlock()
+	}
+}
+
+// IsSafeForInsert verifica se o nó pode receber uma inserção sem split
+func (n *Node) IsSafeForInsert() bool {
+	return n.N < 2*n.T-1
+}
+
+// IsSafeForDelete verifica se o nó pode sofrer deleção sem merge/borrow
+// Um nó é seguro se tem mais chaves que o mínimo exigido (T-1)
+func (n *Node) IsSafeForDelete() bool {
+	return n.N > n.T-1
+}
+
+func (n *Node) IsFull() bool {
+	return n.N == 2*n.T-1
 }
 
 func (n *Node) Search(key types.Comparable) (*Node, bool) {
@@ -61,7 +104,7 @@ func (n *Node) findLeafLowerBound(key types.Comparable) (*Node, int) {
 	return n.Children[i].findLeafLowerBound(key)
 }
 
-func (n *Node) InsertNonFull(key types.Comparable, dataPtr int, uniqueKey bool) error {
+func (n *Node) InsertNonFull(key types.Comparable, dataPtr int64, uniqueKey bool) error {
 	i := n.N - 1
 
 	if n.Leaf {
@@ -253,7 +296,7 @@ func (n *Node) borrowFromPrev(i int) {
 
 	if child.Leaf {
 		child.Keys = append([]types.Comparable{nil}, child.Keys...)
-		child.DataPtrs = append([]int{0}, child.DataPtrs...)
+		child.DataPtrs = append([]int64{0}, child.DataPtrs...)
 		child.Keys[0] = sibling.Keys[sibling.N-1]
 		child.DataPtrs[0] = sibling.DataPtrs[sibling.N-1]
 		child.N++
@@ -287,7 +330,7 @@ func (n *Node) borrowFromNext(i int) {
 		child.N++
 
 		sibling.Keys = append([]types.Comparable{}, sibling.Keys[1:]...)
-		sibling.DataPtrs = append([]int{}, sibling.DataPtrs[1:]...)
+		sibling.DataPtrs = append([]int64{}, sibling.DataPtrs[1:]...)
 		sibling.N--
 
 		n.Keys[i] = sibling.Keys[0]

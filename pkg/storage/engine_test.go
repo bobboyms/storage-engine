@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -8,6 +9,9 @@ import (
 )
 
 func TestEngine_GetAndDel(t *testing.T) {
+	tmpDir := t.TempDir()
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
 	tableMgr := storage.NewTableMenager()
 	err := tableMgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
@@ -16,7 +20,10 @@ func TestEngine_GetAndDel(t *testing.T) {
 		t.Fatalf("NewTable failed: %v", err)
 	}
 
-	se := storage.NewStorageEngine(tableMgr)
+	se, err := storage.NewStorageEngine(tableMgr, "", heapPath) // Empty string = no WAL (memory only)
+	if err != nil {
+		t.Fatalf("NewStorageEngine failed: %v", err)
+	}
 
 	// Test Get on empty
 	_, found, err := se.Get("users", "id", types.IntKey(10))
@@ -28,21 +35,22 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Put data
-	err = se.Put("users", "id", types.IntKey(10), 100)
+	doc := "{\"id\":10,\"name\":\"Alice\"}"
+	err = se.Put("users", "id", types.IntKey(10), doc)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
 	// Test Get found
-	node, found, err := se.Get("users", "id", types.IntKey(10))
+	gotDoc, found, err := se.Get("users", "id", types.IntKey(10))
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
 	if !found {
 		t.Error("Expected found=true for existing key")
 	}
-	if node == nil || node.DataPtrs[0] != 100 {
-		t.Errorf("Expected value 100, got %v", node)
+	if gotDoc != doc {
+		t.Errorf("Expected doc %q, got %q", doc, gotDoc)
 	}
 
 	// Test Del

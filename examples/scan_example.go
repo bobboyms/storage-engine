@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -16,6 +17,10 @@ que suporta: =, !=, >, <, >=, <=, BETWEEN
 */
 
 func main() {
+	// Cleanup previous run
+	os.Remove("example.wal")
+	os.Remove("example.heap")
+
 	// 1. Criar Table Manager e Tabela
 	tableMgr := storage.NewTableMenager()
 	err := tableMgr.NewTable("users", []storage.Index{
@@ -28,14 +33,13 @@ func main() {
 	}
 
 	// 2. Criar Storage Engine
-	se := storage.NewStorageEngine(tableMgr)
+	se, _ := storage.NewStorageEngine(tableMgr, "example.wal", "example.heap")
+	defer paramsCleanup()
 
 	// 3. Inserir dados
-	se.Put("users", "age", types.IntKey(15), 1)
-	se.Put("users", "age", types.IntKey(18), 2)
-	se.Put("users", "age", types.IntKey(25), 3)
-	se.Put("users", "age", types.IntKey(30), 4)
-	se.Put("users", "age", types.IntKey(65), 5)
+	se.Put("users", "age", types.IntKey(65), "user_65")
+	se.Put("users", "age", types.IntKey(18), "user_18")
+	se.Put("users", "age", types.IntKey(30), "user_30")
 
 	// ========================================
 	// OPERADOR EQUAL (=)
@@ -57,4 +61,9 @@ func main() {
 	// SQL: SELECT * FROM users WHERE age BETWEEN 18 AND 30
 	results, _ = se.Scan("users", "age", query.Between(types.IntKey(18), types.IntKey(30)))
 	fmt.Printf("Age BETWEEN 18 AND 30: %v\n", results)
+}
+
+func paramsCleanup() {
+	os.Remove("example.wal")
+	os.Remove("example.heap")
 }

@@ -8,30 +8,51 @@ import (
 // Estrutura do Cursor
 type Cursor struct {
 	tree         *btree.BPlusTree
-	currentNode  *btree.Node // Folha atual
-	currentIndex int         // Índice dentro da folha
+	currentNode  *btree.Node
+	currentIndex int
+}
+
+// Close limpa a referência. Não gerencia locks de nó pois confiamos no Table RLock.
+func (c *Cursor) Close() {
+	c.currentNode = nil
 }
 
 // Key/Value: Pega o dado atual
 func (c *Cursor) Key() types.Comparable { return c.currentNode.Keys[c.currentIndex] }
-func (c *Cursor) Value() int            { return c.currentNode.DataPtrs[c.currentIndex] }
+func (c *Cursor) Value() int64          { return c.currentNode.DataPtrs[c.currentIndex] }
 func (c *Cursor) Valid() bool           { return c.currentNode != nil && c.currentIndex < c.currentNode.N }
 
 // Seek: Posiciona o cursor na chave K ou na imediatamente posterior
-// Essencial para: WHERE age >= 18
 func (c *Cursor) Seek(key types.Comparable) {
+	c.Close()
+
+	// FindLeafLowerBound retorna o nó com R-LOCK (Latch Crabbing do BTree)
 	leaf, idx := c.tree.FindLeafLowerBound(key)
+
+	// Como estamos sob proteção do Table RLock (garantido pelo Engine Scan/Get),
+	// não precisamos manter locks individuais nos nós para leitura.
+	// Liberamos o lock da folha imediatamente para evitar complexidade e deadlocks.
+	if leaf != nil {
+		leaf.RUnlock()
+	}
+
 	if leaf == nil {
 		c.currentNode = nil
 		c.currentIndex = 0
 		return
 	}
 
-	// Se passou do fim, tenta próxima folha
+	// Lógica de navegação sem locks (Naked traversal protegido por Table Lock)
 	if idx >= leaf.N {
-		if leaf.Next != nil && leaf.Next.N > 0 {
-			leaf = leaf.Next
+		nextLeaf := leaf.Next
+		if nextLeaf != nil {
+			leaf = nextLeaf
 			idx = 0
+			// Skip empty
+			for leaf != nil && leaf.N == 0 {
+				leaf = leaf.Next
+				idx = 0
+			}
 		} else {
 			c.currentNode = nil
 			return
@@ -43,7 +64,6 @@ func (c *Cursor) Seek(key types.Comparable) {
 }
 
 // Next: Avança para o próximo registro
-// Essencial para: Range Scans e Full Table Scans
 func (c *Cursor) Next() bool {
 	if c.currentNode == nil {
 		return false
@@ -55,19 +75,21 @@ func (c *Cursor) Next() bool {
 		return true
 	}
 
-	// Senão, tenta ir para a próxima folha
+	// Navegação via ponteiros sem lock adicional
 	nextLeaf := c.currentNode.Next
-	for nextLeaf != nil && nextLeaf.N == 0 {
-		nextLeaf = nextLeaf.Next // pula folhas vazias
-	}
-	if nextLeaf != nil {
-		c.currentNode = nextLeaf
+
+	c.currentNode = nextLeaf
+	c.currentIndex = 0
+
+	// Loop para pular vazios
+	for c.currentNode != nil && c.currentNode.N == 0 {
+		c.currentNode = c.currentNode.Next
 		c.currentIndex = 0
+	}
+
+	if c.currentNode != nil {
 		return true
 	}
 
-	// Não há mais dados - INVALIDA o cursor
-	c.currentNode = nil
-	c.currentIndex = 0
 	return false
 }

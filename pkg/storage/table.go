@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"sync"
+
 	"github.com/bobboyms/storage-engine/pkg/btree"
 	"github.com/bobboyms/storage-engine/pkg/errors"
 )
@@ -27,14 +29,60 @@ type Index struct {
 	Tree    *btree.BPlusTree
 }
 
+// Table representa uma tabela no banco de dados com seu próprio lock
+// para permitir operações concorrentes em tabelas diferentes
 type Table struct {
 	Name    string
-	Heap    map[int]string
 	Indices map[string]*Index
+	mu      sync.RWMutex // Lock por tabela para concorrência granular
 }
 
+// Lock adquire write lock na tabela
+func (t *Table) Lock() {
+	t.mu.Lock()
+}
+
+// Unlock libera write lock na tabela
+func (t *Table) Unlock() {
+	t.mu.Unlock()
+}
+
+// RLock adquire read lock na tabela
+func (t *Table) RLock() {
+	t.mu.RLock()
+}
+
+// RUnlock libera read lock na tabela
+func (t *Table) RUnlock() {
+	t.mu.RUnlock()
+}
+
+// GetIndex retorna o índice pelo nome.
+// IMPORTANTE: O chamador DEVE ter o lock da tabela antes de chamar este método.
+func (t *Table) GetIndex(indexName string) (*Index, error) {
+	index, ok := t.Indices[indexName]
+	if !ok {
+		return nil, &errors.IndexNotFoundError{
+			Name: indexName,
+		}
+	}
+	return index, nil
+}
+
+// GetIndices retorna todos os índices da tabela.
+// IMPORTANTE: O chamador DEVE ter o lock da tabela antes de chamar este método.
+func (t *Table) GetIndices() []*Index {
+	indices := make([]*Index, 0, len(t.Indices))
+	for _, idx := range t.Indices {
+		indices = append(indices, idx)
+	}
+	return indices
+}
+
+// TableMetaData gerencia os metadados das tabelas com thread-safety
 type TableMetaData struct {
 	tables map[string]*Table
+	mu     sync.RWMutex // Protege acesso ao mapa de tabelas
 }
 
 func NewTableMenager() *TableMetaData {
@@ -44,6 +92,9 @@ func NewTableMenager() *TableMetaData {
 }
 
 func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int) error {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
 	// Verifica se a tabela já existe
 	if _, exists := tb.tables[tableName]; exists {
 		return &errors.TableAlreadyExistsError{
@@ -89,7 +140,6 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int) erro
 
 	tb.tables[tableName] = &Table{
 		Name:    tableName,
-		Heap:    make(map[int]string),
 		Indices: tempIndices,
 	}
 
@@ -97,6 +147,9 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int) erro
 }
 
 func (tb *TableMetaData) GetTableByName(name string) (*Table, error) {
+	tb.mu.RLock()
+	defer tb.mu.RUnlock()
+
 	table, ok := tb.tables[name]
 	if !ok {
 		return nil, &errors.TableNotFoundError{
@@ -112,6 +165,10 @@ func (tb *TableMetaData) GetIndexByName(tableName string, indexName string) (*In
 		return nil, err
 	}
 
+	// Protege acesso ao mapa de índices da tabela
+	table.mu.RLock()
+	defer table.mu.RUnlock()
+
 	index, ok := table.Indices[indexName]
 	if !ok {
 		return nil, &errors.IndexNotFoundError{
@@ -119,4 +176,27 @@ func (tb *TableMetaData) GetIndexByName(tableName string, indexName string) (*In
 		}
 	}
 	return index, nil
+}
+
+func (tb *TableMetaData) ListTables() []string {
+	tb.mu.RLock()
+	defer tb.mu.RUnlock()
+
+	names := make([]string, 0, len(tb.tables))
+	for name := range tb.tables {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (tb *TableMetaData) GetIndexes(tableName string) ([]*Index, error) {
+	table, err := tb.GetTableByName(tableName)
+	if err != nil {
+		return nil, err
+	}
+	indices := make([]*Index, 0, len(table.Indices))
+	for _, idx := range table.Indices {
+		indices = append(indices, idx)
+	}
+	return indices, nil
 }

@@ -1,6 +1,8 @@
 package errors
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type TableAlreadyExistsError struct {
 	Name string
@@ -48,4 +50,13 @@ type IndexNotFoundError struct {
 
 func (e *IndexNotFoundError) Error() string {
 	return fmt.Sprintf("index %q not found", e.Name)
+}
+
+type InvalidKeyTypeError struct {
+	Name     string
+	TypeName string
+}
+
+func (e *InvalidKeyTypeError) Error() string {
+	return fmt.Sprintf("invalid key type for index %q: %s", e.Name, e.TypeName)
 }

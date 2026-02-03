@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
@@ -179,32 +180,33 @@ func TestTableManager_Integration(t *testing.T) {
 	}
 
 	// Cria storage engine
-	se := storage.NewStorageEngine(mgr)
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(mgr, "", filepath.Join(tmpDir, "heap.data"))
 
 	// Insere dados na PK
-	err = se.Put("users", "id", types.IntKey(1), 100)
+	err = se.Put("users", "id", types.IntKey(1), "user_1")
 	if err != nil {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
-	err = se.Put("users", "id", types.IntKey(2), 200)
+	err = se.Put("users", "id", types.IntKey(2), "user_2")
 	if err != nil {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
 	// Tenta inserir duplicata na PK - deve falhar
-	err = se.Put("users", "id", types.IntKey(1), 300)
+	err = se.Put("users", "id", types.IntKey(1), "user_1_duplicate")
 	if err == nil {
 		t.Fatal("Inserting duplicate primary key should fail")
 	}
 
 	// Insere dados no índice secundário (permite duplicatas)
-	err = se.Put("users", "age", types.IntKey(25), 1)
+	err = se.Put("users", "age", types.IntKey(25), "age_25")
 	if err != nil {
 		t.Fatalf("Failed to insert into secondary index: %v", err)
 	}
 
-	err = se.Put("users", "age", types.IntKey(25), 2) // Duplicata OK em índice secundário
+	err = se.Put("users", "age", types.IntKey(25), "age_25_2") // Duplicata OK em índice secundário
 	if err != nil {
 		t.Fatalf("Secondary index should allow duplicates: %v", err)
 	}
@@ -214,8 +216,8 @@ func TestTableManager_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
-	if len(results) != 1 || results[0] != 100 {
-		t.Fatalf("Expected [100], got %v", results)
+	if len(results) != 1 || results[0] != "user_1" {
+		t.Fatalf("Expected [user_1], got %v", results)
 	}
 }
 
