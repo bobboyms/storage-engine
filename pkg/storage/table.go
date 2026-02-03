@@ -76,6 +76,12 @@ func (t *Table) GetIndices() []*Index {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
+	return t.GetIndicesUnsafe()
+}
+
+// GetIndicesUnsafe retorna todos os índices sem adquirir lock.
+// O CHAMADOR DEVE GARANTIR QUE JÁ POSSUI RLOCK OU LOCK NA TABELA!
+func (t *Table) GetIndicesUnsafe() []*Index {
 	indices := make([]*Index, 0, len(t.Indices))
 	for _, idx := range t.Indices {
 		indices = append(indices, idx)

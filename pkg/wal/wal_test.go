@@ -94,3 +94,39 @@ func TestEntryWriteTo(t *testing.T) {
 		t.Errorf("Buffer length mismatch. Got %d, want %d", buf.Len(), expectedSize)
 	}
 }
+
+func TestDefaultOptions(t *testing.T) {
+	opts := DefaultOptions()
+	if opts.BufferSize <= 0 {
+		t.Error("Expected positive BufferSize")
+	}
+	if opts.SyncPolicy != SyncInterval {
+		t.Error("Expected SyncInterval as default")
+	}
+	if opts.SyncIntervalDuration <= 0 {
+		t.Error("Expected positive SyncIntervalDuration")
+	}
+}
+
+func TestBufferPool(t *testing.T) {
+	bufPtr := AcquireBuffer()
+	if bufPtr == nil {
+		t.Fatal("AcquireBuffer returned nil")
+	}
+	if cap(*bufPtr) < 8192 {
+		t.Errorf("Expected buffer capacity >= 8192, got %d", cap(*bufPtr))
+	}
+
+	// Use buffer
+	*bufPtr = append(*bufPtr, []byte("test")...)
+
+	ReleaseBuffer(bufPtr)
+
+	// Verify reset (pointer still valid, but content length 0)
+	bufPtr2 := AcquireBuffer()
+	// NOTE: Pools don't guarantee same object, but if reused:
+	if len(*bufPtr2) != 0 {
+		t.Errorf("Acquired buffer should have length 0, got %d", len(*bufPtr2))
+	}
+	ReleaseBuffer(bufPtr2)
+}

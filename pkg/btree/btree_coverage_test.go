@@ -428,3 +428,47 @@ func TestInsert_Update(t *testing.T) {
 		}
 	}
 }
+
+func TestNode_IsSafeForInsert(t *testing.T) {
+	// T=3 => Max Keys = 2*T - 1 = 5
+	node := NewNode(3, true)
+
+	if !node.IsSafeForInsert() {
+		t.Error("Empty node should be safe for insert")
+	}
+
+	for i := 1; i <= 4; i++ {
+		node.InsertNonFull(types.IntKey(i), int64(i), false)
+	}
+
+	if !node.IsSafeForInsert() {
+		t.Error("Node with 4 keys (max 5) should be safe for insert")
+	}
+
+	node.InsertNonFull(types.IntKey(5), 5, false)
+
+	if node.IsSafeForInsert() {
+		t.Error("Full node (5 keys) should NOT be safe for insert")
+	}
+}
+
+func TestNode_IsSafeForDelete(t *testing.T) {
+	// T=3 => Min Keys = T-1 = 2
+	node := NewNode(3, true)
+
+	// Fill with min keys + 1
+	node.InsertNonFull(types.IntKey(1), 1, false)
+	node.InsertNonFull(types.IntKey(2), 2, false)
+	node.InsertNonFull(types.IntKey(3), 3, false)
+
+	if !node.IsSafeForDelete() {
+		t.Error("Node with 3 keys (min 2) should be safe for delete")
+	}
+
+	node.Remove(types.IntKey(3))
+	// Now has 2 keys (min allowed)
+
+	if node.IsSafeForDelete() {
+		t.Error("Node with 2 keys (min allowed) should NOT be safe for delete (needs merge/borrow)")
+	}
+}

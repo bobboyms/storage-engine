@@ -387,13 +387,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 	} else {
 		// Full scan para operadores como != e <
 		// Inicia do começo da árvore
-		leftmost := index.Tree.Root
-		for !leftmost.Leaf {
-			leftmost = leftmost.Children[0]
-		}
-
-		c.currentNode = leftmost
-		c.currentIndex = 0
+		c.Seek(nil)
 
 		for c.Valid() {
 			key := c.Key()
@@ -507,10 +501,12 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	// O Delete atual apenas marca no Heap, e NÃO remove da árvore (conforme comentários comentados abaixo).
 	// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
 
+	var wasFound bool
 	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
 		if !exists {
 			return 0, nil // Key not found, nothing to delete
 		}
+		wasFound = true
 
 		// Escreve registro de Delete no Heap (Tombstone)
 		// Delete no Heap requer o offset antigo? O método Heap.Delete atual pede offset.
@@ -545,7 +541,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	// 	index.Tree.Root = index.Tree.Root.Children[0]
 	// }
 
-	return true, nil
+	return wasFound, nil
 }
 
 // CreateCheckpoint força a criação de checkpoints para todas as tabelas
@@ -563,7 +559,7 @@ func (se *StorageEngine) CreateCheckpoint() error {
 		// mas o lock garante que não estamos no meio de uma alteração de esquema (Indices).
 		table.RLock()
 		currentLSN := se.lsnTracker.Current()
-		indices := table.GetIndices() // GetIndices já faz RLock interno, mas aqui aproveitamos o RLock atual
+		indices := table.GetIndicesUnsafe() // Usa versão sem lock pois já temos lock
 		table.RUnlock()
 
 		for _, idx := range indices {
@@ -699,7 +695,9 @@ func (se *StorageEngine) Recover(walPath string) error {
 			if err != nil {
 				return err
 			}
-			index.Tree.Insert(key, offset)
+			if err := index.Tree.Replace(key, offset); err != nil {
+				return fmt.Errorf("failed to update tree during recovery: %w", err)
+			}
 
 		case wal.EntryDelete:
 			// Remove from tree

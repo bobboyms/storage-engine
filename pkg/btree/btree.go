@@ -208,9 +208,14 @@ func (b *BPlusTree) FindLeafLowerBound(key types.Comparable) (*Node, int) {
 	b.mu.RUnlock()
 
 	for !curr.Leaf {
-		i := sort.Search(curr.N, func(i int) bool {
-			return curr.Keys[i].Compare(key) >= 0
-		})
+		var i int
+		if key == nil {
+			i = 0
+		} else {
+			i = sort.Search(curr.N, func(i int) bool {
+				return curr.Keys[i].Compare(key) >= 0
+			})
+		}
 
 		child := curr.Children[i]
 		child.RLock()
@@ -218,9 +223,14 @@ func (b *BPlusTree) FindLeafLowerBound(key types.Comparable) (*Node, int) {
 		curr = child
 	}
 
-	idx := sort.Search(curr.N, func(i int) bool {
-		return curr.Keys[i].Compare(key) >= 0
-	})
+	var idx int
+	if key == nil {
+		idx = 0
+	} else {
+		idx = sort.Search(curr.N, func(i int) bool {
+			return curr.Keys[i].Compare(key) >= 0
+		})
+	}
 
 	return curr, idx
 }

@@ -352,3 +352,27 @@ func TestEngine_ScanIndexNotFound(t *testing.T) {
 		t.Error("Expected error for non-existent index")
 	}
 }
+
+func TestCursor_SeekNil(t *testing.T) {
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("test", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 3)
+
+	tmpDir := t.TempDir()
+	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	se.Put("test", "id", types.IntKey(10), "val_100")
+	se.Put("test", "id", types.IntKey(20), "val_200")
+
+	index, _ := se.TableMetaData.GetIndexByName("test", "id")
+	cursor := se.Cursor(index.Tree)
+
+	// Seek nil (start from beginning)
+	cursor.Seek(nil)
+	if !cursor.Valid() {
+		t.Fatal("Expected cursor to be valid")
+	}
+	if cursor.Key().Compare(types.IntKey(10)) != 0 {
+		t.Fatalf("Expected first key 10, got %v", cursor.Key())
+	}
+}
