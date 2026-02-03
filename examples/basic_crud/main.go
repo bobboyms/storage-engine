@@ -7,6 +7,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 /*
@@ -51,8 +52,14 @@ func main() {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		return
 	}
-	engine, err := storage.NewStorageEngine(tableMgr, "data.wal", hm)
+	walWriter, err := wal.NewWALWriter("data.wal", wal.DefaultOptions())
 	if err != nil {
+		fmt.Printf("Erro ao criar WAL: %v\n", err)
+		return
+	}
+	engine, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		fmt.Printf("Erro ao criar engine: %v\n", err)
 		return
 	}

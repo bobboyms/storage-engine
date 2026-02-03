@@ -21,6 +21,7 @@ type WALWriter struct {
 	// Controle de Threads
 	done   chan struct{}
 	ticker *time.Ticker
+	closed bool
 }
 
 // NewWALWriter cria um novo Writer
@@ -101,16 +102,22 @@ func (w *WALWriter) syncLocked() error {
 
 // Close fecha o arquivo e encerra rotinas
 func (w *WALWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+
 	if w.ticker != nil {
 		w.ticker.Stop()
 		close(w.done)
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	// Último flush
 	if err := w.syncLocked(); err != nil {
+		w.file.Close() // Try to close anyway
 		return err
 	}
 

@@ -7,6 +7,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 // TestMVCC_SnapshotRead verifies that a transaction sees a consistent snapshot
@@ -25,8 +26,13 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := storage.NewStorageEngine(tableMgr, walPath, hm)
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 	defer se.Close()
@@ -82,7 +88,8 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_update", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
 	defer se.Close()
 
 	// 1. Insert Initial (LSN 1)
@@ -123,7 +130,8 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_del", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
 	defer se.Close()
 
 	// 1. Insert (LSN 1)
@@ -160,7 +168,8 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
 	defer se.Close()
 
 	// Initial Insert (LSN 1)

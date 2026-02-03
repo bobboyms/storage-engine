@@ -35,37 +35,29 @@ type StorageEngine struct {
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
-func NewStorageEngine(tableMetaData *TableMetaData, walPath string, hm *heap.HeapManager) (*StorageEngine, error) {
-	if walPath == "" {
-		return &StorageEngine{
-			TableMetaData: tableMetaData,
-			WAL:           nil,
-			Heap:          hm,
-			lsnTracker:    NewLSNTracker(0),
-		}, nil
-	}
-
-	// Configuração padrão segura
-	opts := wal.DefaultOptions()
-	opts.SyncPolicy = wal.SyncBatch // Alta performance com durabilidade razoável
-	opts.SyncBatchBytes = 10 * 1024 // Flush a cada 10KB (exemplo)
-
-	// Se o diretório não existe, falha na abertura do arquivo.
-	// Assume que o chamador já gerenciou diretórios (ou podemos criar aqui)
-
-	writer, err := wal.NewWALWriter(walPath, opts)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao iniciar WAL: %w", err)
-	}
-
+func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter, hm *heap.HeapManager) (*StorageEngine, error) {
 	// Configuração do Checkpoint Manager
-	// Por padrão, salva checkpoints no mesmo diretório do WAL (ou diretório pai do WAL file)
-	checkpointDir := filepath.Dir(walPath)
+	// Por padrão, salva checkpoints no mesmo diretório do WAL (se existir) ou no diretório do Heap
+	var checkpointDir string
+	if walWriter != nil {
+		// Tenta obter o diretório do arquivo WAL acessando o arquivo subjacente, se possível,
+		// ou usa diretório atual. Como WALWriter não expõe Path facilmente na interface pública,
+		// vamos usar o diretório do Heap como fallback principal se WAL for nil, ou "."
+		// NOTE: Para uma implementação mais robusta, o WALWriter poderia expor o Path.
+		// Por enquanto, vamos assumir que checkpoints ficam junto com os dados principais (Heap).
+	}
+
+	if hm != nil {
+		checkpointDir = filepath.Dir(hm.Path())
+	} else {
+		checkpointDir = "."
+	}
+
 	checkpointMgr := NewCheckpointManager(checkpointDir)
 
 	return &StorageEngine{
 		TableMetaData: tableMetaData,
-		WAL:           writer,
+		WAL:           walWriter,
 		Heap:          hm,
 		Checkpoint:    checkpointMgr,
 		lsnTracker:    NewLSNTracker(0),

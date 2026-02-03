@@ -9,6 +9,7 @@ import (
 
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
@@ -25,8 +26,15 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := NewStorageEngine(tableMgr, walPath, hm)
+
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
@@ -78,8 +86,15 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap for recovery: %v", err)
 	}
-	se2, err := NewStorageEngine(tableMgr2, walPath, hm2)
+
+	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL 2: %v", err)
+	}
+
+	se2, err := NewStorageEngine(tableMgr2, walWriter2, hm2)
+	if err != nil {
+		walWriter2.Close()
 		t.Fatalf("Failed to create engine for recovery: %v", err)
 	}
 	defer se2.Close()
@@ -129,8 +144,15 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := NewStorageEngine(tableMgr, walPath, hm)
+
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 	defer se.Close()
@@ -229,8 +251,15 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := NewStorageEngine(tableMgr, walPath, hm)
+
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 	defer se.Close()

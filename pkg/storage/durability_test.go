@@ -6,6 +6,7 @@ import (
 
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 func TestStorageEngine_Durability(t *testing.T) {
@@ -24,8 +25,16 @@ func TestStorageEngine_Durability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := NewStorageEngine(tableMgr, walPath, hm)
+	opts := wal.DefaultOptions()
+	opts.SyncPolicy = wal.SyncBatch
+	walWriter, err := wal.NewWALWriter(walPath, opts)
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
@@ -47,8 +56,16 @@ func TestStorageEngine_Durability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se2, err := NewStorageEngine(tableMgr2, walPath, hm2)
+
+	// Create WALWriter again for restart
+	walWriter2, err := wal.NewWALWriter(walPath, opts)
 	if err != nil {
+		t.Fatalf("Failed to create WAL 2: %v", err)
+	}
+
+	se2, err := NewStorageEngine(tableMgr2, walWriter2, hm2)
+	if err != nil {
+		walWriter2.Close()
 		t.Fatalf("Failed to create engine 2: %v", err)
 	}
 

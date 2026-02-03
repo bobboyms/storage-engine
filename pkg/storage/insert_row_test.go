@@ -25,8 +25,15 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
-	se, err := storage.NewStorageEngine(tableMgr, walPath, hm)
+
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	se, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	if err != nil {
+		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
@@ -69,8 +76,15 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create heap for restart: %v", err)
 	}
-	se2, err := storage.NewStorageEngine(tableMgr, walPath, hm2)
+
+	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
+		t.Fatalf("Failed to create WAL 2: %v", err)
+	}
+
+	se2, err := storage.NewStorageEngine(tableMgr, walWriter2, hm2)
+	if err != nil {
+		walWriter2.Close()
 		t.Fatalf("Failed to restart engine: %v", err)
 	}
 	defer se2.Close()
@@ -109,7 +123,8 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	w.Close()
 
 	hm, _ := heap.NewHeapManager(heapPath)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
 	defer se.Close()
 
 	if err := se.Recover(walPath); err == nil {
@@ -126,14 +141,19 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 	mgr1 := storage.NewTableMenager()
 	mgr1.NewTable("ghost", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm1, _ := heap.NewHeapManager(heapPath)
-	se, _ := storage.NewStorageEngine(mgr1, walPath, hm1)
+
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(mgr1, walWriter, hm1)
+
 	se.InsertRow("ghost", `{"id":1}`, map[string]types.Comparable{"id": types.IntKey(1)})
 	se.Close()
 
 	// 2. Restart with NO tables defined
 	mgr2 := storage.NewTableMenager()
 	hm2, _ := heap.NewHeapManager(heapPath)
-	se2, _ := storage.NewStorageEngine(mgr2, walPath, hm2)
+
+	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se2, _ := storage.NewStorageEngine(mgr2, walWriter2, hm2)
 	defer se2.Close()
 
 	// Should skip the entry gracefully
@@ -147,7 +167,7 @@ func TestInsertRow_InvalidDoc(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	defer se.Close()
 
 	// Missing "id" in doc

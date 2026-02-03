@@ -17,7 +17,7 @@ func TestCursor_SeekCoverage(t *testing.T) {
 	}
 
 	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -47,7 +47,7 @@ func TestCursor_NextCoverage(t *testing.T) {
 	}
 
 	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -93,7 +93,7 @@ func TestCursor_SkipEmpty(t *testing.T) {
 	tree.Root = leaf1
 
 	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -116,7 +116,7 @@ func TestCursor_SkipEmpty(t *testing.T) {
 func TestCursor_EmptyTree(t *testing.T) {
 	tree := btree.NewTree(3)
 	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
 	c := se.Cursor(tree)
 	defer c.Close()
 

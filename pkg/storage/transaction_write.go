@@ -263,6 +263,11 @@ func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {
 	entry.Header.PayloadLen = 0
 	entry.Header.CRC32 = 0
 
+	if tx.engine.WAL == nil {
+		wal.ReleaseEntry(entry)
+		return nil
+	}
+
 	err := tx.engine.WAL.WriteEntry(entry)
 	wal.ReleaseEntry(entry)
 	return err

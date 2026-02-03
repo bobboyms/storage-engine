@@ -183,7 +183,7 @@ func TestTableManager_Integration(t *testing.T) {
 	// Cria storage engine
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(mgr, "", hm)
+	se, _ := storage.NewStorageEngine(mgr, nil, hm)
 
 	// Insere dados na PK
 	err = se.Put("users", "id", types.IntKey(1), "user_1")

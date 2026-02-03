@@ -8,6 +8,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 /*
@@ -39,7 +40,8 @@ func main() {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		return
 	}
-	se, _ := storage.NewStorageEngine(tableMgr, "example.wal", hm)
+	walWriter, _ := wal.NewWALWriter("example.wal", wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
 	defer paramsCleanup()
 
 	// 3. Inserir dados

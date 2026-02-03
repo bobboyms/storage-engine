@@ -22,7 +22,7 @@ func TestCursor_SeekEmpty(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	index, _ := se.TableMetaData.GetIndexByName("test", "id")
 	cursor := se.Cursor(index.Tree)
 
@@ -41,7 +41,7 @@ func TestCursor_SeekExactMatch(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 	se.Put("test", "id", types.IntKey(20), "val_200")
 	se.Put("test", "id", types.IntKey(30), "val_300")
@@ -76,7 +76,7 @@ func TestCursor_SeekLowerBound(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 	se.Put("test", "id", types.IntKey(20), "val_200")
 	se.Put("test", "id", types.IntKey(30), "val_300")
@@ -102,7 +102,7 @@ func TestCursor_SeekBeyondEnd(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 	se.Put("test", "id", types.IntKey(20), "val_200")
 
@@ -124,7 +124,7 @@ func TestCursor_NextIteration(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	for i := 1; i <= 5; i++ {
 		se.Put("test", "id", types.IntKey(i*10), "val")
 	}
@@ -160,7 +160,7 @@ func TestCursor_NextOnInvalid(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	index, _ := se.TableMetaData.GetIndexByName("test", "id")
 	cursor := se.Cursor(index.Tree)
 
@@ -179,7 +179,7 @@ func TestCursor_NextAcrossLeaves(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	// Insere dados suficientes para criar múltiplas folhas
 	for i := 1; i <= 20; i++ {
@@ -210,7 +210,7 @@ func TestCursor_SeekToFirstKey(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 	se.Put("test", "id", types.IntKey(20), "val_200")
 	se.Put("test", "id", types.IntKey(30), "val_300")
@@ -236,7 +236,7 @@ func TestCursor_ValidAfterExhaustion(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 
 	index, _ := se.TableMetaData.GetIndexByName("test", "id")
@@ -268,7 +268,7 @@ func TestEngine_PutTableNotFound(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	err := se.Put("nonexistent", "id", types.IntKey(1), "val")
 	if err == nil {
@@ -283,7 +283,7 @@ func TestEngine_PutIndexNotFound(t *testing.T) {
 	}, 3)
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	err := se.Put("users", "nonexistent_index", types.IntKey(1), "val")
 	if err == nil {
@@ -295,7 +295,7 @@ func TestEngine_GetTableNotFound(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, _, err := se.Get("nonexistent", "id", types.IntKey(1))
 	if err == nil {
@@ -310,7 +310,7 @@ func TestEngine_GetIndexNotFound(t *testing.T) {
 	}, 3)
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, _, err := se.Get("users", "nonexistent_index", types.IntKey(1))
 	if err == nil {
@@ -322,7 +322,7 @@ func TestEngine_DelTableNotFound(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, err := se.Del("nonexistent", "id", types.IntKey(1))
 	if err == nil {
@@ -337,7 +337,7 @@ func TestEngine_DelIndexNotFound(t *testing.T) {
 	}, 3)
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, err := se.Del("users", "nonexistent_index", types.IntKey(1))
 	if err == nil {
@@ -349,7 +349,7 @@ func TestEngine_ScanTableNotFound(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, err := se.RangeScan("nonexistent", "id", types.IntKey(1), types.IntKey(10))
 	if err == nil {
@@ -364,7 +364,7 @@ func TestEngine_ScanIndexNotFound(t *testing.T) {
 	}, 3)
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	_, err := se.RangeScan("users", "nonexistent_index", types.IntKey(1), types.IntKey(10))
 	if err == nil {
@@ -380,7 +380,7 @@ func TestCursor_SeekNil(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 	se.Put("test", "id", types.IntKey(10), "val_100")
 	se.Put("test", "id", types.IntKey(20), "val_200")
 
@@ -406,7 +406,7 @@ func TestCursor_SeekEndOfLeaf(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	// Folha 1: 10, 20, 30
 	// Split ocorre ao inserir 40
@@ -441,7 +441,7 @@ func TestCursor_NextEmptyNodes(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	for i := 1; i <= 10; i++ {
 		se.Put("test", "id", types.IntKey(i), "")
@@ -472,7 +472,7 @@ func TestCursor_ComplexNavigation(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
+	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
 
 	se.Put("test", "id", types.IntKey(10), "")
 	se.Put("test", "id", types.IntKey(20), "")

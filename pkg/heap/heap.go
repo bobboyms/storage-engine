@@ -288,3 +288,8 @@ func (h *HeapManager) Close() error {
 	defer h.mutex.Unlock()
 	return h.file.Close()
 }
+
+// Path returns the path of the heap file
+func (h *HeapManager) Path() string {
+	return h.filename
+}
