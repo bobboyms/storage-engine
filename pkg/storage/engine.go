@@ -79,18 +79,33 @@ func NewStorageEngine(tableMetaData *TableMetaData, walPath string, heapPath str
 	}, nil
 }
 
+// IsolationLevel define o nível de isolamento da transação
+type IsolationLevel int
+
+const (
+	ReadCommitted  IsolationLevel = iota // Leituras veem dados commitados recentemente
+	RepeatableRead                       // Snapshot Isolation (Padrão)
+)
+
 // Transaction representa um contexto de execução com Snapshot Isolation
 type Transaction struct {
 	SnapshotLSN uint64
+	Level       IsolationLevel
 	engine      *StorageEngine
 }
 
-// BeginRead inicia uma transação de leitura (Snapshot)
-func (se *StorageEngine) BeginRead() *Transaction {
+// BeginTransaction inicia uma transação com o nível de isolamento especificado
+func (se *StorageEngine) BeginTransaction(level IsolationLevel) *Transaction {
 	return &Transaction{
 		SnapshotLSN: se.lsnTracker.Current(), // Captura o "agora" linearizável
+		Level:       level,
 		engine:      se,
 	}
+}
+
+// BeginRead inicia uma transação de leitura (Snapshot) com o padrão Repeatable Read
+func (se *StorageEngine) BeginRead() *Transaction {
+	return se.BeginTransaction(RepeatableRead)
 }
 
 // IsVisible verifica se uma versão do registro é visível para esta transação
@@ -242,6 +257,9 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 // Get executa uma busca no contexto da transação (Snapshot Isolation)
 func (tx *Transaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+	// Se Read Committed, atualiza o snapshot antes de começar
+	tx.refreshSnapshot()
+
 	se := tx.engine
 
 	// Obtém a tabela primeiro (sem lock)
@@ -324,6 +342,9 @@ func (se *StorageEngine) Get(tableName string, indexName string, key types.Compa
 
 // Scan executa uma busca por range no contexto da transação
 func (tx *Transaction) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
+	// Se Read Committed, atualiza snapshot
+	tx.refreshSnapshot()
+
 	se := tx.engine
 
 	// Obtém a tabela primeiro (sem lock)
@@ -582,6 +603,13 @@ func (se *StorageEngine) CreateCheckpoint() error {
 		table.Unlock()
 	}
 	return nil
+}
+
+// Helper to refresh snapshot for ReadCommitted
+func (tx *Transaction) refreshSnapshot() {
+	if tx.Level == ReadCommitted {
+		tx.SnapshotLSN = tx.engine.lsnTracker.Current()
+	}
 }
 
 // Recover: Reconstrói o estado da memória lendo Checkpoint + WAL

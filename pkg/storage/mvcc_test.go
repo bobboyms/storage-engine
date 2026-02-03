@@ -145,3 +145,60 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 		t.Error("Engine should NOT find deleted record")
 	}
 }
+
+func TestMVCC_IsolationLevels(t *testing.T) {
+	tmpDir := t.TempDir()
+	walPath := filepath.Join(tmpDir, "wal.log")
+	heapPath := filepath.Join(tmpDir, "heap.data")
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	defer se.Close()
+
+	// Initial Insert (LSN 1)
+	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"initial"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Repeatable Read (Default)
+	// Tx1 Starts (Snapshot LSN 1)
+	txRR := se.BeginTransaction(storage.RepeatableRead)
+
+	// Update (LSN 2)
+	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tx1 Get -> Should see "initial" (Old Version)
+	val, found, _ := txRR.Get("iso_test", "id", types.IntKey(1))
+	if !found || val != `{"id":1,"val":"initial"}` {
+		t.Errorf("RR expected 'initial', got %v", val)
+	}
+
+	// 2. Read Committed
+	// Tx2 Starts (Snapshot LSN 2) - But we will update again to test dynamic snapshot
+	txRC := se.BeginTransaction(storage.ReadCommitted)
+
+	// Tx2 Get -> Should see "updated" (Current)
+	val, found, _ = txRC.Get("iso_test", "id", types.IntKey(1))
+	if !found || val != `{"id":1,"val":"updated"}` {
+		t.Errorf("RC expected 'updated', got %v", val)
+	}
+
+	// Update Again (LSN 3)
+	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated_again"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	// TxRC Get AGAIN -> Should refresh snapshot and see "updated_again"
+	val, found, _ = txRC.Get("iso_test", "id", types.IntKey(1))
+	if !found || val != `{"id":1,"val":"updated_again"}` {
+		t.Errorf("RC expected 'updated_again' after refresh, got %v", val)
+	}
+
+	// TxRR Get AGAIN -> Should STILL see "initial"
+	val, found, _ = txRR.Get("iso_test", "id", types.IntKey(1))
+	if !found || val != `{"id":1,"val":"initial"}` {
+		t.Errorf("RR expected 'initial' (unchanged), got %v", val)
+	}
+}
