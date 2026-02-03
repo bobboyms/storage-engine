@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
@@ -19,7 +20,11 @@ func TestStorageEngine_Durability(t *testing.T) {
 
 	// 1. Inicia Engine com WAL
 	// Nota: NewStorageEngine usa SyncBatch por padrão, mas Close() garante flush.
-	se, err := NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -38,7 +43,11 @@ func TestStorageEngine_Durability(t *testing.T) {
 	}, 3)
 
 	// Re-open with same paths
-	se2, err := NewStorageEngine(tableMgr2, walPath, heapPath)
+	hm2, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se2, err := NewStorageEngine(tableMgr2, walPath, hm2)
 	if err != nil {
 		t.Fatalf("Failed to create engine 2: %v", err)
 	}

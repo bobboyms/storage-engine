@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -45,7 +46,12 @@ func main() {
 	}
 
 	// Inicializar o Storage Engine com WAL e Heap
-	engine, err := storage.NewStorageEngine(tableMgr, "data.wal", "data.heap")
+	hm, err := heap.NewHeapManager("data.heap")
+	if err != nil {
+		fmt.Printf("Erro ao criar heap: %v\n", err)
+		return
+	}
+	engine, err := storage.NewStorageEngine(tableMgr, "data.wal", hm)
 	if err != nil {
 		fmt.Printf("Erro ao criar engine: %v\n", err)
 		return

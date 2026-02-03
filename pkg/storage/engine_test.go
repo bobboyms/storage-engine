@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -21,7 +22,11 @@ func TestEngine_GetAndDel(t *testing.T) {
 		t.Fatalf("NewTable failed: %v", err)
 	}
 
-	se, err := storage.NewStorageEngine(tableMgr, "", heapPath) // Empty string = no WAL (memory only)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, "", hm) // Empty string = no WAL (memory only)
 	if err != nil {
 		t.Fatalf("NewStorageEngine failed: %v", err)
 	}
@@ -90,7 +95,11 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	}, 3)
 
 	// 1. Start Engine
-	se, err := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to start engine: %v", err)
 	}
@@ -123,7 +132,11 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3)
 
-	se2, err := storage.NewStorageEngine(tableMgr2, walPath, heapPath)
+	hm2, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap for recovery: %v", err)
+	}
+	se2, err := storage.NewStorageEngine(tableMgr2, walPath, hm2)
 	if err != nil {
 		t.Fatalf("Restart failed: %v", err)
 	}
@@ -173,7 +186,8 @@ func TestEngine_ReadCommitted(t *testing.T) {
 	tmpDir := t.TempDir()
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 	defer se.Close()
 
 	se.Put("users", "id", types.IntKey(1), "v1")
@@ -196,7 +210,10 @@ func TestEngine_ReadCommitted(t *testing.T) {
 
 func TestEngine_CloseErrors(t *testing.T) {
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), filepath.Join(tmpDir, "wal"), filepath.Join(tmpDir, "heap"))
+	hw, _ := heap.NewHeapManager(filepath.Join(tmpDir, "wal"))
+	hh, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), filepath.Join(tmpDir, "wal"), hh)
+	_ = hw // unused
 
 	// Close them individually to trigger internal error state if possible
 	se.WAL.Close()
@@ -217,7 +234,8 @@ func TestEngine_RecoverErrors(t *testing.T) {
 
 	walPath := filepath.Join(tmpDir, "wal")
 	heapPath := filepath.Join(tmpDir, "heap")
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	se.Close()
 
 	// Create a DIRECTORY where the checkpoint file should be
@@ -228,7 +246,8 @@ func TestEngine_RecoverErrors(t *testing.T) {
 	// If we put a garbage file in the checkpoint dir, it might fail to load.
 	os.WriteFile(filepath.Join(tmpDir, "checkpoint_users_id_99.chk"), []byte("not a checkpoint"), 0666)
 
-	se2, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm2, _ := heap.NewHeapManager(heapPath)
+	se2, _ := storage.NewStorageEngine(tableMgr, walPath, hm2)
 	err := se2.Recover(walPath)
 	if err == nil {
 		t.Log("Recover might ignore garbage checkpoints or fail silently")
@@ -245,13 +264,15 @@ func TestEngine_RecoverDelete(t *testing.T) {
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	se.Put("users", "id", types.IntKey(1), "v1")
 	se.Del("users", "id", types.IntKey(1))
 	se.Close()
 
 	// Reopen and recover
-	se2, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm2, _ := heap.NewHeapManager(heapPath)
+	se2, _ := storage.NewStorageEngine(tableMgr, walPath, hm2)
 	err := se2.Recover(walPath)
 	if err != nil {
 		t.Fatalf("Recover failed: %v", err)
@@ -267,7 +288,8 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	tmpDir := t.TempDir()
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 	defer se.Close()
 
 	se.Put("users", "id", types.IntKey(1), "v1")
@@ -310,7 +332,8 @@ func TestEngine_CreateCheckpointError(t *testing.T) {
 	// Create engine in a valid dir
 	walPath := filepath.Join(tmpDir, "wal")
 	heapPath := filepath.Join(tmpDir, "heap")
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 
 	// Corrupt CheckpointManager path to force error
 	// CheckpointManager.baseDir is private but we can manually remove the directory
@@ -328,7 +351,8 @@ func TestEngine_RecoverInvalidWAL(t *testing.T) {
 	os.WriteFile(walPath, []byte("NOT A WAL FILE"), 0666)
 
 	tableMgr := storage.NewTableMenager()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	err := se.Recover(walPath)
 	if err == nil {
@@ -338,7 +362,8 @@ func TestEngine_RecoverInvalidWAL(t *testing.T) {
 
 func TestEngine_PutError_InvalidTable(t *testing.T) {
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
 	defer se.Close()
 
 	err := se.Put("invalid", "id", types.IntKey(1), "{}")
@@ -351,7 +376,8 @@ func TestEngine_PutError_InvalidIndex(t *testing.T) {
 	tmpDir := t.TempDir()
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 	defer se.Close()
 
 	err := se.Put("users", "invalid_idx", types.IntKey(1), "{}")
@@ -362,7 +388,8 @@ func TestEngine_PutError_InvalidIndex(t *testing.T) {
 
 func TestEngine_DelError_InvalidTable(t *testing.T) {
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), "", hm)
 	defer se.Close()
 
 	_, err := se.Del("invalid", "id", types.IntKey(1))
@@ -375,7 +402,8 @@ func TestEngine_DelError_InvalidIndex(t *testing.T) {
 	tmpDir := t.TempDir()
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 	defer se.Close()
 
 	_, err := se.Del("users", "invalid_idx", types.IntKey(1))
@@ -398,7 +426,8 @@ func TestEngine_CreateCheckpoint_FailDir(t *testing.T) {
 
 	// NewStorageEngine uses filepath.Dir(walPath) as checkpointDir
 	badWalPath := filepath.Join(checkpointFile, "wal.log")
-	se2, err := storage.NewStorageEngine(tableMgr, badWalPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se2, err := storage.NewStorageEngine(tableMgr, badWalPath, hm)
 	if err != nil {
 		t.Logf("Expected NewStorageEngine might fail or return nil se: %v", err)
 		return

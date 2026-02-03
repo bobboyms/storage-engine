@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -20,7 +21,11 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3)
 
-	se, err := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -76,7 +81,8 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_update", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	defer se.Close()
 
 	// 1. Insert Initial (LSN 1)
@@ -116,7 +122,8 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_del", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	defer se.Close()
 
 	// 1. Insert (LSN 1)
@@ -152,7 +159,8 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	defer se.Close()
 
 	// Initial Insert (LSN 1)

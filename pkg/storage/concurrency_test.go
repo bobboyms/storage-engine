@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
@@ -20,7 +21,11 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		{Name: "id", Primary: true, Type: TypeInt},
 	}, 4)
 
-	se, err := NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -69,7 +74,11 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		{Name: "id", Primary: true, Type: TypeInt},
 	}, 4)
 
-	se2, err := NewStorageEngine(tableMgr2, walPath, heapPath)
+	hm2, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap for recovery: %v", err)
+	}
+	se2, err := NewStorageEngine(tableMgr2, walPath, hm2)
 	if err != nil {
 		t.Fatalf("Failed to create engine for recovery: %v", err)
 	}
@@ -116,7 +125,11 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 		{Name: "id", Primary: true, Type: TypeInt},
 	}, 4)
 
-	se, err := NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -212,7 +225,11 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 		{Name: "id", Primary: true, Type: TypeInt},
 	}, 4)
 
-	se, err := NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -24,7 +25,8 @@ func TestScan_Equal(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	// Insere dados
 	se.Put("users", "id", types.IntKey(10), "user_10")
@@ -49,7 +51,8 @@ func TestScan_GreaterThan(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	// Insere dados
 	se.Put("users", "age", types.IntKey(15), "age_15")
@@ -79,7 +82,8 @@ func TestScan_GreaterOrEqual(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "age", types.IntKey(15), "age_15")
 	se.Put("users", "age", types.IntKey(18), "age_18")
@@ -104,7 +108,8 @@ func TestScan_LessThan(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "age", types.IntKey(15), "age_15")
 	se.Put("users", "age", types.IntKey(18), "age_18")
@@ -129,7 +134,8 @@ func TestScan_LessOrEqual(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "age", types.IntKey(15), "age_15")
 	se.Put("users", "age", types.IntKey(18), "age_18")
@@ -154,7 +160,8 @@ func TestScan_Between(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "age", types.IntKey(15), "age_15")
 	se.Put("users", "age", types.IntKey(18), "age_18")
@@ -180,7 +187,8 @@ func TestScan_NotEqual(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "status", types.IntKey(1), "status_10")
 	se.Put("users", "status", types.IntKey(2), "status_20")
@@ -205,7 +213,8 @@ func TestScan_WithVarchar(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("products", "name", types.VarcharKey("apple"), "id_1")
 	se.Put("products", "name", types.VarcharKey("banana"), "id_2")
@@ -231,7 +240,8 @@ func TestScan_WithDate(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	jan1 := types.DateKey(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	jan15 := types.DateKey(time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC))
@@ -262,7 +272,8 @@ func TestRangeScan_BackwardCompatibility(t *testing.T) {
 	}, 3)
 
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(tableMgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(tableMgr, "", hm)
 
 	se.Put("users", "id", types.IntKey(10), "user_100")
 	se.Put("users", "id", types.IntKey(20), "user_200")

@@ -35,13 +35,7 @@ type StorageEngine struct {
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
-func NewStorageEngine(tableMetaData *TableMetaData, walPath string, heapPath string) (*StorageEngine, error) {
-	// Configuração do Heap
-	hm, err := heap.NewHeapManager(heapPath)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao iniciar Heap: %w", err)
-	}
-
+func NewStorageEngine(tableMetaData *TableMetaData, walPath string, hm *heap.HeapManager) (*StorageEngine, error) {
 	if walPath == "" {
 		return &StorageEngine{
 			TableMetaData: tableMetaData,
@@ -61,7 +55,6 @@ func NewStorageEngine(tableMetaData *TableMetaData, walPath string, heapPath str
 
 	writer, err := wal.NewWALWriter(walPath, opts)
 	if err != nil {
-		hm.Close() // Fecha o heap se falhar o WAL
 		return nil, fmt.Errorf("falha ao iniciar WAL: %w", err)
 	}
 

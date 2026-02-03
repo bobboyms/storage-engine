@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -181,7 +182,8 @@ func TestTableManager_Integration(t *testing.T) {
 
 	// Cria storage engine
 	tmpDir := t.TempDir()
-	se, _ := storage.NewStorageEngine(mgr, "", filepath.Join(tmpDir, "heap.data"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	se, _ := storage.NewStorageEngine(mgr, "", hm)
 
 	// Insere dados na PK
 	err = se.Put("users", "id", types.IntKey(1), "user_1")

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -20,7 +21,11 @@ func TestDurability_WithCheckpoint(t *testing.T) {
 	}, 3)
 
 	// 1. Inicia Engine
-	se, err := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walPath, hm)
 	if err != nil {
 		t.Fatalf("NewStorageEngine failed: %v", err)
 	}
@@ -44,7 +49,11 @@ func TestDurability_WithCheckpoint(t *testing.T) {
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3)
 
-	se2, err := storage.NewStorageEngine(tableMgr2, walPath, heapPath)
+	hm2, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
+	se2, err := storage.NewStorageEngine(tableMgr2, walPath, hm2)
 	if err != nil {
 		t.Fatalf("NewStorageEngine 2 failed: %v", err)
 	}

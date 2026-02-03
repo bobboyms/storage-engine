@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
+	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -20,13 +21,18 @@ func TestRecover_WALOnly(t *testing.T) {
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 
 	// 1. Write to WAL directly or via Engine
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	se.Put("users", "id", types.IntKey(1), "one")
 	se.Put("users", "id", types.IntKey(2), "two")
 	se.Close()
 
 	// 2. Recover (No Checkpoint exists)
-	se2, err := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm2, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to start heap 2: %v", err)
+	}
+	se2, err := storage.NewStorageEngine(tableMgr, walPath, hm2)
 	if err != nil {
 		t.Fatalf("Failed to start engine 2: %v", err)
 	}
@@ -50,14 +56,16 @@ func TestRecover_MissingTable(t *testing.T) {
 	// 1. Create entry for table "ghost"
 	mgr1 := storage.NewTableMenager()
 	mgr1.NewTable("ghost", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(mgr1, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(mgr1, walPath, hm)
 	se.Put("ghost", "id", types.IntKey(1), "boo")
 	se.Close()
 
 	// 2. Restart with only "users" table
 	mgr2 := storage.NewTableMenager()
 	mgr2.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se2, _ := storage.NewStorageEngine(mgr2, walPath, heapPath)
+	hm2, _ := heap.NewHeapManager(heapPath)
+	se2, _ := storage.NewStorageEngine(mgr2, walPath, hm2)
 	defer se2.Close()
 
 	// Should not fail, just skip "ghost" entries
@@ -74,7 +82,8 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	// 1. Write explicit good entry
 	mgr := storage.NewTableMenager()
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(mgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(mgr, walPath, hm)
 	se.Put("users", "id", types.IntKey(1), "good")
 	se.Close()
 
@@ -84,7 +93,8 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	f.Close()
 
 	// 3. Recover
-	se2, _ := storage.NewStorageEngine(mgr, walPath, heapPath)
+	hm2, _ := heap.NewHeapManager(heapPath)
+	se2, _ := storage.NewStorageEngine(mgr, walPath, hm2)
 	defer se2.Close()
 
 	err := se2.Recover(walPath)
@@ -98,7 +108,8 @@ func TestPut_InvalidKeyType_Coverage(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := storage.NewTableMenager()
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(mgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(mgr, "", hm)
 
 	err := se.Put("users", "id", types.VarcharKey("bad"), `{"id": "bad"}`)
 	if err == nil {
@@ -112,7 +123,8 @@ func TestPut_KeyNotFoundInDoc(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := storage.NewTableMenager()
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
-	se, _ := storage.NewStorageEngine(mgr, "", filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(mgr, "", hm)
 
 	// Document doesn't contain "id"
 	err := se.Put("users", "id", types.IntKey(1), `{"name":"missing_id"}`)
@@ -126,7 +138,8 @@ func TestPut_WALWriteError(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	walPath := filepath.Join(tmpDir, "wal.log")
-	se, _ := storage.NewStorageEngine(mgr, walPath, filepath.Join(tmpDir, "heap"))
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(mgr, walPath, hm)
 
 	// Force close the underlying file of WAL
 	se.WAL.Close()
@@ -143,7 +156,8 @@ func TestDel_WALWriteError(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	walPath := filepath.Join(tmpDir, "wal.log")
-	se, _ := storage.NewStorageEngine(mgr, walPath, filepath.Join(tmpDir, "heap"))
+	hh, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	se, _ := storage.NewStorageEngine(mgr, walPath, hh)
 
 	se.WAL.Close()
 
@@ -176,7 +190,8 @@ func TestRecover_InvalidPayload(t *testing.T) {
 	w.WriteEntry(entry)
 	w.Close()
 
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	defer se.Close()
 
 	if err := se.Recover(walPath); err == nil {
@@ -193,7 +208,8 @@ func TestRecover_CorruptedCheckpoint(t *testing.T) {
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 
 	// 1. Create engine and make a checkpoint
-	se, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm, _ := heap.NewHeapManager(heapPath)
+	se, _ := storage.NewStorageEngine(tableMgr, walPath, hm)
 	se.Put("users", "id", types.IntKey(1), "{}")
 	if err := se.CreateCheckpoint(); err != nil {
 		t.Fatalf("Failed to create checkpoint: %v", err)
@@ -218,7 +234,8 @@ func TestRecover_CorruptedCheckpoint(t *testing.T) {
 	}
 
 	// 3. Recover should fail loading checkpoint
-	se2, _ := storage.NewStorageEngine(tableMgr, walPath, heapPath)
+	hm3, _ := heap.NewHeapManager(heapPath)
+	se2, _ := storage.NewStorageEngine(tableMgr, walPath, hm3)
 	defer se2.Close()
 
 	err := se2.Recover(walPath)
