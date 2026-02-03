@@ -194,10 +194,11 @@ func TestTableManager_Integration(t *testing.T) {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
-	// Tenta inserir duplicata na PK - deve falhar
+	// Tenta inserir duplicata na PK - deve falhar (Update em MVCC)
+	// Em MVCC, Put em PK existente = Update.
 	err = se.Put("users", "id", types.IntKey(1), "user_1_duplicate")
-	if err == nil {
-		t.Fatal("Inserting duplicate primary key should fail")
+	if err != nil {
+		t.Fatalf("Updating primary key should succeed: %v", err)
 	}
 
 	// Insere dados no índice secundário (permite duplicatas)
@@ -216,8 +217,8 @@ func TestTableManager_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
-	if len(results) != 1 || results[0] != "user_1" {
-		t.Fatalf("Expected [user_1], got %v", results)
+	if len(results) != 1 || results[0] != "user_1_duplicate" {
+		t.Fatalf("Expected [user_1_duplicate], got %v", results)
 	}
 }
 

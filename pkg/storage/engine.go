@@ -47,6 +47,7 @@ func NewStorageEngine(tableMetaData *TableMetaData, walPath string, heapPath str
 			TableMetaData: tableMetaData,
 			WAL:           nil,
 			Heap:          hm,
+			lsnTracker:    NewLSNTracker(0),
 		}, nil
 	}
 
@@ -76,6 +77,26 @@ func NewStorageEngine(tableMetaData *TableMetaData, walPath string, heapPath str
 		Checkpoint:    checkpointMgr,
 		lsnTracker:    NewLSNTracker(0),
 	}, nil
+}
+
+// Transaction representa um contexto de execução com Snapshot Isolation
+type Transaction struct {
+	SnapshotLSN uint64
+	engine      *StorageEngine
+}
+
+// BeginRead inicia uma transação de leitura (Snapshot)
+func (se *StorageEngine) BeginRead() *Transaction {
+	return &Transaction{
+		SnapshotLSN: se.lsnTracker.Current(), // Captura o "agora" linearizável
+		engine:      se,
+	}
+}
+
+// IsVisible verifica se uma versão do registro é visível para esta transação
+func (tx *Transaction) IsVisible(createLSN uint64) bool {
+	// Regra básica: Eu vejo tudo que foi commitado ANTES do meu snapshot
+	return createLSN <= tx.SnapshotLSN
 }
 
 func (se *StorageEngine) Close() error {
@@ -109,9 +130,9 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	// Adquire write lock na tabela específica
-	table.Lock()
-	defer table.Unlock()
+	// Adquire read lock na tabela específica (Schema Lock)
+	table.RLock()
+	defer table.RUnlock()
 
 	// Obtém o índice (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
@@ -147,6 +168,10 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		bsonData = []byte(document)
 	}
 
+	// LSN Management
+	// Geramos o LSN *antes* de escrever no WAL ou Heap para garantir ordem
+	currentLSN := se.lsnTracker.Next()
+
 	// 1. Write Ahead Log
 	if se.WAL != nil {
 		payload, err := SerializeDocumentEntry(tableName, indexName, key, bsonData)
@@ -159,8 +184,6 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		entry.Header.Version = 1
 		entry.Header.EntryType = wal.EntryInsert // Tratamos Update como Insert no WAL log-structured
 
-		// LSN Management
-		currentLSN := se.lsnTracker.Next()
 		entry.Header.LSN = currentLSN
 
 		entry.Header.PayloadLen = uint32(len(payload))
@@ -174,30 +197,63 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		wal.ReleaseEntry(entry)
 	}
 
-	// 2. Escreve no Heap
-	offset, err := se.Heap.Write(bsonData)
+	// 2. Verifica se já existe (UPDATE vs INSERT) para Chain
+	// Como estamos com RLock, podemos ler a árvore.
+	// Se existe, a nova versão deve apontar para a antiga (Chain).
+	// Se não existe, PrevOffset = -1.
+
+	// A árvore aponta para o HEAD (versão mais recente).
+	// Precisamos pegar o offset atual antes de sobrescrever.
+
+	var prevOffset int64 = -1
+
+	node, found := index.Tree.Search(key)
+	if found {
+		_, idx := node.FindLeafLowerBound(key)
+		if idx < node.N && node.Keys[idx].Compare(key) == 0 {
+			// Found existing key
+			prevOffset = node.DataPtrs[idx]
+		}
+	}
+
+	// 3. Escreve no Heap com LSN e PrevOffset (Version Chain)
+	offset, err := se.Heap.Write(bsonData, currentLSN, prevOffset)
 	if err != nil {
 		return fmt.Errorf("heap write failed: %w", err)
 	}
 
-	// 3. Modifica Memória (B+ Tree)
+	// 4. Modifica Memória (B+ Tree)
+	// Agora a árvore aponta para o novo registro (HEAD)
 	err = index.Tree.Insert(key, offset)
 	if err != nil {
-		return err
+		// Se for erro de chave duplicada (Unique Index), é um UPDATE.
+		// Precisamos forçar a atualização do ponteiro na B-Tree.
+		if _, ok := err.(*errors.DuplicateKeyError); ok {
+			err = index.Tree.Replace(key, offset)
+		}
+
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// Get: Busca exata (SELECT * WHERE id = x)
-func (se *StorageEngine) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+// Get executa uma busca no contexto da transação (Snapshot Isolation)
+func (tx *Transaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+	se := tx.engine
+
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return "", false, err
 	}
 
-	// Adquire read lock na tabela específica
+	// Em MVCC, leituras concorrem com escritas.
+	// O Table Lock atual é global para a tabela.
+	// PROVISÓRIO: Mantemos RLock para garantir que a árvore não mude drasticamente (embora BTree tenha latching).
+	// No futuro, podemos relaxar isso.
 	table.RLock()
 	defer table.RUnlock()
 
@@ -214,38 +270,62 @@ func (se *StorageEngine) Get(tableName string, indexName string, key types.Compa
 		return "", false, nil
 	}
 
-	// Temos o nó, precisamos encontrar a chave dentro dele para pegar o offset
-	// O Search já verifica existência, então se retornou true, a chave está lá.
-	// Mas precisamos do DataPtrs[i].
-	// O método Search do Node retorna o nó e um booleano, mas o cursor ou findLeafLowerBound retorna índice.
-
-	// Podemos usar findLeafLowerBound para pegar o índice
+	// Temos o nó, busco exato
 	_, idx := node.FindLeafLowerBound(key)
 
-	// Verifica se realmente é a chave (redundante se Search retornou true, mas seguro)
 	if idx < node.N && node.Keys[idx].Compare(key) == 0 {
-		offset := node.DataPtrs[idx]
+		// B-Tree points to the HEAD (newest) version of the record chain.
+		currentOffset := node.DataPtrs[idx]
 
-		docBytes, err := se.Heap.Read(offset)
-		if err != nil {
-			return "", true, fmt.Errorf("failed to read from heap: %w", err)
+		// Version Chain Traversal (Time Travel)
+		for currentOffset != -1 {
+			docBytes, header, err := se.Heap.Read(currentOffset)
+			if err != nil {
+				return "", true, fmt.Errorf("failed to read from heap: %w", err)
+			}
+
+			// Visibility Check
+			if tx.IsVisible(header.CreateLSN) {
+				// 1. Se Valid=true, está viva.
+				// 2. Se Valid=false (Delete), verificamos SE a deleção aconteceu DEPOIS do snapshot.
+
+				isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
+
+				if isVisibleVersion {
+					// Encontramos a versão visível!
+					jsonStr, err := BsonToJson(docBytes)
+					if err == nil {
+						return jsonStr, true, nil
+					}
+					return string(docBytes), true, nil
+				} else {
+					// A versão existe e é visível quanto a CRIAÇÃO, mas já estava DELETADA no snapshot.
+					// Portanto, para este snapshot, a chave não existe.
+					return "", false, nil
+				}
+			}
+
+			// Se a versão atual é MUITO NOVA (CreateLSN > SnapshotLSN),
+			// precisamos olhar a versão anterior na corrente.
+			currentOffset = header.PrevOffset
 		}
 
-		// Try to decode as BSON, if fails return as string
-		jsonStr, err := BsonToJson(docBytes)
-		if err == nil {
-			return jsonStr, true, nil
-		}
-
-		return string(docBytes), true, nil
+		// Chegamos ao fim da chain sem achar versão visível
+		return "", false, nil
 	}
 
 	return "", false, nil
 }
 
-// Scan: Método genérico que aceita qualquer condição de busca
-// Suporta: =, !=, >, <, >=, <=, BETWEEN
-func (se *StorageEngine) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
+// Get wrapper para conveniência (Autocommit / Snapshot instantâneo)
+func (se *StorageEngine) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+	return se.BeginRead().Get(tableName, indexName, key)
+}
+
+// Scan executa uma busca por range no contexto da transação
+func (tx *Transaction) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
+	se := tx.engine
+
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
@@ -280,22 +360,42 @@ func (se *StorageEngine) Scan(tableName string, indexName string, condition *que
 
 			// Verifica se a chave satisfaz a condição
 			if condition.Matches(key) {
-				offset := c.Value()
-				docBytes, err := se.Heap.Read(offset)
-				if err != nil {
-					// Em scan, podemos decidir logar erro e continuar ou falhar. Vamos falhar por segurança.
-					return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
+				currentOffset := c.Value()
+
+				// Version Chain Traversal
+				foundVisible := false
+				var visibleVal string
+
+				for currentOffset != -1 {
+					docBytes, header, err := se.Heap.Read(currentOffset)
+					if err != nil {
+						return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
+					}
+
+					if tx.IsVisible(header.CreateLSN) {
+						isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
+						if isVisibleVersion {
+							jsonStr, err := BsonToJson(docBytes)
+							if err == nil {
+								visibleVal = jsonStr
+							} else {
+								visibleVal = string(docBytes)
+							}
+							foundVisible = true
+							break // Encontrou versão
+						} else {
+							// Versão deletada no snapshot
+							break // Não existe para este snapshot
+						}
+					}
+					// Muito novo, tenta anterior
+					currentOffset = header.PrevOffset
 				}
 
-				// Try to decode as BSON, if fails return as string
-				jsonStr, err := BsonToJson(docBytes)
-				if err == nil {
-					results = append(results, jsonStr)
-				} else {
-					results = append(results, string(docBytes))
+				if foundVisible {
+					results = append(results, visibleVal)
 				}
 			}
-
 			c.Next()
 		}
 	} else {
@@ -318,18 +418,51 @@ func (se *StorageEngine) Scan(tableName string, indexName string, condition *que
 			}
 
 			if condition.Matches(key) {
-				offset := c.Value()
-				docBytes, err := se.Heap.Read(offset)
-				if err != nil {
-					return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
+				currentOffset := c.Value()
+
+				// Version Chain Traversal
+				foundVisible := false
+				var visibleVal string
+
+				for currentOffset != -1 {
+					docBytes, header, err := se.Heap.Read(currentOffset)
+					if err != nil {
+						return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
+					}
+
+					if tx.IsVisible(header.CreateLSN) {
+						isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
+						if isVisibleVersion {
+							jsonStr, err := BsonToJson(docBytes)
+							if err == nil {
+								visibleVal = jsonStr
+							} else {
+								visibleVal = string(docBytes)
+							}
+							foundVisible = true
+							break // Encontrou versão
+						} else {
+							break // Deletado no snapshot
+						}
+					}
+					// Muito novo, tenta anterior
+					currentOffset = header.PrevOffset
 				}
-				results = append(results, string(docBytes))
+
+				if foundVisible {
+					results = append(results, visibleVal)
+				}
 			}
 			c.Next()
 		}
 	}
 
 	return results, nil
+}
+
+// Scan wrapper para conveniência
+func (se *StorageEngine) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
+	return se.BeginRead().Scan(tableName, indexName, condition)
 }
 
 // RangeScan: Wrapper de conveniência para BETWEEN (mantido para compatibilidade)
@@ -345,15 +478,18 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		return false, err
 	}
 
-	// Adquire write lock na tabela específica
-	table.Lock()
-	defer table.Unlock()
+	// Adquire read lock na tabela específica (Schema Lock)
+	table.RLock()
+	defer table.RUnlock()
 
 	// Obtém o índice (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
 	if err != nil {
 		return false, err
 	}
+
+	// LSN Management
+	currentLSN := se.lsnTracker.Next()
 
 	// 1. Write Ahead Log
 	if se.WAL != nil {
@@ -368,8 +504,6 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		entry.Header.Version = 1
 		entry.Header.EntryType = wal.EntryDelete
 
-		// LSN Management
-		currentLSN := se.lsnTracker.Next()
 		entry.Header.LSN = currentLSN
 
 		entry.Header.PayloadLen = uint32(len(payload))
@@ -391,8 +525,15 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		if idx < node.N && node.Keys[idx].Compare(key) == 0 {
 			offset := node.DataPtrs[idx]
 
-			// Marca como deletado no heap
-			if err := se.Heap.Delete(offset); err != nil {
+			// Marca como deletado no heap, com o DeletedLSN atual.
+			// Em MVCC puro, deveríamos talvez escrever um registro Tombstone como Head da chain.
+			// Mas marcar isValid=false + DeleteLSN no head também funciona para parar a chain.
+			// A diferença e que overwrite inplace é destructive.
+			// Como o Heap é append-only para novos writes, aqui estamos violando isso alterando o passado?
+			// Sim, delete altera o registro existente.
+			// TODO Padrão: Write New Version (Tombstone) -> Point Tree to Tombstone.
+			// Para Phase 2 simplificado: Update in-place Head com DeleteLSN.
+			if err := se.Heap.Delete(offset, currentLSN); err != nil {
 				return false, fmt.Errorf("heap delete failed: %w", err)
 			}
 		} else {
@@ -403,14 +544,16 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		return false, nil
 	}
 
-	// Remove da árvore
-	removed := index.Tree.Root.Remove(key)
+	// MVCC Phase 2: Do NOT remove from B-Tree.
+	// We need to keep the key pointing to the "Deleted" record (Tombstone)
+	// so that older transactions can check visibility (DeleteLSN) and potential previous versions.
+	// Garbage Collection (Vacuum) will eventually remove these when safe.
+	// removed := index.Tree.Root.Remove(key)
+	// if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
+	// 	index.Tree.Root = index.Tree.Root.Children[0]
+	// }
 
-	// Se a raiz ficou vazia e não é folha, desce um nível
-	if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
-		index.Tree.Root = index.Tree.Root.Children[0]
-	}
-	return removed, nil
+	return true, nil
 }
 
 // CreateCheckpoint força a criação de checkpoints para todas as tabelas
@@ -473,6 +616,8 @@ func (se *StorageEngine) Recover(walPath string) error {
 		}
 	}
 
+	checkpointLSN := maxLSN // Define o ponto de corte: tudo <= a isso já está no checkpoint
+
 	// 2. Tenta ler WAL para aplicar o delta
 	if _, err := os.Stat(walPath); os.IsNotExist(err) {
 		// Sem WAL, apenas atualiza o tracker com o maxLSN do checkpoint
@@ -500,7 +645,7 @@ func (se *StorageEngine) Recover(walPath string) error {
 		}
 
 		// Se essa entrada já está no checkpoint, pula
-		if entry.Header.LSN <= maxLSN {
+		if entry.Header.LSN <= checkpointLSN {
 			skipped++
 			wal.ReleaseEntry(entry)
 			continue
@@ -529,11 +674,27 @@ func (se *StorageEngine) Recover(walPath string) error {
 		case wal.EntryInsert, wal.EntryUpdate:
 			// No recovery com Checkpoint, o HeapFile ainda pode ter dados duplicados
 			// se reiniciarmos e inserirmos coisas que o WAL tem mas o Heap nao tinha?
-			// O WAL é a fonte da verdade. O HeapFile é append-only.
 			// Se o dado JÁ EXISTE no HeapFile, nós vamos escrever de novo e pegar um novo offset.
 			// É ineficiente mas correto.
+			// No Recovery, a chain pode ficar quebrada se não reconstruirmos os links?
+			// O WAL contém a sequencia de updates.
+			// Se Insert K (LSN 1) -> Update K (LSN 2).
+			// Replay LSN 1: Write Heap, Insert Tree (Offset A).
+			// Replay LSN 2: Search Tree (Get Offset A), Write Heap (Prev=A), Update Tree (Offset B).
+			// Sim, a lógica do Put normal (Search -> Write -> Insert) deve funcionar aqui também
+			// desde que o índice esteja sendo atualizado passo a passo.
 
-			offset, err := se.Heap.Write(docBytes)
+			var prevOffset int64 = -1
+			// Check tree for previous version
+			node, found := index.Tree.Search(key)
+			if found {
+				_, idx := node.FindLeafLowerBound(key)
+				if idx < node.N && node.Keys[idx].Compare(key) == 0 {
+					prevOffset = node.DataPtrs[idx]
+				}
+			}
+
+			offset, err := se.Heap.Write(docBytes, entry.Header.LSN, prevOffset) // Pass LSN from WAL
 			if err != nil {
 				return err
 			}
@@ -544,7 +705,8 @@ func (se *StorageEngine) Recover(walPath string) error {
 			leaf, idx := index.Tree.FindLeafLowerBound(key)
 			if leaf != nil && idx < leaf.N && leaf.Keys[idx].Compare(key) == 0 {
 				offset := leaf.DataPtrs[idx]
-				se.Heap.Delete(offset)
+				// Precisamos saber o LSN do delete. O WAL Entry Header tem.
+				se.Heap.Delete(offset, entry.Header.LSN)
 			}
 			index.Tree.Root.Remove(key)
 			if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
@@ -552,7 +714,7 @@ func (se *StorageEngine) Recover(walPath string) error {
 			}
 		}
 
-		// Atualiza maxLSN
+		// Atualiza maxLSN (para o tracker)
 		if entry.Header.LSN > maxLSN {
 			maxLSN = entry.Header.LSN
 		}

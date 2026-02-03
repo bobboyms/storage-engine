@@ -33,44 +33,42 @@ func NewUniqueTree(t int) *BPlusTree {
 	}
 }
 
-// Insert: Implementa inserção concorrente com Latch Crabbing e Split Preventivo (Top-Down)
+// Insert: Implementa inserção concorrente
 func (b *BPlusTree) Insert(key types.Comparable, dataPtr int64) error {
+	return b.insertHelper(key, dataPtr, b.UniqueKey)
+}
+
+// Replace forcily updates the key's value (used for MVCC Updates on Unique Index)
+func (b *BPlusTree) Replace(key types.Comparable, dataPtr int64) error {
+	// Force uniqueKey=false to allow overwrite
+	return b.insertHelper(key, dataPtr, false)
+}
+
+func (b *BPlusTree) insertHelper(key types.Comparable, dataPtr int64, uniqueKey bool) error {
 	b.mu.Lock()
 	root := b.Root
 	root.Lock()
 
 	if root.IsFull() {
-		// Raiz cheia: precisa de split
 		newRoot := NewNode(b.T, false)
 		newRoot.Children = append(newRoot.Children, root)
-		newRoot.SplitChild(0) // Divide a raiz antiga
+		newRoot.SplitChild(0)
 		b.Root = newRoot
+		b.mu.Unlock()
 
-		// Agora b.Root é newRoot.
-		// Precisamos decidir se descemos para a esquerda ou direita
-		// A raiz antiga foi dividida. NewRoot tem 1 chave e 2 filhos.
-
-		// O método SplitChild modificou 'root'.
-
-		b.mu.Unlock() // Raiz nova instalada, liberamos lock da árvore
-
-		// Chamamos a função auxiliar para continuar a descida a partir da nova raiz
-		// Note que root.Unlock() deve ser tratado.
-		// O newRoot não está lockado ainda (criado local).
-		// Vamos reiniciar a descida na newRoot de forma limpa
 		newRoot.Lock()
-		root.Unlock() // Solta a raiz antiga
+		root.Unlock()
 
-		return b.insertTopDown(newRoot, key, dataPtr)
+		return b.insertTopDown(newRoot, key, dataPtr, uniqueKey)
 	}
 
-	b.mu.Unlock() // Raiz segura, libera lock da árvore
-	return b.insertTopDown(root, key, dataPtr)
+	b.mu.Unlock()
+	return b.insertTopDown(root, key, dataPtr, uniqueKey)
 }
 
 // insertTopDown realiza a inserção descendo a árvore e dividindo nós cheios preventivamente.
 // Assume que 'curr' já está trancado (Lock) pelo chamador.
-func (b *BPlusTree) insertTopDown(curr *Node, key types.Comparable, dataPtr int64) error {
+func (b *BPlusTree) insertTopDown(curr *Node, key types.Comparable, dataPtr int64, uniqueKey bool) error {
 	// Garante unlock do nó atual no final (ou em caso de erro)
 	// Se passarmos o lock para o filho, `curr` mudará, então cuidado com defer.
 	// Vamos gerenciar os unlocks manualmente para latch crabbing.
@@ -114,7 +112,7 @@ func (b *BPlusTree) insertTopDown(curr *Node, key types.Comparable, dataPtr int6
 	// Chegamos na folha e ela está lockada.
 	// Como usamos split preventivo, é garantido que ela não está cheia.
 	// Podemos inserir diretamente.
-	return curr.InsertNonFull(key, dataPtr, b.UniqueKey)
+	return curr.InsertNonFull(key, dataPtr, uniqueKey)
 }
 
 // Search busca uma chave na árvore de forma concorrente (RLock coupling)

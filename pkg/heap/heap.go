@@ -10,10 +10,17 @@ import (
 
 const (
 	HeapMagic       = 0x48454150 // ASCII for "HEAP"
-	HeapVersion     = 1
-	HeaderSize      = 14 // Magic(4) + Version(2) + NextOffset(8)
-	EntryHeaderSize = 5  // Length(4) + Deleted(1)
+	HeapVersion     = 3          // Bump to version 3 for MVCC Version Chains
+	HeaderSize      = 14         // Magic(4) + Version(2) + NextOffset(8)
+	EntryHeaderSize = 29         // Length(4) + Valid(1) + CreateLSN(8) + DeleteLSN(8) + PrevOffset(8)
 )
+
+type RecordHeader struct {
+	Valid      bool
+	CreateLSN  uint64
+	DeleteLSN  uint64 // LSN of the deletion (if valid=false)
+	PrevOffset int64  // Pointer to the previous version (-1 if start of chain)
+}
 
 // HeapManager gerencia o armazenamento de documentos em disco
 type HeapManager struct {
@@ -112,7 +119,7 @@ func (h *HeapManager) readHeader() error {
 		return err
 	}
 	if version != HeapVersion {
-		return fmt.Errorf("unsupported heap version: %d", version)
+		return fmt.Errorf("unsupported heap version: %d (expected %d)", version, HeapVersion)
 	}
 
 	var nextOffset int64
@@ -137,15 +144,18 @@ func (h *HeapManager) updateNextOffset() error {
 }
 
 // Write appends a document to the heap and returns its offset
-func (h *HeapManager) Write(doc []byte) (int64, error) {
+// Updated for MVCC Phase 2: accepts prevOffset for chaining
+func (h *HeapManager) Write(doc []byte, createLSN uint64, prevOffset int64) (int64, error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
 	offset := h.nextOffset
+	fmt.Printf("Heap.Write: Offset=%d, CreateLSN=%d, PrevOffset=%d, DocLen=%d\n", offset, createLSN, prevOffset, len(doc))
 
 	if _, err := h.file.Seek(offset, 0); err != nil {
 		return 0, err
 	}
+	// ... rest of write
 
 	docLen := uint32(len(doc))
 
@@ -154,8 +164,23 @@ func (h *HeapManager) Write(doc []byte) (int64, error) {
 		return 0, err
 	}
 
-	// Write Deleted flag (0 = active)
-	if err := binary.Write(h.file, binary.LittleEndian, uint8(0)); err != nil {
+	// Write Valid flag (1 = Active/Valid)
+	if err := binary.Write(h.file, binary.LittleEndian, uint8(1)); err != nil {
+		return 0, err
+	}
+
+	// Write CreateLSN
+	if err := binary.Write(h.file, binary.LittleEndian, createLSN); err != nil {
+		return 0, err
+	}
+
+	// Write DeleteLSN (0 initially)
+	if err := binary.Write(h.file, binary.LittleEndian, uint64(0)); err != nil {
+		return 0, err
+	}
+
+	// Write PrevOffset
+	if err := binary.Write(h.file, binary.LittleEndian, prevOffset); err != nil {
 		return 0, err
 	}
 
@@ -167,9 +192,6 @@ func (h *HeapManager) Write(doc []byte) (int64, error) {
 	// Update next offset
 	h.nextOffset += int64(EntryHeaderSize + int(docLen))
 
-	// Optionally update header on disk periodically or always
-	// For safety, let's update. Ideally we'd batch or rely on recovery via scanning.
-	// But let's keep header updated for simplicity.
 	if err := h.updateNextOffset(); err != nil {
 		return 0, err
 	}
@@ -178,50 +200,87 @@ func (h *HeapManager) Write(doc []byte) (int64, error) {
 }
 
 // Read retrieves a document from the given offset
-func (h *HeapManager) Read(offset int64) ([]byte, error) {
+// Updated for MVCC: returns RecordHeader
+func (h *HeapManager) Read(offset int64) ([]byte, *RecordHeader, error) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 
 	if _, err := h.file.Seek(offset, 0); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var docLen uint32
 	if err := binary.Read(h.file, binary.LittleEndian, &docLen); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var deleted uint8
-	if err := binary.Read(h.file, binary.LittleEndian, &deleted); err != nil {
-		return nil, err
+	var valid uint8
+	if err := binary.Read(h.file, binary.LittleEndian, &valid); err != nil {
+		return nil, nil, err
 	}
 
-	if deleted == 1 {
-		return nil, fmt.Errorf("document deleted")
+	var createLSN uint64
+	if err := binary.Read(h.file, binary.LittleEndian, &createLSN); err != nil {
+		return nil, nil, err
 	}
+
+	var deleteLSN uint64
+	if err := binary.Read(h.file, binary.LittleEndian, &deleteLSN); err != nil {
+		return nil, nil, err
+	}
+
+	var prevOffset int64
+	if err := binary.Read(h.file, binary.LittleEndian, &prevOffset); err != nil {
+		return nil, nil, err
+	}
+
+	header := &RecordHeader{
+		Valid:      valid == 1,
+		CreateLSN:  createLSN,
+		DeleteLSN:  deleteLSN,
+		PrevOffset: prevOffset,
+	}
+	// fmt.Printf("Heap.Read: Offset=%d, Valid=%v, Create=%d, Delete=%d, Prev=%d\n", offset, header.Valid, header.CreateLSN, header.DeleteLSN, header.PrevOffset)
 
 	doc := make([]byte, docLen)
 	if _, err := io.ReadFull(h.file, doc); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return doc, nil
+	return doc, header, nil
 }
 
 // Delete marks a document as deleted (lazy deletion)
-func (h *HeapManager) Delete(offset int64) error {
+// Updated using LSN: writes DeleteLSN.
+// Note: This modifies the record in-place.
+func (h *HeapManager) Delete(offset int64, deleteLSN uint64) error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	// Offset + 4 bytes (Length) points to Deleted flag
-	flagOffset := offset + 4
+	fmt.Printf("Heap.Delete: Offset=%d, DeleteLSN=%d\n", offset, deleteLSN)
 
-	if _, err := h.file.Seek(flagOffset, 0); err != nil {
+	// Offset + 4 (Length) -> Valid byte
+	validOffset := offset + 4
+	// Offset + 4 (Length) + 1 (Valid) + 8 (CreateLSN) -> DeleteLSN
+	deleteLSNOffset := offset + 4 + 1 + 8
+
+	// 1. Mark Invalid
+	if _, err := h.file.Seek(validOffset, 0); err != nil {
+		return err
+	}
+	if err := binary.Write(h.file, binary.LittleEndian, uint8(0)); err != nil {
 		return err
 	}
 
-	// Set deleted flag to 1
-	return binary.Write(h.file, binary.LittleEndian, uint8(1))
+	// 2. Set DeleteLSN
+	if _, err := h.file.Seek(deleteLSNOffset, 0); err != nil {
+		return err
+	}
+	if err := binary.Write(h.file, binary.LittleEndian, deleteLSN); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (h *HeapManager) Close() error {

@@ -55,7 +55,7 @@ func TestCursor_SeekExactMatch(t *testing.T) {
 
 	// Value now returns offset. We verify by reading from heap.
 	offset := cursor.Value()
-	docBytes, err := se.Heap.Read(offset)
+	docBytes, _, err := se.Heap.Read(offset)
 	if err != nil {
 		t.Fatalf("Failed to read from heap at offset %d: %v", offset, err)
 	}
