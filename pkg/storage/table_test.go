@@ -24,10 +24,15 @@ func TestNewTableMenager_Creation(t *testing.T) {
 
 func TestNewTable_Success_SinglePrimaryKey(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, err := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
 
-	err := mgr.NewTable("users", []storage.Index{
+	err = mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 
 	if err != nil {
 		t.Fatalf("NewTable should succeed with single primary key, got error: %v", err)
@@ -45,12 +50,14 @@ func TestNewTable_Success_SinglePrimaryKey(t *testing.T) {
 
 func TestNewTable_Success_MultipleIndices(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "email", Primary: false, Type: storage.TypeVarchar},
 		{Name: "age", Primary: false, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 
 	if err != nil {
 		t.Fatalf("NewTable should succeed with multiple indices, got error: %v", err)
@@ -78,11 +85,13 @@ func TestNewTable_Success_MultipleIndices(t *testing.T) {
 
 func TestNewTable_Error_NoPrimaryKey(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "email", Primary: false, Type: storage.TypeVarchar},
 		{Name: "age", Primary: false, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 
 	if err == nil {
 		t.Fatal("NewTable should fail when no primary key is defined")
@@ -96,11 +105,13 @@ func TestNewTable_Error_NoPrimaryKey(t *testing.T) {
 
 func TestNewTable_Error_MultiplePrimaryKeys(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "email", Primary: true, Type: storage.TypeVarchar}, // ERRO: segunda PK
-	}, 3)
+	}, 3, hm)
 
 	if err == nil {
 		t.Fatal("NewTable should fail when multiple primary keys are defined")
@@ -114,11 +125,13 @@ func TestNewTable_Error_MultiplePrimaryKeys(t *testing.T) {
 
 func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 
 	// Primeira criação - deve funcionar
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 	if err != nil {
 		t.Fatalf("First table creation should succeed: %v", err)
 	}
@@ -126,7 +139,7 @@ func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 	// Segunda criação com mesmo nome - deve falhar
 	err = mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 
 	if err == nil {
 		t.Fatal("Expected error for duplicate table name")
@@ -152,10 +165,12 @@ func TestGetTableByName_Error_NotFound(t *testing.T) {
 
 func TestGetIndexByName_Error_IndexNotFound(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 
 	mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 
 	_, err := mgr.GetIndexByName("users", "nonexistent")
 	if err == nil {
@@ -171,19 +186,20 @@ func TestGetIndexByName_Error_IndexNotFound(t *testing.T) {
 func TestTableManager_Integration(t *testing.T) {
 	mgr := storage.NewTableMenager()
 
+	// Cria storage engine
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+
 	// Cria tabela
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "age", Primary: false, Type: storage.TypeInt},
-	}, 3)
+	}, 3, hm)
 	if err != nil {
 		t.Fatalf("Failed to create table: %v", err)
 	}
 
-	// Cria storage engine
-	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
-	se, _ := storage.NewStorageEngine(mgr, nil, hm)
+	se, _ := storage.NewStorageEngine(mgr, nil)
 
 	// Insere dados na PK
 	err = se.Put("users", "id", types.IntKey(1), "user_1")
@@ -253,7 +269,9 @@ func TestGetIndexByName_Error_TableNotFound(t *testing.T) {
 
 func TestTable_LockCoverage(t *testing.T) {
 	mgr := storage.NewTableMenager()
-	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 	table, _ := mgr.GetTableByName("users")
 
 	table.Lock()
@@ -267,10 +285,13 @@ func TestTable_LockCoverage(t *testing.T) {
 
 func TestGetIndexes(t *testing.T) {
 	mgr := storage.NewTableMenager()
+	tmpDir := t.TempDir()
+	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "email", Primary: false, Type: storage.TypeVarchar},
-	}, 3)
+	}, 3, hm)
 
 	if err != nil {
 		t.Fatalf("Failed to create table: %v", err)

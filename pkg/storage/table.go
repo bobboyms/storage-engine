@@ -5,6 +5,7 @@ import (
 
 	"github.com/bobboyms/storage-engine/pkg/btree"
 	"github.com/bobboyms/storage-engine/pkg/errors"
+	"github.com/bobboyms/storage-engine/pkg/heap"
 )
 
 type DataType int
@@ -35,6 +36,7 @@ type Table struct {
 	Name    string
 	Indices map[string]*Index
 	mu      sync.RWMutex // Lock por tabela para concorrência granular
+	Heap    *heap.HeapManager
 }
 
 // Lock adquire write lock na tabela
@@ -101,9 +103,15 @@ func NewTableMenager() *TableMetaData {
 	}
 }
 
-func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int) error {
+func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm *heap.HeapManager) error {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
+
+	if hm == nil {
+		return &errors.HeapManagerRequiredError{
+			TableName: tableName,
+		}
+	}
 
 	// Verifica se a tabela já existe
 	if _, exists := tb.tables[tableName]; exists {
@@ -151,6 +159,7 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int) erro
 	tb.tables[tableName] = &Table{
 		Name:    tableName,
 		Indices: tempIndices,
+		Heap:    hm,
 	}
 
 	return nil

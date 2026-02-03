@@ -23,28 +23,30 @@ func main() {
 	os.Remove("example.wal")
 	os.Remove("example.heap")
 
-	// 1. Criar Table Manager e Tabela
-	tableMgr := storage.NewTableMenager()
-	err := tableMgr.NewTable("users", []storage.Index{
-		{Name: "age", Primary: true, Type: storage.TypeInt},
-		{Name: "name", Primary: false, Type: storage.TypeVarchar},
-	}, 3)
-	if err != nil {
-		fmt.Printf("Erro: %v\n", err)
-		return
-	}
-
-	// 2. Criar Storage Engine
+	// 1. Criar Heap Manager
 	hm, err := heap.NewHeapManager("example.heap")
 	if err != nil {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		return
 	}
+
+	// 2. Criar Table Manager e Tabela
+	tableMgr := storage.NewTableMenager()
+	err = tableMgr.NewTable("users", []storage.Index{
+		{Name: "age", Primary: true, Type: storage.TypeInt},
+		{Name: "name", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm)
+	if err != nil {
+		fmt.Printf("Erro: %v\n", err)
+		return
+	}
+
+	// 3. Criar Storage Engine
 	walWriter, _ := wal.NewWALWriter("example.wal", wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer paramsCleanup()
 
-	// 3. Inserir dados
+	// 4. Inserir dados
 	se.Put("users", "age", types.IntKey(65), "user_65")
 	se.Put("users", "age", types.IntKey(18), "user_18")
 	se.Put("users", "age", types.IntKey(30), "user_30")

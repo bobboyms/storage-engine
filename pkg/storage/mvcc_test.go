@@ -17,20 +17,21 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("mvcc_test", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("mvcc_test", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 3, hm)
+
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
-	se, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -85,11 +86,12 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("mvcc_update", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("mvcc_update", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
+
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	// 1. Insert Initial (LSN 1)
@@ -127,11 +129,12 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("mvcc_del", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("mvcc_del", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
+
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	// 1. Insert (LSN 1)
@@ -165,11 +168,12 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm, _ := heap.NewHeapManager(heapPath)
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
+
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	// Initial Insert (LSN 1)

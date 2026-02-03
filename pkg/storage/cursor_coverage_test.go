@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/btree"
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -16,8 +15,7 @@ func TestCursor_SeekCoverage(t *testing.T) {
 		tree.Insert(types.IntKey(i*10), int64(i))
 	}
 
-	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -46,8 +44,7 @@ func TestCursor_NextCoverage(t *testing.T) {
 		tree.Insert(types.IntKey(i), int64(i))
 	}
 
-	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -92,8 +89,7 @@ func TestCursor_SkipEmpty(t *testing.T) {
 	tree := btree.NewTree(3)
 	tree.Root = leaf1
 
-	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	c := se.Cursor(tree)
 	defer c.Close()
 
@@ -115,8 +111,7 @@ func TestCursor_SkipEmpty(t *testing.T) {
 
 func TestCursor_EmptyTree(t *testing.T) {
 	tree := btree.NewTree(3)
-	hm, _ := heap.NewHeapManager("")
-	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil, hm)
+	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	c := se.Cursor(tree)
 	defer c.Close()
 

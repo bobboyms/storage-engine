@@ -16,21 +16,22 @@ func TestDurability_WithCheckpoint(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 	// CheckpointDir é automatico (dir do walPath)
 
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
-
 	// 1. Inicia Engine
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 3, hm)
+
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
-	se, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("NewStorageEngine failed: %v", err)
@@ -50,20 +51,22 @@ func TestDurability_WithCheckpoint(t *testing.T) {
 	se.Close()
 
 	// 4. Recovery
-	tableMgr2 := storage.NewTableMenager()
-	tableMgr2.NewTable("users", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-	}, 3)
 
 	hm2, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr2 := storage.NewTableMenager()
+	tableMgr2.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+	}, 3, hm2)
+
 	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL 2: %v", err)
 	}
-	se2, err := storage.NewStorageEngine(tableMgr2, walWriter2, hm2)
+	se2, err := storage.NewStorageEngine(tableMgr2, walWriter2)
 	if err != nil {
 		walWriter2.Close()
 		t.Fatalf("NewStorageEngine 2 failed: %v", err)

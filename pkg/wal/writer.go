@@ -51,6 +51,11 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 	return w, nil
 }
 
+// Path returns the path of the WAL file
+func (w *WALWriter) Path() string {
+	return w.file.Name()
+}
+
 // WriteEntry escreve uma entrada no WAL
 func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	w.mu.Lock()

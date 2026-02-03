@@ -4,6 +4,14 @@ import (
 	"fmt"
 )
 
+type HeapManagerRequiredError struct {
+	TableName string
+}
+
+func (e *HeapManagerRequiredError) Error() string {
+	return fmt.Sprintf("heap manager is required for table '%s'", e.TableName)
+}
+
 type TableAlreadyExistsError struct {
 	Name string
 }

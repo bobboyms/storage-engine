@@ -16,21 +16,21 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-	tableMgr.NewTable("orders", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
+	tableMgr.NewTable("orders", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -87,20 +87,20 @@ func TestWriteTransaction_Rollback(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -135,20 +135,20 @@ func TestWriteTransaction_Delete(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -179,20 +179,20 @@ func TestWriteTransaction_InvalidKeyType(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -212,20 +212,20 @@ func TestWriteTransaction_DoubleCommit(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -256,21 +256,20 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
+	hm, err := heap.NewHeapManager(heapPath)
+	if err != nil {
+		t.Fatalf("Failed to create heap: %v", err)
+	}
 	tableMgr := NewTableMenager()
 	// Create table with all types
-	err := tableMgr.NewTable("all_types", []Index{
+	err = tableMgr.NewTable("all_types", []Index{
 		{Name: "int", Type: TypeInt, Primary: true},
 		{Name: "varchar", Type: TypeVarchar},
 		{Name: "bool", Type: TypeBoolean},
 		{Name: "float", Type: TypeFloat},
-	}, 4)
+	}, 4, hm)
 	if err != nil {
 		t.Fatalf("NewTable all_types failed: %v", err)
-	}
-
-	hm, err := heap.NewHeapManager(heapPath)
-	if err != nil {
-		t.Fatalf("Failed to create heap: %v", err)
 	}
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
@@ -278,7 +277,7 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -312,10 +311,10 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 
 func TestWriteTransaction_EmptyCommit(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	// hm not needed
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(NewTableMenager(), walWriter, hm)
+	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -329,7 +328,7 @@ func TestWriteTransaction_PutErrors(t *testing.T) {
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(NewTableMenager(), walWriter, hm)
+	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -340,7 +339,7 @@ func TestWriteTransaction_PutErrors(t *testing.T) {
 	}
 
 	// Index not found
-	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3)
+	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3, hm)
 	if err := tx.Put("users", "wrong", types.IntKey(1), ""); err == nil {
 		t.Error("Expected error for missing index")
 	}
@@ -351,7 +350,7 @@ func TestWriteTransaction_DelErrors(t *testing.T) {
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(NewTableMenager(), walWriter, hm)
+	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -362,7 +361,7 @@ func TestWriteTransaction_DelErrors(t *testing.T) {
 	}
 
 	// Index not found
-	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3)
+	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3, hm)
 	if err := tx.Del("users", "wrong", types.IntKey(1)); err == nil {
 		t.Error("Expected error for missing index")
 	}
@@ -370,16 +369,15 @@ func TestWriteTransaction_DelErrors(t *testing.T) {
 
 func TestWriteTransaction_RollbackWAL(t *testing.T) {
 	tmpDir := t.TempDir()
-
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3)
-
-	walPath := filepath.Join(tmpDir, "wal")
-	heapPath := filepath.Join(tmpDir, "heap")
+	walPath := filepath.Join(tmpDir, "wal.log")
+	heapPath := filepath.Join(tmpDir, "heap.data")
 
 	hm, _ := heap.NewHeapManager(heapPath)
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3, hm)
+
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := NewStorageEngine(tableMgr, walWriter)
 
 	// Create a new WAL writer with SyncEveryWrite and replace the engine's one
 	opts := wal.DefaultOptions()
@@ -401,12 +399,13 @@ func TestWriteTransaction_RollbackWAL(t *testing.T) {
 func TestWriteTransaction_DateType(t *testing.T) {
 	// Cover TypeDate case in getTypeFromKey
 	tmpDir := t.TempDir()
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("dates", []Index{{Name: "d", Type: TypeDate, Primary: true}}, 3)
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("dates", []Index{{Name: "d", Type: TypeDate, Primary: true}}, 3, hm)
+
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -423,9 +422,8 @@ type dummyKey struct {
 
 func TestWriteTransaction_CoverageCheat(t *testing.T) {
 	// Directly call private methods for coverage
-	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
-	se, _ := NewStorageEngine(NewTableMenager(), nil, hm) // No WAL for this one
+	// hm not needed, tmpDir not needed
+	se, _ := NewStorageEngine(NewTableMenager(), nil) // No WAL for this one
 	defer se.Close()
 
 	if se.WAL != nil {
@@ -444,13 +442,13 @@ func TestWriteTransaction_CoverageCheat(t *testing.T) {
 
 func TestWriteTransaction_DelNonExistent(t *testing.T) {
 	tmpDir := t.TempDir()
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3)
-
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3, hm)
+
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -463,10 +461,10 @@ func TestWriteTransaction_DelNonExistent(t *testing.T) {
 
 func TestWriteTransaction_DelInvalidTable(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	// hm not needed
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(NewTableMenager(), walWriter, hm)
+	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
@@ -478,10 +476,10 @@ func TestWriteTransaction_DelInvalidTable(t *testing.T) {
 
 func TestWriteTransaction_DelAfterCommit(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	// hm not needed
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(NewTableMenager(), walWriter, hm)
+	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()

@@ -207,8 +207,8 @@ func (tx *WriteTransaction) Commit() error {
 				if !exists {
 					return 0, nil
 				}
-				if err := se.Heap.Delete(oldOffset, opLSN); err != nil {
-					return 0, err
+				if err := table.Heap.Delete(oldOffset, opLSN); err != nil {
+					return 0, fmt.Errorf("heap delete failed: %w", err)
 				}
 				return oldOffset, nil
 			})
@@ -227,7 +227,7 @@ func (tx *WriteTransaction) Commit() error {
 				if exists {
 					prevOffset = oldOffset
 				}
-				offset, err := se.Heap.Write(bsonData, opLSN, prevOffset)
+				offset, err := table.Heap.Write(bsonData, opLSN, prevOffset)
 				if err != nil {
 					return 0, err
 				}

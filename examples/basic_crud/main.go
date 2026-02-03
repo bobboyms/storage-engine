@@ -30,34 +30,36 @@ func main() {
 	// 1. CONFIGURAÇÃO DO STORAGE ENGINE
 	// ========================================
 
+	// Inicializar Heap
+	hm, err := heap.NewHeapManager("data.heap")
+	if err != nil {
+		fmt.Printf("Erro ao criar heap: %v\n", err)
+		return
+	}
+
 	// Criar o gerenciador de tabelas
 	tableMgr := storage.NewTableMenager()
 
 	// Definir a estrutura da tabela "products"
 	// - "id": chave primária do tipo inteiro
 	// - "name": índice secundário do tipo varchar
-	err := tableMgr.NewTable("products", []storage.Index{
+	err = tableMgr.NewTable("products", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "name", Primary: false, Type: storage.TypeVarchar},
-	}, 3) // Parâmetro t=3 define o grau mínimo da B+Tree
+	}, 3, hm) // Parâmetro t=3 define o grau mínimo da B+Tree
 
 	if err != nil {
 		fmt.Printf("Erro ao criar tabela: %v\n", err)
 		return
 	}
 
-	// Inicializar o Storage Engine com WAL e Heap
-	hm, err := heap.NewHeapManager("data.heap")
-	if err != nil {
-		fmt.Printf("Erro ao criar heap: %v\n", err)
-		return
-	}
+	// Inicializar o Storage Engine com WAL
 	walWriter, err := wal.NewWALWriter("data.wal", wal.DefaultOptions())
 	if err != nil {
 		fmt.Printf("Erro ao criar WAL: %v\n", err)
 		return
 	}
-	engine, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	engine, err := storage.NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		fmt.Printf("Erro ao criar engine: %v\n", err)

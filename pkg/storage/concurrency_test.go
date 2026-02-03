@@ -17,22 +17,22 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("concurrent_table", []Index{
-		{Name: "id", Primary: true, Type: TypeInt},
-	}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("concurrent_table", []Index{
+		{Name: "id", Primary: true, Type: TypeInt},
+	}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -77,22 +77,22 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	se.Close()
 
 	// 3. Recovery and Validation
-	tableMgr2 := NewTableMenager()
-	tableMgr2.NewTable("concurrent_table", []Index{
-		{Name: "id", Primary: true, Type: TypeInt},
-	}, 4)
-
 	hm2, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap for recovery: %v", err)
 	}
+
+	tableMgr2 := NewTableMenager()
+	tableMgr2.NewTable("concurrent_table", []Index{
+		{Name: "id", Primary: true, Type: TypeInt},
+	}, 4, hm2)
 
 	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL 2: %v", err)
 	}
 
-	se2, err := NewStorageEngine(tableMgr2, walWriter2, hm2)
+	se2, err := NewStorageEngine(tableMgr2, walWriter2)
 	if err != nil {
 		walWriter2.Close()
 		t.Fatalf("Failed to create engine for recovery: %v", err)
@@ -130,27 +130,28 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-
-	// Cria duas tabelas separadas
-	tableMgr.NewTable("users", []Index{
-		{Name: "id", Primary: true, Type: TypeInt},
-	}, 4)
-	tableMgr.NewTable("orders", []Index{
-		{Name: "id", Primary: true, Type: TypeInt},
-	}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+
+	// Cria duas tabelas separadas. Ambas usam o MESMO heap testando conflito.
+	// Ou heaps diferentes?
+	tableMgr.NewTable("users", []Index{
+		{Name: "id", Primary: true, Type: TypeInt},
+	}, 4, hm)
+	tableMgr.NewTable("orders", []Index{
+		{Name: "id", Primary: true, Type: TypeInt},
+	}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -242,22 +243,22 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := NewTableMenager()
-	tableMgr.NewTable("mixed_ops", []Index{
-		{Name: "id", Primary: true, Type: TypeInt},
-	}, 4)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := NewTableMenager()
+	tableMgr.NewTable("mixed_ops", []Index{
+		{Name: "id", Primary: true, Type: TypeInt},
+	}, 4, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)

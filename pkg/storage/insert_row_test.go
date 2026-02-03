@@ -15,23 +15,23 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-		{Name: "email", Primary: false, Type: storage.TypeVarchar},
-	}, 3)
-
 	hm, err := heap.NewHeapManager(heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
+
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm)
 
 	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
 
-	se, err := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
 	if err != nil {
 		walWriter.Close()
 		t.Fatalf("Failed to create engine: %v", err)
@@ -82,7 +82,24 @@ func TestInsertRow_FullFlow(t *testing.T) {
 		t.Fatalf("Failed to create WAL 2: %v", err)
 	}
 
-	se2, err := storage.NewStorageEngine(tableMgr, walWriter2, hm2)
+	// Notice we need to redefine table schema for restart
+	// But in this test scope we can reuse tableMgr if we want, but Engine takes it.
+	// Actually engine takes it.
+	// But we need to update NewTable calls if we recreated it.
+	// In the original test, it reused tableMgr. But tableMgr has handles to old `hm` (if we passed it).
+	// tableMgr entries have `Table` which has `Heap`.
+	// The `hm` is closed?
+	// `se.Close()` closes `wal` and `heap`.
+	// `hm2` is new.
+	// We should probably recreate tableMgr to attach `hm2`.
+
+	tableMgr2 := storage.NewTableMenager()
+	tableMgr2.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm2)
+
+	se2, err := storage.NewStorageEngine(tableMgr2, walWriter2)
 	if err != nil {
 		walWriter2.Close()
 		t.Fatalf("Failed to restart engine: %v", err)
@@ -104,8 +121,9 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
+	hm, _ := heap.NewHeapManager(heapPath)
 	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
 	// Write a MultiInsert entry with corrupted payload
 	w, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
@@ -122,9 +140,14 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	w.WriteEntry(entry)
 	w.Close()
 
-	hm, _ := heap.NewHeapManager(heapPath)
+	// New Heap/WAL for validation
+	// Note: We use existing tableMgr which has `hm` attached.
+	// But `hm` was created above. It wasn't closed explicitly but NewHeapManager opens it.
+	// `se` will check it.
+	// Actually `se` constructor doesn't take `hm` anymore.
+
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter, hm)
+	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer se.Close()
 
 	if err := se.Recover(walPath); err == nil {
@@ -138,22 +161,23 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
 	// 1. Create entry for table "ghost"
-	mgr1 := storage.NewTableMenager()
-	mgr1.NewTable("ghost", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
 	hm1, _ := heap.NewHeapManager(heapPath)
+	mgr1 := storage.NewTableMenager()
+	mgr1.NewTable("ghost", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm1)
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(mgr1, walWriter, hm1)
+	se, _ := storage.NewStorageEngine(mgr1, walWriter)
 
 	se.InsertRow("ghost", `{"id":1}`, map[string]types.Comparable{"id": types.IntKey(1)})
 	se.Close()
 
 	// 2. Restart with NO tables defined
+	// hm2 unused in this test
 	mgr2 := storage.NewTableMenager()
-	hm2, _ := heap.NewHeapManager(heapPath)
+	// No tables
 
 	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se2, _ := storage.NewStorageEngine(mgr2, walWriter2, hm2)
+	se2, _ := storage.NewStorageEngine(mgr2, walWriter2)
 	defer se2.Close()
 
 	// Should skip the entry gracefully
@@ -164,10 +188,13 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 
 func TestInsertRow_InvalidDoc(t *testing.T) {
 	tmpDir := t.TempDir()
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3)
+	// Heap first
 	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
-	se, _ := storage.NewStorageEngine(tableMgr, nil, hm)
+
+	tableMgr := storage.NewTableMenager()
+	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
+
+	se, _ := storage.NewStorageEngine(tableMgr, nil)
 	defer se.Close()
 
 	// Missing "id" in doc

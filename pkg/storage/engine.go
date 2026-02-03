@@ -28,29 +28,20 @@ func GenerateKey() string {
 type StorageEngine struct {
 	TableMetaData *TableMetaData
 	WAL           *wal.WALWriter // WAL persistente
-	Heap          *heap.HeapManager
 	Checkpoint    *CheckpointManager
 	lsnTracker    *LSNTracker
 	metaMu        sync.RWMutex // Lock apenas para operações de metadados (ListTables, etc)
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
-func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter, hm *heap.HeapManager) (*StorageEngine, error) {
+func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*StorageEngine, error) {
 	// Configuração do Checkpoint Manager
-	// Por padrão, salva checkpoints no mesmo diretório do WAL (se existir) ou no diretório do Heap
+	// Por padrão, salva checkpoints no mesmo diretório do WAL (se existir) ou no diretório atual
 	var checkpointDir string
 	if walWriter != nil {
-		// Tenta obter o diretório do arquivo WAL acessando o arquivo subjacente, se possível,
-		// ou usa diretório atual. Como WALWriter não expõe Path facilmente na interface pública,
-		// vamos usar o diretório do Heap como fallback principal se WAL for nil, ou "."
-		// NOTE: Para uma implementação mais robusta, o WALWriter poderia expor o Path.
-		// Por enquanto, vamos assumir que checkpoints ficam junto com os dados principais (Heap).
-	}
-
-	if hm != nil {
-		checkpointDir = filepath.Dir(hm.Path())
+		checkpointDir = filepath.Dir(walWriter.Path())
 	} else {
-		checkpointDir = "."
+		checkpointDir = "." // Fallback for memory-only mode
 	}
 
 	checkpointMgr := NewCheckpointManager(checkpointDir)
@@ -58,7 +49,6 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter, hm
 	return &StorageEngine{
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
-		Heap:          hm,
 		Checkpoint:    checkpointMgr,
 		lsnTracker:    NewLSNTracker(0),
 	}, nil
@@ -106,13 +96,19 @@ func (se *StorageEngine) Close() error {
 			err = wErr
 		}
 	}
-	if se.Heap != nil {
-		if hErr := se.Heap.Close(); hErr != nil {
-			if err == nil {
-				err = hErr
-			} else {
-				err = fmt.Errorf("wal close error: %v, heap close error: %v", err, hErr)
+	// Fecha heaps de todas as tabelas
+	closedHeaps := make(map[*heap.HeapManager]bool)
+	for _, tableName := range se.TableMetaData.ListTables() {
+		table, _ := se.TableMetaData.GetTableByName(tableName)
+		if table != nil && table.Heap != nil && !closedHeaps[table.Heap] {
+			if hErr := table.Heap.Close(); hErr != nil {
+				if err == nil {
+					err = hErr
+				} else {
+					err = fmt.Errorf("%v; heap close error: %v", err, hErr)
+				}
 			}
+			closedHeaps[table.Heap] = true
 		}
 	}
 	return err
@@ -207,7 +203,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
 		// TODO: Otimização futura - Se heap write for lento, refatorar.
 		// Mas como é append-only bufio, deve ser rápido.
-		offset, err := se.Heap.Write(bsonData, currentLSN, prevOffset)
+		offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
 		if err != nil {
 			return 0, fmt.Errorf("heap write failed: %w", err)
 		}
@@ -251,7 +247,7 @@ func (tx *Transaction) Get(tableName string, indexName string, key types.Compara
 
 	// Version Chain Traversal (Time Travel)
 	for currentOffset != -1 {
-		docBytes, header, err := se.Heap.Read(currentOffset)
+		docBytes, header, err := table.Heap.Read(currentOffset)
 		if err != nil {
 			return "", true, fmt.Errorf("failed to read from heap: %w", err)
 		}
@@ -338,7 +334,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 				var visibleVal string
 
 				for currentOffset != -1 {
-					docBytes, header, err := se.Heap.Read(currentOffset)
+					docBytes, header, err := table.Heap.Read(currentOffset)
 					if err != nil {
 						return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
 					}
@@ -390,7 +386,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 				var visibleVal string
 
 				for currentOffset != -1 {
-					docBytes, header, err := se.Heap.Read(currentOffset)
+					docBytes, header, err := table.Heap.Read(currentOffset)
 					if err != nil {
 						return nil, fmt.Errorf("heap read failed at key %v: %w", key, err)
 					}
@@ -495,7 +491,7 @@ func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string
 	}
 
 	// 3. Write to Heap (UMA VEZ)
-	offset, err := se.Heap.Write(bsonData, currentLSN, -1) // Novas linhas começam com PrevOffset -1
+	offset, err := table.Heap.Write(bsonData, currentLSN, -1) // Novas linhas começam com PrevOffset -1
 	if err != nil {
 		return fmt.Errorf("heap write failed: %w", err)
 	}
@@ -591,9 +587,9 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		// Isso viola imutabilidade do WAL/AppendOnly.
 		// O comentário dizia: "Para Phase 2 simplificado: Update in-place Head com DeleteLSN."
 		// Se for in-place, não precisamos atualizar a árvore (ela aponta pro mesmo offset).
-		// ENTRETANTO, para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
+		// ENTRETANTO,		// Para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
 
-		if err := se.Heap.Delete(oldOffset, currentLSN); err != nil {
+		if err := table.Heap.Delete(oldOffset, currentLSN); err != nil {
 			return 0, fmt.Errorf("heap delete failed: %w", err)
 		}
 
@@ -658,39 +654,38 @@ func (tx *Transaction) refreshSnapshot() {
 // NOTA: Deve ser chamado ANTES de qualquer operação concorrente no engine.
 // Durante o recovery, assume acesso exclusivo (startup).
 func (se *StorageEngine) Recover(walPath string) error {
-	var maxLSN uint64 // Rastreador do maior LSN visto (Checkpoint ou WAL)
+	var maxLSN uint64                     // Rastreador do maior LSN visto globalmente
+	loadedLSNs := make(map[string]uint64) // Rastreia LSN por índice: "table.index" -> LSN
 
 	// 1. Tenta carregar Checkpoints
-	// Iteramos sobre todas as tabelas conhecidas e tentamos restaurar
 	for _, tableName := range se.TableMetaData.ListTables() {
 		table, err := se.TableMetaData.GetTableByName(tableName)
 		if err != nil {
 			continue
 		}
 
-		// Durante startup, podemos acessar diretamente
 		for _, idx := range table.GetIndices() {
 			tree, lastLSN, err := se.Checkpoint.LoadLatestCheckpoint(tableName, idx.Name)
+			key := fmt.Sprintf("%s.%s", tableName, idx.Name)
 			if err == nil {
 				// Sucesso no load, substitui a árvore em memória
 				idx.Tree = tree
+				loadedLSNs[key] = lastLSN
 				fmt.Printf("Recovered table '%s' index '%s' from Checkpoint (LSN %d)\n", tableName, idx.Name, lastLSN)
 
 				if lastLSN > maxLSN {
 					maxLSN = lastLSN
 				}
 			} else if !os.IsNotExist(err) {
-				// Erro real (não apenas arquivo faltando)
 				return fmt.Errorf("failed to load checkpoint for %s.%s: %w", tableName, idx.Name, err)
+			} else {
+				loadedLSNs[key] = 0 // No checkpoint
 			}
 		}
 	}
 
-	checkpointLSN := maxLSN // Define o ponto de corte: tudo <= a isso já está no checkpoint
-
 	// 2. Tenta ler WAL para aplicar o delta
 	if _, err := os.Stat(walPath); os.IsNotExist(err) {
-		// Sem WAL, apenas atualiza o tracker com o maxLSN do checkpoint
 		se.lsnTracker.Set(maxLSN)
 		return nil
 	}
@@ -710,15 +705,12 @@ func (se *StorageEngine) Recover(walPath string) error {
 			break
 		}
 		if err != nil {
-			// Em produção: Talvez ignorar últimas entradas corrompidas ou truncar arquivo
 			return fmt.Errorf("recovery error at entry %d: %w", count, err)
 		}
 
-		// Se essa entrada já está no checkpoint, pula
-		if entry.Header.LSN <= checkpointLSN {
-			skipped++
-			wal.ReleaseEntry(entry)
-			continue
+		// Atualiza maxLSN visto
+		if entry.Header.LSN > maxLSN {
+			maxLSN = entry.Header.LSN
 		}
 
 		switch entry.Header.EntryType {
@@ -727,14 +719,21 @@ func (se *StorageEngine) Recover(walPath string) error {
 			tableName, indexName, key, docBytes, err := DeserializeDocumentEntry(entry.Payload)
 			if err != nil {
 				wal.ReleaseEntry(entry)
-				return fmt.Errorf("deserialize failed at entry %d (type %d): %w", count, entry.Header.EntryType, err)
+				return fmt.Errorf("deserialize failed at entry %d: %w", count, err)
 			}
 
-			// Encontra tabela e índice
+			// Verifica se já aplicamos este LSN neste índice
+			lookupKey := fmt.Sprintf("%s.%s", tableName, indexName)
+			if loadedLSNs[lookupKey] >= entry.Header.LSN {
+				skipped++
+				wal.ReleaseEntry(entry)
+				continue
+			}
+
 			table, err := se.TableMetaData.GetTableByName(tableName)
 			if err != nil {
 				wal.ReleaseEntry(entry)
-				continue
+				continue // Table mismatch/deleted?
 			}
 			index, err := table.GetIndex(indexName)
 			if err != nil {
@@ -743,18 +742,15 @@ func (se *StorageEngine) Recover(walPath string) error {
 			}
 
 			if entry.Header.EntryType == wal.EntryDelete {
-				// 1. Delete Logical (MVCC Tombstone)
-				// Em recuperação, marcamos o registro como deletado no heap,
-				// mas não removemos o ponteiro do índice (para consistência com Del).
+				// Delete Logical
 				leaf, idx := index.Tree.FindLeafLowerBound(key)
 				if leaf != nil && idx < leaf.N && leaf.Keys[idx].Compare(key) == 0 {
 					offset := leaf.DataPtrs[idx]
-					se.Heap.Delete(offset, entry.Header.LSN)
+					table.Heap.Delete(offset, entry.Header.LSN)
 				}
 			} else {
-				// 2. Insert/Update
+				// Insert/Update
 				var prevOffset int64 = -1
-				// Check tree for previous version
 				node, found := index.Tree.Search(key)
 				if found {
 					_, idx := node.FindLeafLowerBound(key)
@@ -763,9 +759,9 @@ func (se *StorageEngine) Recover(walPath string) error {
 					}
 				}
 
-				offset, err := se.Heap.Write(docBytes, entry.Header.LSN, prevOffset)
+				offset, err := table.Heap.Write(docBytes, entry.Header.LSN, prevOffset)
 				if err != nil {
-					return err
+					return fmt.Errorf("heap write failed: %w", err)
 				}
 				if err := index.Tree.Replace(key, offset); err != nil {
 					return fmt.Errorf("failed to update tree during recovery: %w", err)
@@ -773,11 +769,10 @@ func (se *StorageEngine) Recover(walPath string) error {
 			}
 
 		case wal.EntryMultiInsert:
-			// Replay de InsertRow
 			tableName, keys, docBytes, err := DeserializeMultiIndexEntry(entry.Payload)
 			if err != nil {
 				wal.ReleaseEntry(entry)
-				return fmt.Errorf("deserialize multi-key entry failed: %w", err)
+				return fmt.Errorf("deserialize multi-key failed: %w", err)
 			}
 
 			table, err := se.TableMetaData.GetTableByName(tableName)
@@ -786,36 +781,49 @@ func (se *StorageEngine) Recover(walPath string) error {
 				continue
 			}
 
-			// Escreve no heap uma única vez
-			offset, err := se.Heap.Write(docBytes, entry.Header.LSN, -1)
+			// Verifica se ALGUM índice precisa de update
+			needsUpdate := false
+			for indexName := range keys {
+				lookupKey := fmt.Sprintf("%s.%s", tableName, indexName)
+				if loadedLSNs[lookupKey] < entry.Header.LSN {
+					needsUpdate = true
+					break
+				}
+			}
+
+			if !needsUpdate {
+				skipped++
+				wal.ReleaseEntry(entry)
+				continue
+			}
+
+			// Escreve no heap (pode duplicar dados se alguns índices já tinham checkpoint, mas necessário para consistência dos novos)
+			offset, err := table.Heap.Write(docBytes, entry.Header.LSN, -1)
 			if err != nil {
-				return err
+				return fmt.Errorf("heap write failed: %w", err)
 			}
 
-			// Atualiza todos os índices
+			// Atualiza apenas os índices que precisam
 			for indexName, key := range keys {
-				index, err := table.GetIndex(indexName)
-				if err != nil {
-					continue
-				}
-				if err := index.Tree.Replace(key, offset); err != nil {
-					return fmt.Errorf("failed to update index %s during recovery: %w", indexName, err)
+				lookupKey := fmt.Sprintf("%s.%s", tableName, indexName)
+				// Se LSN do índice é MENOR que da entrada, ele precisa ser atualizado
+				if loadedLSNs[lookupKey] < entry.Header.LSN {
+					index, err := table.GetIndex(indexName)
+					if err != nil {
+						continue
+					}
+					if err := index.Tree.Replace(key, offset); err != nil {
+						return fmt.Errorf("failed to update index %s during recovery: %w", indexName, err)
+					}
 				}
 			}
-		}
-
-		// Atualiza maxLSN (para o tracker)
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
 		}
 
 		wal.ReleaseEntry(entry)
 		count++
 	}
 
-	// Atualiza o tracker global para o próximo LSN disponível
 	se.lsnTracker.Set(maxLSN)
-
-	fmt.Printf("Recovered: %d entries from WAL applied, %d skipped (already in checkpoint). Current LSN: %d\n", count, skipped, maxLSN)
+	fmt.Printf("Recovered: %d entries from WAL applied, %d skipped. Current LSN: %d\n", count, skipped, maxLSN)
 	return nil
 }
