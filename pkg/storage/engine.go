@@ -440,6 +440,94 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 	return results, nil
 }
 
+// InsertRow: Insere um documento e atualiza múltiplos índices atomicamente (evita duplicação no heap)
+func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
+	// 1. Validação básica de metadados
+	table, err := se.TableMetaData.GetTableByName(tableName)
+	if err != nil {
+		return err
+	}
+
+	// Try convert json to bson for validation
+	bsonDoc, err := JsonToBson(doc)
+	var bsonData []byte
+	if err == nil {
+		// Validar cada chave em seu respectivo índice
+		for indexName := range keys {
+			index, err := table.GetIndex(indexName)
+			if err != nil {
+				return err
+			}
+			exists, keyType := DoesTheKeyExist(bsonDoc, indexName)
+			if !exists {
+				return &errors.IndexNotFoundError{Name: indexName}
+			}
+			if keyType != index.Type {
+				return &errors.InvalidKeyTypeError{
+					Name:     indexName,
+					TypeName: keyType.String(),
+				}
+			}
+		}
+		bsonData, _ = MarshalBson(bsonDoc)
+	} else {
+		bsonData = []byte(doc)
+	}
+
+	// 1.5 Constraint Check: Primary keys must be unique
+	for indexName, key := range keys {
+		index, err := table.GetIndex(indexName)
+		if err == nil && index.Primary {
+			if _, found := index.Tree.Get(key); found {
+				return fmt.Errorf("duplicate key error: key %v already exists in index %s", key, indexName)
+			}
+		}
+	}
+
+	currentLSN := se.lsnTracker.Next()
+
+	// 2. Write Ahead Log (UMA entrada para todos os índices)
+	if se.WAL != nil {
+		payload, err := SerializeMultiIndexEntry(tableName, keys, bsonData)
+		if err != nil {
+			return err
+		}
+
+		entry := wal.AcquireEntry()
+		entry.Header.Magic = wal.WALMagic
+		entry.Header.Version = 1
+		entry.Header.EntryType = wal.EntryMultiInsert
+		entry.Header.LSN = currentLSN
+		entry.Header.PayloadLen = uint32(len(payload))
+		entry.Header.CRC32 = wal.CalculateCRC32(payload)
+		entry.Payload = append(entry.Payload, payload...)
+
+		if err := se.WAL.WriteEntry(entry); err != nil {
+			wal.ReleaseEntry(entry)
+			return fmt.Errorf("wal write failed: %w", err)
+		}
+		wal.ReleaseEntry(entry)
+	}
+
+	// 3. Write to Heap (UMA VEZ)
+	offset, err := se.Heap.Write(bsonData, currentLSN, -1) // Novas linhas começam com PrevOffset -1
+	if err != nil {
+		return fmt.Errorf("heap write failed: %w", err)
+	}
+
+	// 4. Update Trees
+	for indexName, key := range keys {
+		index, _ := table.GetIndex(indexName)
+		// No caso de InsertRow, tratamos como um Replace se já existir,
+		// ou Insert normal se não existir. B+Tree.Replace já faz isso de forma safe.
+		if err := index.Tree.Replace(key, offset); err != nil {
+			return fmt.Errorf("failed to update index %s: %w", indexName, err)
+		}
+	}
+
+	return nil
+}
+
 // Scan wrapper para conveniência
 func (se *StorageEngine) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
 	return se.BeginRead().Scan(tableName, indexName, condition)
@@ -648,68 +736,86 @@ func (se *StorageEngine) Recover(walPath string) error {
 			continue
 		}
 
-		// Replay
-		tableName, indexName, key, docBytes, err := DeserializeDocumentEntry(entry.Payload)
-		if err != nil {
-			wal.ReleaseEntry(entry)
-			return fmt.Errorf("deserialize failed at entry %d: %w", count, err)
-		}
-
-		// Encontra tabela e índice (durante startup, acesso direto)
-		table, err := se.TableMetaData.GetTableByName(tableName)
-		if err != nil {
-			wal.ReleaseEntry(entry)
-			continue
-		}
-		index, err := table.GetIndex(indexName)
-		if err != nil {
-			wal.ReleaseEntry(entry)
-			continue
-		}
-
 		switch entry.Header.EntryType {
-		case wal.EntryInsert, wal.EntryUpdate:
-			// No recovery com Checkpoint, o HeapFile ainda pode ter dados duplicados
-			// se reiniciarmos e inserirmos coisas que o WAL tem mas o Heap nao tinha?
-			// Se o dado JÁ EXISTE no HeapFile, nós vamos escrever de novo e pegar um novo offset.
-			// É ineficiente mas correto.
-			// No Recovery, a chain pode ficar quebrada se não reconstruirmos os links?
-			// O WAL contém a sequencia de updates.
-			// Se Insert K (LSN 1) -> Update K (LSN 2).
-			// Replay LSN 1: Write Heap, Insert Tree (Offset A).
-			// Replay LSN 2: Search Tree (Get Offset A), Write Heap (Prev=A), Update Tree (Offset B).
-			// Sim, a lógica do Put normal (Search -> Write -> Insert) deve funcionar aqui também
-			// desde que o índice esteja sendo atualizado passo a passo.
+		case wal.EntryInsert, wal.EntryUpdate, wal.EntryDelete:
+			// Replay de operação em índice único
+			tableName, indexName, key, docBytes, err := DeserializeDocumentEntry(entry.Payload)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				return fmt.Errorf("deserialize failed at entry %d (type %d): %w", count, entry.Header.EntryType, err)
+			}
 
-			var prevOffset int64 = -1
-			// Check tree for previous version
-			node, found := index.Tree.Search(key)
-			if found {
-				_, idx := node.FindLeafLowerBound(key)
-				if idx < node.N && node.Keys[idx].Compare(key) == 0 {
-					prevOffset = node.DataPtrs[idx]
+			// Encontra tabela e índice
+			table, err := se.TableMetaData.GetTableByName(tableName)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				continue
+			}
+			index, err := table.GetIndex(indexName)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				continue
+			}
+
+			if entry.Header.EntryType == wal.EntryDelete {
+				// 1. Delete Logical (MVCC Tombstone)
+				// Em recuperação, marcamos o registro como deletado no heap,
+				// mas não removemos o ponteiro do índice (para consistência com Del).
+				leaf, idx := index.Tree.FindLeafLowerBound(key)
+				if leaf != nil && idx < leaf.N && leaf.Keys[idx].Compare(key) == 0 {
+					offset := leaf.DataPtrs[idx]
+					se.Heap.Delete(offset, entry.Header.LSN)
+				}
+			} else {
+				// 2. Insert/Update
+				var prevOffset int64 = -1
+				// Check tree for previous version
+				node, found := index.Tree.Search(key)
+				if found {
+					_, idx := node.FindLeafLowerBound(key)
+					if idx < node.N && node.Keys[idx].Compare(key) == 0 {
+						prevOffset = node.DataPtrs[idx]
+					}
+				}
+
+				offset, err := se.Heap.Write(docBytes, entry.Header.LSN, prevOffset)
+				if err != nil {
+					return err
+				}
+				if err := index.Tree.Replace(key, offset); err != nil {
+					return fmt.Errorf("failed to update tree during recovery: %w", err)
 				}
 			}
 
-			offset, err := se.Heap.Write(docBytes, entry.Header.LSN, prevOffset) // Pass LSN from WAL
+		case wal.EntryMultiInsert:
+			// Replay de InsertRow
+			tableName, keys, docBytes, err := DeserializeMultiIndexEntry(entry.Payload)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				return fmt.Errorf("deserialize multi-key entry failed: %w", err)
+			}
+
+			table, err := se.TableMetaData.GetTableByName(tableName)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				continue
+			}
+
+			// Escreve no heap uma única vez
+			offset, err := se.Heap.Write(docBytes, entry.Header.LSN, -1)
 			if err != nil {
 				return err
 			}
-			if err := index.Tree.Replace(key, offset); err != nil {
-				return fmt.Errorf("failed to update tree during recovery: %w", err)
-			}
 
-		case wal.EntryDelete:
-			// Remove from tree
-			leaf, idx := index.Tree.FindLeafLowerBound(key)
-			if leaf != nil && idx < leaf.N && leaf.Keys[idx].Compare(key) == 0 {
-				offset := leaf.DataPtrs[idx]
-				// Precisamos saber o LSN do delete. O WAL Entry Header tem.
-				se.Heap.Delete(offset, entry.Header.LSN)
-			}
-			index.Tree.Root.Remove(key)
-			if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
-				index.Tree.Root = index.Tree.Root.Children[0]
+			// Atualiza todos os índices
+			for indexName, key := range keys {
+				index, err := table.GetIndex(indexName)
+				if err != nil {
+					continue
+				}
+				if err := index.Tree.Replace(key, offset); err != nil {
+					return fmt.Errorf("failed to update index %s during recovery: %w", indexName, err)
+				}
 			}
 		}
 

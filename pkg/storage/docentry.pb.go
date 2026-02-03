@@ -219,6 +219,66 @@ func (*Key_FloatValue) isKey_Value() {}
 
 func (*Key_DateValue) isKey_Value() {}
 
+type MultiIndexEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	Keys          map[string]*Key        `protobuf:"bytes,2,rep,name=keys,proto3" json:"keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Document      []byte                 `protobuf:"bytes,3,opt,name=document,proto3" json:"document,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MultiIndexEntry) Reset() {
+	*x = MultiIndexEntry{}
+	mi := &file_pkg_storage_docentry_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MultiIndexEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MultiIndexEntry) ProtoMessage() {}
+
+func (x *MultiIndexEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_storage_docentry_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MultiIndexEntry.ProtoReflect.Descriptor instead.
+func (*MultiIndexEntry) Descriptor() ([]byte, []int) {
+	return file_pkg_storage_docentry_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *MultiIndexEntry) GetTableName() string {
+	if x != nil {
+		return x.TableName
+	}
+	return ""
+}
+
+func (x *MultiIndexEntry) GetKeys() map[string]*Key {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *MultiIndexEntry) GetDocument() []byte {
+	if x != nil {
+		return x.Document
+	}
+	return nil
+}
+
 var File_pkg_storage_docentry_proto protoreflect.FileDescriptor
 
 const file_pkg_storage_docentry_proto_rawDesc = "" +
@@ -240,7 +300,15 @@ const file_pkg_storage_docentry_proto_rawDesc = "" +
 	"floatValue\x12\x1f\n" +
 	"\n" +
 	"date_value\x18\x05 \x01(\x03H\x00R\tdateValueB\a\n" +
-	"\x05valueB0Z.github.com/bobboyms/storage-engine/pkg/storageb\x06proto3"
+	"\x05value\"\xcb\x01\n" +
+	"\x0fMultiIndexEntry\x12\x1d\n" +
+	"\n" +
+	"table_name\x18\x01 \x01(\tR\ttableName\x126\n" +
+	"\x04keys\x18\x02 \x03(\v2\".storage.MultiIndexEntry.KeysEntryR\x04keys\x12\x1a\n" +
+	"\bdocument\x18\x03 \x01(\fR\bdocument\x1aE\n" +
+	"\tKeysEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\"\n" +
+	"\x05value\x18\x02 \x01(\v2\f.storage.KeyR\x05value:\x028\x01B0Z.github.com/bobboyms/storage-engine/pkg/storageb\x06proto3"
 
 var (
 	file_pkg_storage_docentry_proto_rawDescOnce sync.Once
@@ -254,18 +322,22 @@ func file_pkg_storage_docentry_proto_rawDescGZIP() []byte {
 	return file_pkg_storage_docentry_proto_rawDescData
 }
 
-var file_pkg_storage_docentry_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pkg_storage_docentry_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_pkg_storage_docentry_proto_goTypes = []any{
-	(*DocumentEntry)(nil), // 0: storage.DocumentEntry
-	(*Key)(nil),           // 1: storage.Key
+	(*DocumentEntry)(nil),   // 0: storage.DocumentEntry
+	(*Key)(nil),             // 1: storage.Key
+	(*MultiIndexEntry)(nil), // 2: storage.MultiIndexEntry
+	nil,                     // 3: storage.MultiIndexEntry.KeysEntry
 }
 var file_pkg_storage_docentry_proto_depIdxs = []int32{
 	1, // 0: storage.DocumentEntry.key:type_name -> storage.Key
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 1: storage.MultiIndexEntry.keys:type_name -> storage.MultiIndexEntry.KeysEntry
+	1, // 2: storage.MultiIndexEntry.KeysEntry.value:type_name -> storage.Key
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_pkg_storage_docentry_proto_init() }
@@ -286,7 +358,7 @@ func file_pkg_storage_docentry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_storage_docentry_proto_rawDesc), len(file_pkg_storage_docentry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

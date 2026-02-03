@@ -20,3 +20,9 @@ message Key {
         int64 date_value = 5; // UnixNano
     }
 }
+
+message MultiIndexEntry {
+    string table_name = 1;
+    map<string, Key> keys = 2;
+    bytes document = 3;
+}

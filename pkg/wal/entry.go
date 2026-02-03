@@ -16,12 +16,13 @@ const (
 
 // Tipos de Operação (EntryType)
 const (
-	EntryInsert uint8 = iota + 1 // 1: Insert
-	EntryUpdate                  // 2: Update
-	EntryDelete                  // 3: Delete
-	EntryBegin                   // 4: Begin Transaction
-	EntryCommit                  // 5: Commit
-	EntryAbort                   // 6: Rollback
+	EntryInsert      uint8 = iota + 1 // 1: Insert
+	EntryUpdate                       // 2: Update
+	EntryDelete                       // 3: Delete
+	EntryBegin                        // 4: Begin Transaction
+	EntryCommit                       // 5: Commit
+	EntryAbort                        // 6: Rollback
+	EntryMultiInsert                  // 7: Insert with multiple indices
 )
 
 // WALHeader cabeçalho de 24 bytes para cada entrada
