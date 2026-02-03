@@ -262,3 +262,45 @@ func TestTable_LockCoverage(t *testing.T) {
 		t.Errorf("Expected 1 index, got %d", len(indices))
 	}
 }
+
+func TestGetIndexes(t *testing.T) {
+	mgr := storage.NewTableMenager()
+	err := mgr.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3)
+
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	indices, err := mgr.GetIndexes("users")
+	if err != nil {
+		t.Fatalf("GetIndexes failed: %v", err)
+	}
+
+	if len(indices) != 2 {
+		t.Fatalf("Expected 2 indices, got %d", len(indices))
+	}
+
+	// Verify we got both indices
+	names := make(map[string]bool)
+	for _, idx := range indices {
+		names[idx.Name] = true
+	}
+
+	if !names["id"] || !names["email"] {
+		t.Fatal("Expected 'id' and 'email' indices locally")
+	}
+}
+
+func TestGetIndexes_Error_TableNotFound(t *testing.T) {
+	mgr := storage.NewTableMenager()
+	_, err := mgr.GetIndexes("nonexistent")
+	if err == nil {
+		t.Fatal("Expected error for nonexistent table")
+	}
+	if _, ok := err.(*errors.TableNotFoundError); !ok {
+		t.Fatalf("Expected TableNotFoundError, got %T: %v", err, err)
+	}
+}

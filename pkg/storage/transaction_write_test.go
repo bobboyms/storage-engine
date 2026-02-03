@@ -383,3 +383,19 @@ func TestWriteTransaction_DelInvalidTable(t *testing.T) {
 		t.Error("Expected error for invalid table")
 	}
 }
+
+func TestWriteTransaction_DelAfterCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	se, _ := NewStorageEngine(NewTableMenager(), filepath.Join(tmpDir, "wal"), filepath.Join(tmpDir, "heap"))
+	defer se.Close()
+
+	tx := se.BeginWriteTransaction()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	// Del after commit
+	if err := tx.Del("any", "idx", types.IntKey(1)); err == nil {
+		t.Error("Expected error calling Del on committed tx")
+	}
+}
