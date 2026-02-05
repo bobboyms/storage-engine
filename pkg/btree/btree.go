@@ -251,3 +251,57 @@ func (b *BPlusTree) findLeafLowerBound(key types.Comparable) (*Node, int) {
 	}
 	return node, idx
 }
+
+// Remove removes a key from the B+Tree.
+// For simplicity, this implementation only removes the key from the leaf node
+// and does NOT perform complex rebalancing (borrowing/merging).
+// It maintains thread-safety via Latch Crabbing.
+func (b *BPlusTree) Remove(key types.Comparable) (bool, error) {
+	b.mu.RLock()
+	curr := b.Root
+	curr.Lock()
+	b.mu.RUnlock()
+
+	// Latch Crabbing to Leaf
+	for !curr.Leaf {
+		i := 0
+		for i < curr.N && key.Compare(curr.Keys[i]) >= 0 {
+			i++
+		}
+		child := curr.Children[i]
+		child.Lock()
+		curr.Unlock()
+		curr = child
+	}
+
+	defer curr.Unlock()
+
+	// In Leaf, find key
+	idx := -1
+	for i := 0; i < curr.N; i++ {
+		if key.Compare(curr.Keys[i]) == 0 {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		return false, nil // Not found
+	}
+
+	// Remove from Keys and DataPtrs by shifting
+	copy(curr.Keys[idx:], curr.Keys[idx+1:])
+	// Zero out the last element to avoid memory leaks if they were pointers (Comparable can be)
+	curr.Keys[curr.N-1] = nil
+	// Make sure we limit the slice view
+	// Actually we just decrement N regarding logical size, but Keys array is fixed capacity?
+	// NewNode makes `keys = make([]types.Comparable, 2*t)`.
+	// So we assume N tracks usage.
+
+	copy(curr.DataPtrs[idx:], curr.DataPtrs[idx+1:])
+	curr.DataPtrs[curr.N-1] = 0
+
+	curr.N--
+
+	return true, nil
+}

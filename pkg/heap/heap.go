@@ -503,3 +503,125 @@ func (h *HeapManager) Close() error {
 func (h *HeapManager) Path() string {
 	return h.basePath
 }
+
+// ByteIterator iterates over all records in the heap
+type HeapIterator struct {
+	hm          *HeapManager
+	cancel      chan struct{}
+	segmentIdx  int
+	currentFile *os.File
+	currentPos  int64 // Local offset in current file
+}
+
+func (h *HeapManager) NewIterator() (*HeapIterator, error) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
+	if len(h.segments) == 0 {
+		return nil, fmt.Errorf("no segments to iterate")
+	}
+
+	// Start with first segment
+	seg := h.segments[0]
+	f, err := os.Open(seg.Path) // Open independent handle for iteration
+	if err != nil {
+		return nil, err
+	}
+
+	return &HeapIterator{
+		hm:          h,
+		segmentIdx:  0,
+		currentFile: f,
+		currentPos:  HeaderSize, // Skip header
+	}, nil
+}
+
+// Next returns the next record's doc, header, and GLOBAL offset.
+// Returns io.EOF when done.
+func (it *HeapIterator) Next() ([]byte, *RecordHeader, int64, error) {
+	for {
+		// Calculate GLOBAL offset of current position
+		// We need to access segment info safely.
+		it.hm.mutex.RLock()
+		if it.segmentIdx >= len(it.hm.segments) {
+			it.hm.mutex.RUnlock()
+			return nil, nil, 0, io.EOF
+		}
+		seg := it.hm.segments[it.segmentIdx]
+		startOffset := seg.StartOffset
+		it.hm.mutex.RUnlock()
+
+		globalOffset := startOffset + it.currentPos
+
+		// Seek to position
+		if _, err := it.currentFile.Seek(it.currentPos, 0); err != nil {
+			return nil, nil, 0, err
+		}
+
+		// Read Entry Header
+		// Length(4), Valid(1), Create(8), Delete(8), Prev(8) = 29 bytes
+		headerBuf := make([]byte, 29)
+		if _, err := io.ReadFull(it.currentFile, headerBuf); err != nil {
+			if err == io.EOF {
+				// End of this segment, move to next
+				if err := it.nextSegment(); err != nil {
+					return nil, nil, 0, err // Could be real EOF
+				}
+				continue
+			}
+			return nil, nil, 0, err
+		}
+
+		docLen := binary.LittleEndian.Uint32(headerBuf[0:4])
+		valid := headerBuf[4]
+		createLSN := binary.LittleEndian.Uint64(headerBuf[5:13])
+		deleteLSN := binary.LittleEndian.Uint64(headerBuf[13:21])
+		prevOffset := int64(binary.LittleEndian.Uint64(headerBuf[21:29]))
+
+		// Read Doc
+		doc := make([]byte, docLen)
+		if _, err := io.ReadFull(it.currentFile, doc); err != nil {
+			return nil, nil, 0, err
+		}
+
+		// Update position for next call
+		it.currentPos += int64(29 + docLen)
+
+		// Construct header
+		header := &RecordHeader{
+			Valid:      valid == 1,
+			CreateLSN:  createLSN,
+			DeleteLSN:  deleteLSN,
+			PrevOffset: prevOffset,
+		}
+
+		return doc, header, globalOffset, nil
+	}
+}
+
+func (it *HeapIterator) nextSegment() error {
+	it.currentFile.Close()
+	it.segmentIdx++
+
+	it.hm.mutex.RLock()
+	defer it.hm.mutex.RUnlock()
+
+	if it.segmentIdx >= len(it.hm.segments) {
+		return io.EOF
+	}
+
+	seg := it.hm.segments[it.segmentIdx]
+	f, err := os.Open(seg.Path)
+	if err != nil {
+		return err
+	}
+	it.currentFile = f
+	it.currentPos = HeaderSize
+	return nil
+}
+
+func (it *HeapIterator) Close() {
+	if it.currentFile != nil {
+		it.currentFile.Close()
+	}
+}

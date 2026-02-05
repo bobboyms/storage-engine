@@ -14,6 +14,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 	"github.com/google/uuid"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func GenerateKey() string {
@@ -30,6 +31,7 @@ type StorageEngine struct {
 	WAL           *wal.WALWriter // WAL persistente
 	Checkpoint    *CheckpointManager
 	lsnTracker    *LSNTracker
+	TxRegistry    *TransactionRegistry
 	metaMu        sync.RWMutex // Lock apenas para operações de metadados (ListTables, etc)
 	// Nota: Lock por tabela agora está em Table.mu
 }
@@ -51,6 +53,7 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*
 		WAL:           walWriter,
 		Checkpoint:    checkpointMgr,
 		lsnTracker:    NewLSNTracker(0),
+		TxRegistry:    NewTransactionRegistry(),
 	}, nil
 }
 
@@ -71,11 +74,18 @@ type Transaction struct {
 
 // BeginTransaction inicia uma transação com o nível de isolamento especificado
 func (se *StorageEngine) BeginTransaction(level IsolationLevel) *Transaction {
-	return &Transaction{
+	tx := &Transaction{
 		SnapshotLSN: se.lsnTracker.Current(), // Captura o "agora" linearizável
 		Level:       level,
 		engine:      se,
 	}
+	se.TxRegistry.Register(tx)
+	return tx
+}
+
+// Close marks the transaction as finished and unregisters it
+func (tx *Transaction) Close() {
+	tx.engine.TxRegistry.Unregister(tx)
 }
 
 // BeginRead inicia uma transação de leitura (Snapshot) com o padrão Repeatable Read
@@ -96,6 +106,8 @@ func (se *StorageEngine) Close() error {
 			err = wErr
 		}
 	}
+	// TODO: Clean up TxRegistry? Not strictly needed as Engine is closing.
+
 	// Fecha heaps de todas as tabelas
 	closedHeaps := make(map[*heap.HeapManager]bool)
 	for _, tableName := range se.TableMetaData.ListTables() {
@@ -285,7 +297,9 @@ func (tx *Transaction) Get(tableName string, indexName string, key types.Compara
 
 // Get wrapper para conveniência (Autocommit / Snapshot instantâneo)
 func (se *StorageEngine) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
-	return se.BeginRead().Get(tableName, indexName, key)
+	tx := se.BeginRead()
+	defer tx.Close() // Autocommit: Release transaction registration
+	return tx.Get(tableName, indexName, key)
 }
 
 // Scan executa uma busca por range no contexto da transação
@@ -511,7 +525,9 @@ func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string
 
 // Scan wrapper para conveniência
 func (se *StorageEngine) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
-	return se.BeginRead().Scan(tableName, indexName, condition)
+	tx := se.BeginRead()
+	defer tx.Close()
+	return tx.Scan(tableName, indexName, condition)
 }
 
 // RangeScan: Wrapper de conveniência para BETWEEN (mantido para compatibilidade)
@@ -825,5 +841,186 @@ func (se *StorageEngine) Recover(walPath string) error {
 
 	se.lsnTracker.Set(maxLSN)
 	fmt.Printf("Recovered: %d entries from WAL applied, %d skipped. Current LSN: %d\n", count, skipped, maxLSN)
+	return nil
+}
+
+// Vacuum performs Garbage Collection on the specified table.
+// It removes dead Tombstones (deleted records visible to no active transaction)
+// and compacts the Heap file, reclaiming space.
+func (se *StorageEngine) Vacuum(tableName string) error {
+	// 1. Acquire Table Lock (Exclusive)
+	table, err := se.TableMetaData.GetTableByName(tableName)
+	if err != nil {
+		return err
+	}
+	table.Lock()
+	defer table.Unlock()
+
+	// 2. Determine Minimum Visible LSN
+	// Any Tombstone with DeleteLSN < minLSN is safe to remove.
+	minLSN := se.TxRegistry.GetMinActiveLSN()
+
+	fmt.Printf("Starting Vacuum for table %s. MinLSN: %d\n", tableName, minLSN)
+
+	// 3. Create New Heap (Temporary)
+	oldHeap := table.Heap
+	newHeapPath := oldHeap.Path() + "_vacuum"
+	// Ensure cleanup of previous failed runs
+	os.Remove(newHeapPath + "_001.data") // Simple cleanup for first segment
+
+	newHeap, err := heap.NewHeapManager(newHeapPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp heap: %w", err)
+	}
+
+	// 4. Scan and Compact
+	offsetMap := make(map[int64]int64) // Old -> New
+	type treeUpdate struct {
+		Index     string
+		Key       types.Comparable
+		NewOffset int64
+	}
+	var updates []treeUpdate
+
+	iter, err := oldHeap.NewIterator()
+	if err != nil {
+		newHeap.Close()
+		return fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	for {
+		doc, header, oldOffset, err := iter.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			newHeap.Close()
+			return fmt.Errorf("heap iteration failed: %w", err)
+		}
+
+		// Decision Logic
+		keep := true
+		if !header.Valid {
+			// It is a Tombstone.
+			if header.DeleteLSN < minLSN {
+				keep = false // Dead!
+			} else {
+				// Keep! Still visible to some transaction.
+			}
+		}
+
+		// Extract Keys for Tree operations
+		var bsonDoc bson.D
+		parseErr := func() error {
+			// Try BSON first
+			d, err := UnmarshalBson(doc)
+			if err == nil {
+				bsonDoc = d
+				return nil
+			}
+			// Try JSON
+			d, err = JsonToBson(string(doc))
+			if err == nil {
+				bsonDoc = d
+				return nil
+			}
+			return fmt.Errorf("failed to parse doc")
+		}()
+
+		if !keep {
+			// Dead Tombstone: Remove from Tree
+			if parseErr == nil {
+				for _, idx := range table.GetIndicesUnsafe() {
+					keyVal, err := GetValueFromBson(bsonDoc, idx.Name)
+					if err == nil {
+						idx.Tree.Remove(keyVal)
+					}
+				}
+			}
+			continue
+		}
+
+		// Keep: Copy to New Heap
+		newPrev := int64(-1)
+		if header.PrevOffset != -1 {
+			if mapped, ok := offsetMap[header.PrevOffset]; ok {
+				newPrev = mapped
+			}
+		}
+
+		newOffset, err := newHeap.Write(doc, header.CreateLSN, newPrev)
+		if err != nil {
+			newHeap.Close()
+			return fmt.Errorf("failed to write to new heap: %w", err)
+		}
+
+		// Restore Delete status if it was a kept Tombstone
+		if !header.Valid {
+			if err := newHeap.Delete(newOffset, header.DeleteLSN); err != nil {
+				newHeap.Close()
+				return fmt.Errorf("failed to mark deleted in new heap: %w", err)
+			}
+		}
+
+		offsetMap[oldOffset] = newOffset
+
+		// Collect Tree Update
+		if parseErr == nil {
+			for _, idx := range table.GetIndicesUnsafe() {
+				keyVal, err := GetValueFromBson(bsonDoc, idx.Name)
+				if err == nil {
+					updates = append(updates, treeUpdate{
+						Index:     idx.Name,
+						Key:       keyVal,
+						NewOffset: newOffset,
+					})
+				}
+			}
+		}
+	}
+
+	// 5. Update Trees (Batch)
+	iter.Close() // Release file handles before swapping files
+	for _, up := range updates {
+		if idx, ok := table.Indices[up.Index]; ok {
+			idx.Tree.Upsert(up.Key, func(current int64, exists bool) (int64, error) {
+				return up.NewOffset, nil
+			})
+		}
+	}
+
+	// 6. Swap Heaps
+	oldHeap.Close()
+	newHeap.Close()
+
+	oldPath := oldHeap.Path()
+	// Use strict pattern to avoid matching _vacuum files (since _vacuum starts with _)
+	files, _ := filepath.Glob(oldPath + "_[0-9][0-9][0-9].data")
+	for _, f := range files {
+		os.Remove(f)
+	}
+
+	newFiles, _ := filepath.Glob(newHeapPath + "_[0-9][0-9][0-9].data")
+	for _, f := range newFiles {
+		// New files: name_vacuum_XXX.data
+		// Target: name_XXX.data
+		// Need to strip "_vacuum" from base path part
+		// newHeapPath matches oldPath + "_vacuum"
+		// so f starts with oldPath + "_vacuum"
+		suffix := f[len(newHeapPath):] // "_001.data"
+		dest := oldPath + suffix
+		if err := os.Rename(f, dest); err != nil {
+			return fmt.Errorf("failed to rename vacuum file: %w", err)
+		}
+	}
+
+	// Re-open
+	finalHeap, err := heap.NewHeapManager(oldPath)
+	if err != nil {
+		return fmt.Errorf("failed to reopen heap: %w", err)
+	}
+	table.Heap = finalHeap
+
 	return nil
 }
