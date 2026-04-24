@@ -24,6 +24,7 @@ Solução com InsertRow():
 - InsertRow() escreve o documento UMA VEZ no heap
 - Atualiza TODOS os índices para apontar para o mesmo offset
 - Economiza espaço em disco e mantém consistência
+- Para atualizar uma linha existente, use UpsertRow().
 
 IMPORTANTE: InsertRow() é atômico - ou todos os índices são atualizados
 ou nenhum é (em caso de erro).

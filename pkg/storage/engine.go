@@ -279,8 +279,9 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	// Try convert json to bson for validation and better storage
-	// If it fails, we treat it as a raw string (backward compatibility for tests)
+	// Try convert json to bson for validation and better storage.
+	// If the document contains every indexed field, use the multi-index
+	// write path so updates keep secondary indexes consistent.
 	bsonDoc, err := JsonToBson(document)
 	var bsonData []byte
 	if err == nil {
@@ -302,6 +303,16 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 		//Serialize bson to bytes
 		bsonData, _ = MarshalBson(bsonDoc)
+
+		if keys, ok, err := keysFromBSONForAllIndexes(table, bsonDoc); err != nil {
+			return err
+		} else if ok {
+			docKey := keys[indexName]
+			if !sameComparableKey(docKey, key) {
+				return fmt.Errorf("storage: chave informada %v diverge do campo indexado %s=%v", key, indexName, docKey)
+			}
+			return se.UpsertRow(tableName, document, keys)
+		}
 	} else {
 		// Fallback to raw bytes
 		bsonData = []byte(document)
@@ -338,6 +349,8 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 	// 2 ~ 4. Atomic Upsert (Write Heap -> Update Tree)
 	// Usamos Upsert para garantir atomocidade no acesso à versão anterior e atualização do ponteiro HEAD.
+	table.Lock()
+	defer table.Unlock()
 	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
 		var prevOffset int64 = -1
 		if exists {
@@ -499,93 +512,19 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 	return results, fmt.Errorf("Scan: índice %s usa tipo não suportado %T", indexName, index.Tree)
 }
 
-// InsertRow: Insere um documento e atualiza múltiplos índices atomicamente (evita duplicação no heap)
+// InsertRow insere uma nova linha e atualiza todos os índices da tabela.
+// Chaves primárias duplicadas falham enquanto o lock exclusivo da tabela está
+// mantido, fechando a corrida check-then-write.
 func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
-	// 1. Validação básica de metadados
-	table, err := se.TableMetaData.GetTableByName(tableName)
-	if err != nil {
-		return err
-	}
+	return se.writeRow(tableName, doc, keys, true)
+}
 
-	// Try convert json to bson for validation
-	bsonDoc, err := JsonToBson(doc)
-	var bsonData []byte
-	if err == nil {
-		// Validar cada chave em seu respectivo índice
-		for indexName := range keys {
-			index, err := table.GetIndex(indexName)
-			if err != nil {
-				return err
-			}
-			exists, keyType := DoesTheKeyExist(bsonDoc, indexName)
-			if !exists {
-				return &errors.IndexNotFoundError{Name: indexName}
-			}
-			if keyType != index.Type {
-				return &errors.InvalidKeyTypeError{
-					Name:     indexName,
-					TypeName: keyType.String(),
-				}
-			}
-		}
-		bsonData, _ = MarshalBson(bsonDoc)
-	} else {
-		bsonData = []byte(doc)
-	}
-
-	// 1.5 Constraint Check: Primary keys must be unique
-	for indexName, key := range keys {
-		index, err := table.GetIndex(indexName)
-		if err == nil && index.Primary {
-			if _, found, _ := index.Tree.Get(key); found {
-				return fmt.Errorf("duplicate key error: key %v already exists in index %s", key, indexName)
-			}
-		}
-	}
-
-	currentLSN := se.lsnTracker.Next()
-
-	// 2. Write Ahead Log (UMA entrada para todos os índices)
-	if se.WAL != nil {
-		payload, err := SerializeMultiIndexEntry(tableName, keys, bsonData)
-		if err != nil {
-			return err
-		}
-
-		entry := wal.AcquireEntry()
-		entry.Header.Magic = wal.WALMagic
-		entry.Header.Version = 1
-		entry.Header.EntryType = wal.EntryMultiInsert
-		entry.Header.LSN = currentLSN
-		entry.Header.PayloadLen = uint32(len(payload))
-		entry.Header.CRC32 = wal.CalculateCRC32(payload)
-		entry.Payload = append(entry.Payload, payload...)
-
-		if err := se.WAL.WriteEntry(entry); err != nil {
-			wal.ReleaseEntry(entry)
-			return fmt.Errorf("wal write failed: %w", err)
-		}
-		wal.ReleaseEntry(entry)
-	}
-
-	// 3. Write to Heap (UMA VEZ)
-	offset, err := table.Heap.Write(bsonData, currentLSN, -1) // Novas linhas começam com PrevOffset -1
-	if err != nil {
-		return fmt.Errorf("heap write failed: %w", err)
-	}
-
-	// 4. Update Trees
-	for indexName, key := range keys {
-		index, _ := table.GetIndex(indexName)
-		// No caso de InsertRow, tratamos como um Replace se já existir,
-		// ou Insert normal se não existir. B+Tree.Replace já faz isso de forma safe.
-		if err := index.Tree.Replace(key, offset); err != nil {
-			return fmt.Errorf("failed to update index %s: %w", indexName, err)
-		}
-		se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
-	}
-
-	return nil
+// UpsertRow insere ou atualiza uma linha inteira mantendo todos os índices
+// sincronizados. Quando a chave primária já existe, a versão anterior é
+// tombstoned no heap; entradas antigas de índices secundários passam a apontar
+// para uma versão não visível a snapshots novos.
+func (se *StorageEngine) UpsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
+	return se.writeRow(tableName, doc, keys, false)
 }
 
 // Scan wrapper para conveniência

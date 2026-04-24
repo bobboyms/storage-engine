@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"os"
 )
 
 /*
@@ -199,8 +199,9 @@ Quando NÃO criar índice secundário?
 	// Atualizar salário do funcionário ID=2
 	newDoc := `{"id": 2, "email": "bob@company.com", "department": "Engineering", "salary": 95000.00}`
 
-	// IMPORTANTE: Ao atualizar, use InsertRow para manter todos os índices consistentes
-	err := engine.InsertRow("employees", newDoc, map[string]types.Comparable{
+	// IMPORTANTE: Ao atualizar, use UpsertRow para manter todos os índices consistentes.
+	// InsertRow é insert-only e rejeita chave primária duplicada.
+	err := engine.UpsertRow("employees", newDoc, map[string]types.Comparable{
 		"id":         types.IntKey(2),
 		"email":      types.VarcharKey("bob@company.com"),
 		"department": types.VarcharKey("Engineering"),

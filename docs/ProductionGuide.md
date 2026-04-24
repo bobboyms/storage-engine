@@ -80,8 +80,8 @@ O engine NÃO expõe metrics hoje. Você precisa instrumentar na sua camada. Mí
 | Latência p99 do `Put()` | Com SyncEveryWrite, latência = fsync. Picos = disk lento |
 | Latência p99 do `Get()` | BufferPool cache miss implica disk read |
 | BufferPool hit rate | Se < 80%, buffer pool pequeno pro workload |
-| Tamanho do WAL | Cresce indefinidamente — implementa rotação manual periodic |
-| Recovery duration on startup | Cresce com WAL — se > N segundos, monitore rotação/compactação do WAL |
+| Tamanho do WAL ativo + segmentos | Deve ficar limitado por `MaxSegmentBytes`, checkpoint e `RetentionSegments` |
+| Recovery duration on startup | Deve acompanhar o WAL desde o último checkpoint; monitore se crescer |
 
 ### Erros que DEVEM gerar alerta
 
@@ -100,10 +100,10 @@ O engine NÃO expõe metrics hoje. Você precisa instrumentar na sua camada. Mí
 - Replay idempotente do WAL (tree.Upsert / heap.Write com novo RecordID)
 - Tree e heap convergem pra estado correto após replay
 - Resultado é CORRETO pra uso normal
+- `FuzzyCheckpoint()` grava registro de checkpoint, rotaciona o WAL e remove segmentos antigos já cobertos pelo checkpoint.
 
 **O que NÃO fazemos:**
 - **Undo phase** (rollback de transações não-commitadas). Hoje assumimos commit-por-Put. Se seu caso de uso envolve transações explícitas com rollback pós-crash, esse engine NÃO serve.
-- **Checkpoint fuzzy completo** ainda não existe. `CreateCheckpoint()` hoje só força flush durável do estado page-based; recovery continua WAL-only.
 - **Page-level redo via pageLSN** — infra instalada (heap v2 escreve pageLSN), mas recovery não lê ainda (faz logical redo idempotente). Orfandos de heap são reciclados por `Vacuum`.
 
 ### Concorrência
@@ -122,7 +122,7 @@ O engine NÃO expõe metrics hoje. Você precisa instrumentar na sua camada. Mí
 ### Operacional
 
 - **Backup consistente**: `se.Close()` → copiar o diretório inteiro → reabrir. **NÃO** copie com engine rodando sem snapshot do FS.
-- **WAL cresce indefinidamente** — implementa rotação/arquivamento no seu lado
+- **WAL lifecycle**: `wal.DefaultOptions()` habilita rotação por tamanho (`MaxSegmentBytes`) e retenção segura (`RetentionSegments`). Configure `ArchiveDir` se quiser arquivar segmentos removidos; restaure com `wal.RestoreArchivedSegments`.
 - **Key rotation da master key**: `keystore.RotateMasterKey` suportado sem reescrever dados (apenas re-wrap das DEKs)
 
 ---
@@ -154,9 +154,7 @@ go test ./pkg/btree/v2/ -race -run Concurrent
 
 | Feature | Prioridade | Esforço |
 |---|---|---|
-| Fuzzy checkpoint (remove race do v1) | 🟡 média | 1 semana |
 | Page-level redo com pageLSN no Recover | 🟡 média | 1 semana |
-| WAL rotation/archiving | 🟡 média | 3-5 dias |
 | Hardening do latch crabbing em variable-key | 🟢 baixa | 1-2 semanas |
 | Backup/restore API | 🟢 baixa | 1 semana |
 | Metrics/observabilidade built-in | 🟢 baixa | 1-2 semanas |

@@ -236,3 +236,78 @@ func TestFuzzyCheckpoint_MultipleCheckpoints(t *testing.T) {
 		t.Fatalf("último checkpoint LSN esperado >= 9, got %d", ckLSN)
 	}
 }
+
+func TestFuzzyCheckpoint_RotatesAndTruncatesWALSafely(t *testing.T) {
+	dir := t.TempDir()
+	tableName := "accounts"
+	heapPath := filepath.Join(dir, tableName+".heap")
+	walPath := filepath.Join(dir, "wal.log")
+
+	open := func(t *testing.T) *StorageEngine {
+		t.Helper()
+		hm, err := NewHeapForTable(HeapFormatV2, heapPath)
+		if err != nil {
+			t.Fatalf("criar heap: %v", err)
+		}
+		meta := NewTableMenager()
+		if err := meta.NewTable(tableName, []Index{
+			{Name: "id", Primary: true, Type: TypeInt},
+		}, 0, hm); err != nil {
+			t.Fatalf("criar tabela: %v", err)
+		}
+		opts := wal.DefaultOptions()
+		opts.MaxSegmentBytes = 1
+		opts.RetentionSegments = 0
+		walWriter, err := wal.NewWALWriter(walPath, opts)
+		if err != nil {
+			t.Fatalf("criar WAL: %v", err)
+		}
+		se, err := NewProductionStorageEngine(meta, walWriter)
+		if err != nil {
+			walWriter.Close()
+			t.Fatalf("criar engine: %v", err)
+		}
+		return se
+	}
+
+	se := open(t)
+	for i := 1; i <= 3; i++ {
+		if err := se.Put(tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+	if err := se.FuzzyCheckpoint(); err != nil {
+		t.Fatalf("checkpoint 1: %v", err)
+	}
+	for i := 4; i <= 6; i++ {
+		if err := se.Put(tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+	if err := se.FuzzyCheckpoint(); err != nil {
+		t.Fatalf("checkpoint 2: %v", err)
+	}
+	if err := se.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	paths, err := wal.SegmentPaths(walPath)
+	if err != nil {
+		t.Fatalf("SegmentPaths: %v", err)
+	}
+	if len(paths) >= 8 {
+		t.Fatalf("WAL não foi truncado; segmentos=%v", paths)
+	}
+
+	recovered := open(t)
+	defer recovered.Close()
+	for i := 1; i <= 6; i++ {
+		_, found, err := recovered.Get(tableName, "id", types.IntKey(i))
+		if err != nil {
+			t.Fatalf("Get %d: %v", i, err)
+		}
+		if !found {
+			t.Fatalf("registro %d não recuperado após truncate de WAL", i)
+		}
+	}
+}

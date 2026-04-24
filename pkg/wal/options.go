@@ -46,6 +46,20 @@ type Options struct {
 	// pagestore.PageFile; headers físicos de página ficam em claro para
 	// validação de integridade, mas entries lógicas do WAL não ficam.
 	Cipher crypto.Cipher
+
+	// MaxSegmentBytes habilita rotação automática do WAL quando o arquivo
+	// ativo atinge este tamanho. Zero ou negativo desliga rotação.
+	MaxSegmentBytes int64
+
+	// RetentionSegments define quantos segmentos antigos, já cobertos por
+	// checkpoint, devem permanecer no diretório ativo após truncate.
+	// Segmentos necessários para recovery desde o último checkpoint nunca
+	// são removidos por essa política.
+	RetentionSegments int
+
+	// ArchiveDir, quando configurado, recebe uma cópia dos segmentos antes
+	// de eles serem removidos do diretório ativo.
+	ArchiveDir string
 }
 
 // DefaultOptions retorna uma configuração segura por padrão:
@@ -64,6 +78,8 @@ func DefaultOptions() Options {
 		SyncPolicy:           SyncEveryWrite,
 		SyncIntervalDuration: 200 * time.Millisecond, // só aplicável a SyncInterval
 		SyncBatchBytes:       1 * 1024 * 1024,        // só aplicável a SyncBatch
+		MaxSegmentBytes:      64 * 1024 * 1024,
+		RetentionSegments:    1,
 	}
 }
 
@@ -77,5 +93,7 @@ func PerformanceOptions() Options {
 		SyncPolicy:           SyncInterval,
 		SyncIntervalDuration: 200 * time.Millisecond,
 		SyncBatchBytes:       1 * 1024 * 1024,
+		MaxSegmentBytes:      64 * 1024 * 1024,
+		RetentionSegments:    1,
 	}
 }

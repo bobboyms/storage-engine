@@ -64,6 +64,10 @@ func (se *StorageEngine) FuzzyCheckpoint() error {
 		return fmt.Errorf("fuzzy checkpoint: escrever registro WAL: %w", err)
 	}
 
+	if err := se.WAL.CheckpointLifecycle(beginLSN); err != nil {
+		return fmt.Errorf("fuzzy checkpoint: lifecycle WAL: %w", err)
+	}
+
 	return nil
 }
 

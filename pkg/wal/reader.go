@@ -25,11 +25,14 @@ var (
 // Acumula bytes das páginas num buffer interno e parseia entries conforme
 // aparecem completos; entries que cruzam páginas são remontados sem problema.
 type WALReader struct {
-	pf            *pagestore.PageFile
-	nextPageID    pagestore.PageID // próxima página a carregar no buffer
-	buffer        []byte           // bytes carregados mas ainda não consumidos
+	pf             *pagestore.PageFile
+	nextPageID     pagestore.PageID // próxima página a carregar no buffer
+	buffer         []byte           // bytes carregados mas ainda não consumidos
 	usableBodySize int
-	exhausted     bool // true quando já lemos todas as páginas do pagestore
+	exhausted      bool // true quando já lemos todas as páginas de todos os segmentos
+	paths          []string
+	pathIndex      int
+	cipher         crypto.Cipher
 }
 
 // NewWALReader cria um leitor sem TDE.
@@ -43,10 +46,31 @@ func NewWALReader(path string) (*WALReader, error) {
 // Falha com erro se o arquivo não existe (ao contrário do writer, que
 // cria). Semântica esperada: leitor só trabalha com WAL existente.
 func NewWALReaderWithCipher(path string, cipher crypto.Cipher) (*WALReader, error) {
-	if _, err := osStat(path); err != nil {
+	paths, err := SegmentPaths(path)
+	if err != nil {
+		if _, statErr := osStat(path); statErr != nil {
+			return nil, statErr
+		}
 		return nil, err
 	}
-	pf, err := pagestore.NewPageFile(path, cipher)
+	if len(paths) == 0 {
+		if _, err := osStat(path); err != nil {
+			return nil, err
+		}
+		paths = []string{path}
+	}
+	return newWALReaderForPaths(paths, cipher)
+}
+
+func newSinglePathReader(path string, cipher crypto.Cipher) (*WALReader, error) {
+	return newWALReaderForPaths([]string{path}, cipher)
+}
+
+func newWALReaderForPaths(paths []string, cipher crypto.Cipher) (*WALReader, error) {
+	if len(paths) == 0 {
+		return nil, os.ErrNotExist
+	}
+	pf, err := pagestore.NewPageFile(paths[0], cipher)
 	if err != nil {
 		return nil, fmt.Errorf("wal: abrir page file: %w", err)
 	}
@@ -55,6 +79,8 @@ func NewWALReaderWithCipher(path string, cipher crypto.Cipher) (*WALReader, erro
 		pf:             pf,
 		nextPageID:     1, // pageID 0 é reservado pelo pagestore
 		usableBodySize: pf.UsableBodySize(),
+		paths:          paths,
+		cipher:         cipher,
 	}, nil
 }
 
@@ -142,8 +168,13 @@ func (r *WALReader) loadNextPage() (bool, error) {
 
 	numPages := r.pf.NumPages()
 	if uint64(r.nextPageID) >= numPages {
-		r.exhausted = true
-		return false, nil
+		if err := r.openNextSegment(); err != nil {
+			return false, err
+		}
+		if r.exhausted {
+			return false, nil
+		}
+		return r.loadNextPage()
 	}
 
 	page, err := r.pf.ReadPage(r.nextPageID)
@@ -179,7 +210,32 @@ func (r *WALReader) loadNextPage() (bool, error) {
 	return true, nil
 }
 
+func (r *WALReader) openNextSegment() error {
+	if r.pathIndex+1 >= len(r.paths) {
+		r.exhausted = true
+		return nil
+	}
+	if r.pf != nil {
+		if err := r.pf.Close(); err != nil {
+			return err
+		}
+	}
+	r.pathIndex++
+	pf, err := pagestore.NewPageFile(r.paths[r.pathIndex], r.cipher)
+	if err != nil {
+		r.exhausted = true
+		return fmt.Errorf("wal: abrir segmento %s: %w", r.paths[r.pathIndex], err)
+	}
+	r.pf = pf
+	r.nextPageID = 1
+	r.usableBodySize = pf.UsableBodySize()
+	return nil
+}
+
 // Close fecha o page file.
 func (r *WALReader) Close() error {
+	if r.pf == nil {
+		return nil
+	}
 	return r.pf.Close()
 }

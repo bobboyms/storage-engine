@@ -3,6 +3,8 @@ package wal
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +52,8 @@ type WALWriter struct {
 
 	// Estado pra SyncBatch
 	batchBytes int64
+	// Indica se o segmento ativo contém pelo menos uma entrada completa.
+	segmentHasEntries bool
 
 	// Controle de threads
 	done   chan struct{}
@@ -128,19 +132,26 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	if err := w.appendBytes(buf); err != nil {
 		return err
 	}
+	w.segmentHasEntries = true
 
 	w.batchBytes += int64(len(buf))
 
 	// Política de sync
 	switch w.options.SyncPolicy {
 	case SyncEveryWrite:
-		return w.syncLocked()
+		if err := w.syncLocked(); err != nil {
+			return err
+		}
+		return w.maybeRotateLocked()
 	case SyncBatch:
 		if w.batchBytes >= w.options.SyncBatchBytes {
-			return w.syncLocked()
+			if err := w.syncLocked(); err != nil {
+				return err
+			}
+			return w.maybeRotateLocked()
 		}
 	}
-	return nil
+	return w.maybeRotateLocked()
 }
 
 // appendBytes escreve `data` na stream lógica, alocando páginas conforme
@@ -208,6 +219,7 @@ func (w *WALWriter) adoptLastPage() error {
 	if int(w.currentOffset) > w.usableBodySize {
 		return fmt.Errorf("wal: bytesUsed %d excede usableBody %d", bytesUsed, w.usableBodySize-walPageHeaderSize)
 	}
+	w.segmentHasEntries = bytesUsed > 0 || w.pf.NumPages() > 2
 	w.currentPageDirty = false
 	return nil
 }
@@ -224,6 +236,57 @@ func (w *WALWriter) flushCurrentPageLocked() error {
 	}
 	w.currentPageDirty = false
 	return nil
+}
+
+func (w *WALWriter) maybeRotateLocked() error {
+	if w.options.MaxSegmentBytes <= 0 || !w.segmentHasEntries {
+		return nil
+	}
+	if err := w.flushCurrentPageLocked(); err != nil {
+		return err
+	}
+	info, err := os.Stat(w.pf.Path())
+	if err != nil {
+		return err
+	}
+	if info.Size() < w.options.MaxSegmentBytes {
+		return nil
+	}
+	return w.rotateActiveLocked()
+}
+
+func (w *WALWriter) rotateActiveLocked() error {
+	if !w.segmentHasEntries {
+		return nil
+	}
+	if err := w.syncLocked(); err != nil {
+		return err
+	}
+
+	base := w.pf.Path()
+	nextPath, err := nextSegmentPath(base)
+	if err != nil {
+		return err
+	}
+	if err := w.pf.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(base, nextPath); err != nil {
+		return fmt.Errorf("wal: rotate rename: %w", err)
+	}
+	if err := fsyncDir(filepath.Dir(base)); err != nil {
+		return err
+	}
+
+	pf, err := pagestore.NewPageFile(base, w.options.Cipher)
+	if err != nil {
+		return fmt.Errorf("wal: abrir novo segmento ativo: %w", err)
+	}
+	w.pf = pf
+	w.usableBodySize = pf.UsableBodySize()
+	w.segmentHasEntries = false
+	w.batchBytes = 0
+	return w.allocateNewPage()
 }
 
 // Sync força a persistência em disco: escreve a página atual + fsync.
@@ -291,6 +354,22 @@ func (w *WALWriter) WriteCheckpointRecord(beginLSN uint64) error {
 		return fmt.Errorf("wal: escrever checkpoint record: %w", err)
 	}
 	return w.Sync()
+}
+
+// CheckpointLifecycle rotaciona o WAL após um checkpoint e remove segmentos
+// antigos já cobertos por checkpointLSN, respeitando archive/retention.
+func (w *WALWriter) CheckpointLifecycle(checkpointLSN uint64) error {
+	w.mu.Lock()
+	base := w.pf.Path()
+	err := w.rotateActiveLocked()
+	archiveDir := w.options.ArchiveDir
+	retentionSegments := w.options.RetentionSegments
+	cipher := w.options.Cipher
+	w.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return ArchiveAndTruncate(base, cipher, archiveDir, checkpointLSN, retentionSegments)
 }
 
 func (w *WALWriter) backgroundSync() {

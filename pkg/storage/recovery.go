@@ -330,25 +330,36 @@ func (se *StorageEngine) redoMultiInsertEntry(entry *wal.WALEntry, payload []byt
 		return nil
 	}
 
-	offset, err := table.Heap.Write(docBytes, entry.Header.LSN, -1)
+	table.Lock()
+	defer table.Unlock()
+
+	prevOffset := int64(-1)
+	primary, primaryKey, err := primaryIndexAndKey(table, keys)
+	if err == nil {
+		if oldOffset, found, getErr := primary.Tree.Get(primaryKey); getErr != nil {
+			return fmt.Errorf("primary index get failed during recovery: %w", getErr)
+		} else if found {
+			prevOffset = oldOffset
+		}
+	}
+
+	offset, err := table.Heap.Write(docBytes, entry.Header.LSN, prevOffset)
 	if err != nil {
 		return fmt.Errorf("heap write failed: %w", err)
 	}
 
-	for indexName, key := range keys {
+	if err := applyIndexPointers(table, keys, offset); err != nil {
+		return err
+	}
+
+	if prevOffset != -1 {
+		if err := table.Heap.Delete(prevOffset, entry.Header.LSN); err != nil && !isChainEndErr(err) {
+			return fmt.Errorf("heap delete previous version during recovery failed: %w", err)
+		}
+	}
+
+	for indexName := range keys {
 		lookupKey := appliedLSNKey(tableName, indexName)
-		if loadedLSNs[lookupKey] >= entry.Header.LSN {
-			continue
-		}
-
-		index, err := table.GetIndex(indexName)
-		if err != nil {
-			continue
-		}
-		if err := index.Tree.Replace(key, offset); err != nil {
-			return fmt.Errorf("failed to update index %s during recovery: %w", indexName, err)
-		}
-
 		loadedLSNs[lookupKey] = entry.Header.LSN
 		se.appliedLSN.MarkApplied(tableName, indexName, entry.Header.LSN)
 	}

@@ -2,13 +2,13 @@ package wal
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
 func TestWALWriter_IntervalSync(t *testing.T) {
-	tmpFile := "test_wal_interval.log"
-	defer os.Remove(tmpFile)
+	tmpFile := filepath.Join(t.TempDir(), "test_wal_interval.log")
 
 	payload := []byte("some data")
 	crc := CalculateCRC32(payload)
@@ -57,8 +57,7 @@ func TestWALWriter_IntervalSync(t *testing.T) {
 }
 
 func TestWALWriter_BatchSync(t *testing.T) {
-	tmpFile := "test_wal_batch.log"
-	defer os.Remove(tmpFile)
+	tmpFile := filepath.Join(t.TempDir(), "test_wal_batch.log")
 
 	opts := Options{
 		SyncPolicy:     SyncBatch,
@@ -106,8 +105,7 @@ func TestWALWriter_BatchSync(t *testing.T) {
 }
 
 func TestWALWriter_SyncError(t *testing.T) {
-	tmpFile := "test_wal_sync_error.log"
-	defer os.Remove(tmpFile)
+	tmpFile := filepath.Join(t.TempDir(), "test_wal_sync_error.log")
 
 	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
 	w.pf.Close() // Force future operations to fail via the page file
@@ -124,8 +122,7 @@ func TestWALWriter_SyncError(t *testing.T) {
 func TestWALWriter_BackgroundSyncPanic(t *testing.T) {
 	// backgroundSync calls w.Sync(). If file is closed, it might log or fail quietly.
 	// We just want to cover the code path.
-	tmpFile := "test_wal_bg_sync.log"
-	defer os.Remove(tmpFile)
+	tmpFile := filepath.Join(t.TempDir(), "test_wal_bg_sync.log")
 
 	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncInterval, SyncIntervalDuration: 10 * time.Millisecond})
 	time.Sleep(20 * time.Millisecond)
@@ -133,8 +130,7 @@ func TestWALWriter_BackgroundSyncPanic(t *testing.T) {
 }
 
 func TestWALWriter_CloseSyncError(t *testing.T) {
-	path := "test_close_sync.log"
-	defer os.Remove(path)
+	path := filepath.Join(t.TempDir(), "test_close_sync.log")
 
 	w, _ := NewWALWriter(path, DefaultOptions())
 	entry := AcquireEntry()
