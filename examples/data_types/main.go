@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -184,7 +182,7 @@ func main() {
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		fmt.Printf("Erro: %v\n", err)
 		os.Exit(1)

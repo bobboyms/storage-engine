@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -18,7 +16,7 @@ func TestStorageEngine_Durability(t *testing.T) {
 	// Usando tabela unica para evitar conflitos de checkpoint fantasma
 	tableName := "users_durability_unique"
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -56,7 +54,7 @@ func TestStorageEngine_Durability(t *testing.T) {
 	}
 
 	// 3. Simula Crash/Restart
-	hm2, err := heap.NewHeapManager(heapPath)
+	hm2, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}

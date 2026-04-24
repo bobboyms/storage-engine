@@ -23,6 +23,7 @@ const (
 	EntryCommit                       // 5: Commit
 	EntryAbort                        // 6: Rollback
 	EntryMultiInsert                  // 7: Insert with multiple indices
+	EntryCheckpoint                   // 8: Checkpoint record (fuzzy checkpoint begin LSN)
 )
 
 // WALHeader cabeçalho de 24 bytes para cada entrada

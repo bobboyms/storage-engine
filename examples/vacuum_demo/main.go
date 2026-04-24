@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -35,7 +33,7 @@ func main() {
 
 	// Heap Manager
 	heapPath := filepath.Join(tmpDir, "products_heap")
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		log.Fatalf("Failed to create Heap: %v", err)
 	}
@@ -92,7 +90,7 @@ func main() {
 	// Real verification is checking if keys exist in tree.
 	table, _ := meta.GetTableByName("products")
 	idx, _ := table.GetIndex("id")
-	if _, found := idx.Tree.Get(types.IntKey(2)); !found {
+	if _, found, _ := idx.Tree.Get(types.IntKey(2)); !found {
 		fmt.Println("❌ ERROR: Product 2 was prematurely removed from index!")
 	} else {
 		fmt.Println("✅ PRESERVED: Product 2 index entry still exists (correct).")
@@ -121,13 +119,13 @@ func main() {
 	}
 
 	// 10. Verify Removal
-	if _, found := idx.Tree.Get(types.IntKey(2)); found {
+	if _, found, _ := idx.Tree.Get(types.IntKey(2)); found {
 		fmt.Println("❌ ERROR: Product 2 should have been removed!")
 	} else {
 		fmt.Println("✅ RECLAIMED: Product 2 gone from index.")
 	}
 
-	if _, found := idx.Tree.Get(types.IntKey(1)); !found {
+	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
 		fmt.Println("❌ ERROR: Product 1 (Laptop) is missing!")
 	} else {
 		fmt.Println("✅ PRESERVED: Product 1 (Laptop) is safe.")

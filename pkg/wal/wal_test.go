@@ -100,8 +100,17 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.BufferSize <= 0 {
 		t.Error("Expected positive BufferSize")
 	}
+	// Mudança pra produção: default agora é SyncEveryWrite (durabilidade estrita).
+	// Workloads que aceitam perda usam PerformanceOptions() explicitamente.
+	if opts.SyncPolicy != SyncEveryWrite {
+		t.Error("Expected SyncEveryWrite as default (production-safe)")
+	}
+}
+
+func TestPerformanceOptions(t *testing.T) {
+	opts := PerformanceOptions()
 	if opts.SyncPolicy != SyncInterval {
-		t.Error("Expected SyncInterval as default")
+		t.Error("PerformanceOptions deve usar SyncInterval")
 	}
 	if opts.SyncIntervalDuration <= 0 {
 		t.Error("Expected positive SyncIntervalDuration")

@@ -1,103 +1,185 @@
 package wal
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/bobboyms/storage-engine/pkg/crypto"
+	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
+
+// osStat é um alias pra facilitar mocks; por ora é só os.Stat.
+var osStat = os.Stat
 
 var (
 	ErrInvalidMagic      = errors.New("arquivo WAL inválido: magic number incorreto")
 	ErrChecksumMismatch  = errors.New("corrupção de dados: checksum CRC32 inválido")
 	ErrInvalidPayloadLen = errors.New("tamanho de payload inválido ou excessivo")
+	ErrDecryptFailed     = errors.New("falha ao decifrar payload do WAL (chave inválida ou dado adulterado)")
 )
 
-// WALReader lê entradas do log sequencialmente
+// WALReader lê entradas sequenciais do log. Backend: pagestore.PageFile.
+// Acumula bytes das páginas num buffer interno e parseia entries conforme
+// aparecem completos; entries que cruzam páginas são remontados sem problema.
 type WALReader struct {
-	file   *os.File
-	offset int64
+	pf            *pagestore.PageFile
+	nextPageID    pagestore.PageID // próxima página a carregar no buffer
+	buffer        []byte           // bytes carregados mas ainda não consumidos
+	usableBodySize int
+	exhausted     bool // true quando já lemos todas as páginas do pagestore
 }
 
-// NewWALReader cria um leitor para um arquivo de log existente
+// NewWALReader cria um leitor sem TDE.
 func NewWALReader(path string) (*WALReader, error) {
-	f, err := os.Open(path)
-	if err != nil {
+	return NewWALReaderWithCipher(path, nil)
+}
+
+// NewWALReaderWithCipher cria um leitor que decifra páginas via pagestore.
+// Passe nil para `cipher` pra ler logs em claro.
+//
+// Falha com erro se o arquivo não existe (ao contrário do writer, que
+// cria). Semântica esperada: leitor só trabalha com WAL existente.
+func NewWALReaderWithCipher(path string, cipher crypto.Cipher) (*WALReader, error) {
+	if _, err := osStat(path); err != nil {
 		return nil, err
+	}
+	pf, err := pagestore.NewPageFile(path, cipher)
+	if err != nil {
+		return nil, fmt.Errorf("wal: abrir page file: %w", err)
 	}
 
 	return &WALReader{
-		file: f,
+		pf:             pf,
+		nextPageID:     1, // pageID 0 é reservado pelo pagestore
+		usableBodySize: pf.UsableBodySize(),
 	}, nil
 }
 
-// ReadEntry lê a próxima entrada do log.
-// Retorna io.EOF quando não há mais dados.
+// ReadEntry lê a próxima entrada. Retorna io.EOF quando esgotou.
 func (r *WALReader) ReadEntry() (*WALEntry, error) {
-	// 1. Ler Header (24 bytes)
-	headerBuf := make([]byte, HeaderSize)
-	n, err := io.ReadFull(r.file, headerBuf)
-	if err == io.EOF {
-		return nil, io.EOF
-	}
-	if err != nil {
-		return nil, fmt.Errorf("erro ao ler header: %w", err)
-	}
-	if n != HeaderSize {
-		return nil, io.ErrUnexpectedEOF
+	// 1. Garante que temos bytes suficientes pra um header (24 bytes)
+	for len(r.buffer) < HeaderSize {
+		loaded, err := r.loadNextPage()
+		if err != nil {
+			return nil, err
+		}
+		if !loaded {
+			// Sem mais páginas
+			if len(r.buffer) == 0 {
+				return nil, io.EOF
+			}
+			return nil, io.ErrUnexpectedEOF
+		}
 	}
 
-	// 2. Decodificar e Validar Header
+	// 2. Parseia e valida header
 	var header WALHeader
-	header.Decode(headerBuf)
+	header.Decode(r.buffer[:HeaderSize])
 
 	if header.Magic != WALMagic {
 		return nil, ErrInvalidMagic
 	}
 
-	if header.PayloadLen == 0 {
-		// Entrada vazia? Apenas retornamos (mas verificamos checksum 0)
-		return &WALEntry{Header: header}, nil
-	}
-
-	// Proteção contra alocação absurda (ex: leitura de lixo como tamanho)
-	if header.PayloadLen > 1024*1024*1024 { // 1GB limit
+	// Proteção contra alocação absurda
+	if header.PayloadLen > 1024*1024*1024 {
 		return nil, ErrInvalidPayloadLen
 	}
 
-	// 3. Ler Payload
-	// Usamos o pool, mas precisamos garantir que o chamador vai liberar (ReleaseEntry)
+	if header.PayloadLen == 0 {
+		r.buffer = r.buffer[HeaderSize:]
+		return &WALEntry{Header: header}, nil
+	}
+
+	total := HeaderSize + int(header.PayloadLen)
+
+	// 3. Garante que temos o payload completo no buffer
+	for len(r.buffer) < total {
+		loaded, err := r.loadNextPage()
+		if err != nil {
+			return nil, err
+		}
+		if !loaded {
+			return nil, io.ErrUnexpectedEOF // payload truncado
+		}
+	}
+
+	// 4. Valida checksum do payload
+	payload := r.buffer[HeaderSize:total]
+	if !ValidateCRC32(payload, header.CRC32) {
+		return nil, ErrChecksumMismatch
+	}
+
+	// 5. Constrói entry (copia payload pra não compartilhar buffer interno)
 	entry := AcquireEntry()
 	entry.Header = header
-
-	// Garante capacidade
 	if uint32(cap(entry.Payload)) < header.PayloadLen {
 		entry.Payload = make([]byte, header.PayloadLen)
 	} else {
 		entry.Payload = entry.Payload[:header.PayloadLen]
 	}
+	copy(entry.Payload, payload)
 
-	n, err = io.ReadFull(r.file, entry.Payload)
-	if err != nil {
-		// Se falhar aqui, devolvemos ao pool antes de retornar erro para evitar leak
-		ReleaseEntry(entry)
-		if err == io.EOF {
-			return nil, io.ErrUnexpectedEOF // Payload truncado
-		}
-		return nil, err
-	}
-
-	// 4. Validar Checksum
-	if !ValidateCRC32(entry.Payload, header.CRC32) {
-		ReleaseEntry(entry)
-		return nil, ErrChecksumMismatch
-	}
-
-	r.offset += int64(HeaderSize + header.PayloadLen)
+	// 6. Consome bytes do buffer
+	r.buffer = r.buffer[total:]
 	return entry, nil
 }
 
-// Close fecha o arquivo
+// loadNextPage carrega a próxima página no buffer. Retorna (true, nil)
+// se carregou; (false, nil) se não há mais páginas; (false, err) em erro.
+//
+// Semântica de erros:
+//   - PageOutOfRange (i.e., passamos do fim) → EOF limpo, sem erro
+//   - Checksum mismatch → ErrChecksumMismatch (possível tamper/bit-flip)
+//   - Decrypt failed → ErrDecryptFailed (chave errada ou tamper autenticado)
+//   - Magic inválido → ErrInvalidMagic (não é um WAL ou corrompido cedo)
+func (r *WALReader) loadNextPage() (bool, error) {
+	if r.exhausted {
+		return false, nil
+	}
+
+	numPages := r.pf.NumPages()
+	if uint64(r.nextPageID) >= numPages {
+		r.exhausted = true
+		return false, nil
+	}
+
+	page, err := r.pf.ReadPage(r.nextPageID)
+	if err != nil {
+		r.exhausted = true
+		// Mapeia erros de pagestore pra erros do WAL, preservando a
+		// categoria semântica (importante pra monitoring/alerting).
+		switch {
+		case errors.Is(err, pagestore.ErrPageOutOfRange):
+			return false, nil // EOF limpo
+		case errors.Is(err, pagestore.ErrChecksumMismatch):
+			return false, ErrChecksumMismatch
+		case errors.Is(err, pagestore.ErrDecryptFailed):
+			return false, fmt.Errorf("%w: %v", ErrDecryptFailed, err)
+		case errors.Is(err, pagestore.ErrInvalidMagic):
+			return false, ErrInvalidMagic
+		default:
+			return false, fmt.Errorf("wal: read page %d: %w", r.nextPageID, err)
+		}
+	}
+
+	bytesUsed := binary.LittleEndian.Uint16(page.Body()[0:2])
+	if int(bytesUsed) > r.usableBodySize-walPageHeaderSize {
+		r.exhausted = true
+		return false, fmt.Errorf("wal: bytesUsed %d na página %d excede limite", bytesUsed, r.nextPageID)
+	}
+
+	if bytesUsed > 0 {
+		start := walPageHeaderSize
+		r.buffer = append(r.buffer, page.Body()[start:start+int(bytesUsed)]...)
+	}
+	r.nextPageID++
+	return true, nil
+}
+
+// Close fecha o page file.
 func (r *WALReader) Close() error {
-	return r.file.Close()
+	return r.pf.Close()
 }

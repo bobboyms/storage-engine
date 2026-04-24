@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -25,7 +24,7 @@ func TestNewTableMenager_Creation(t *testing.T) {
 func TestNewTable_Success_SinglePrimaryKey(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, err := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -51,7 +50,7 @@ func TestNewTable_Success_SinglePrimaryKey(t *testing.T) {
 func TestNewTable_Success_MultipleIndices(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
@@ -86,7 +85,7 @@ func TestNewTable_Success_MultipleIndices(t *testing.T) {
 func TestNewTable_Error_NoPrimaryKey(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "email", Primary: false, Type: storage.TypeVarchar},
@@ -106,7 +105,7 @@ func TestNewTable_Error_NoPrimaryKey(t *testing.T) {
 func TestNewTable_Error_MultiplePrimaryKeys(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
@@ -126,7 +125,7 @@ func TestNewTable_Error_MultiplePrimaryKeys(t *testing.T) {
 func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	// Primeira criação - deve funcionar
 	err := mgr.NewTable("users", []storage.Index{
@@ -166,7 +165,7 @@ func TestGetTableByName_Error_NotFound(t *testing.T) {
 func TestGetIndexByName_Error_IndexNotFound(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
@@ -188,7 +187,7 @@ func TestTableManager_Integration(t *testing.T) {
 
 	// Cria storage engine
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	// Cria tabela
 	err := mgr.NewTable("users", []storage.Index{
@@ -270,7 +269,7 @@ func TestGetIndexByName_Error_TableNotFound(t *testing.T) {
 func TestTable_LockCoverage(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 	table, _ := mgr.GetTableByName("users")
 
@@ -286,7 +285,7 @@ func TestTable_LockCoverage(t *testing.T) {
 func TestGetIndexes(t *testing.T) {
 	mgr := storage.NewTableMenager()
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},

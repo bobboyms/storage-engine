@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -24,7 +23,7 @@ func main() {
 	os.Remove("example.heap")
 
 	// 1. Criar Heap Manager
-	hm, err := heap.NewHeapManager("example.heap")
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, "example.heap", nil)
 	if err != nil {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		return

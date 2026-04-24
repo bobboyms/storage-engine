@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
-	"os"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"os"
 )
 
 /*
@@ -44,7 +42,7 @@ func main() {
 	// ========================================
 	fmt.Println("=== Cenário 1: Usando Put() ===")
 
-	engine1, _ := setupEngine("heap1.heap", "wal1.wal")
+	engine1 := setupEngine("heap1.heap", "wal1.wal")
 
 	// Inserir usuário com 2 índices usando Put()
 	doc := `{"id": 1, "email": "alice@example.com", "name": "Alice"}`
@@ -65,7 +63,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Cenário 2: Usando InsertRow() ===")
 
-	engine2, _ := setupEngine("heap2.heap", "wal2.wal")
+	engine2 := setupEngine("heap2.heap", "wal2.wal")
 
 	// Inserir usuário com InsertRow() - atualiza múltiplos índices atomicamente
 	doc2 := `{"id": 2, "email": "bob@example.com", "name": "Bob"}`
@@ -90,8 +88,8 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Cenário 3: Comparação em escala ===")
 
-	engine3, _ := setupEngine("heap3.heap", "wal3.wal")
-	engine4, _ := setupEngine("heap4.heap", "wal4.wal")
+	engine3 := setupEngine("heap3.heap", "wal3.wal")
+	engine4 := setupEngine("heap4.heap", "wal4.wal")
 
 	users := []struct {
 		id    int64
@@ -141,7 +139,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Cenário 4: Verificação dos Índices ===")
 
-	engine5, _ := setupEngine("heap5.heap", "wal5.wal")
+	engine5 := setupEngine("heap5.heap", "wal5.wal")
 
 	doc5 := `{"id": 100, "email": "test@example.com", "name": "Test User"}`
 	engine5.InsertRow("users", doc5, map[string]types.Comparable{
@@ -172,8 +170,8 @@ func main() {
 	fmt.Println("- Use InsertRow() quando você tem múltiplos índices para o mesmo documento")
 }
 
-func setupEngine(heapPath, walPath string) (*storage.StorageEngine, *heap.HeapManager) {
-	hm, _ := heap.NewHeapManager(heapPath)
+func setupEngine(heapPath, walPath string) *storage.StorageEngine {
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -184,7 +182,7 @@ func setupEngine(heapPath, walPath string) (*storage.StorageEngine, *heap.HeapMa
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	engine, _ := storage.NewStorageEngine(tableMgr, walWriter)
 
-	return engine, hm
+	return engine
 }
 
 func getFileSize(path string) int64 {

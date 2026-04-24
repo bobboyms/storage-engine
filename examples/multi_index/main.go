@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -148,7 +146,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Comparação de Performance ===")
 
-	fmt.Println(`
+	fmt.Print(`
 ┌─────────────────────────────────────────────────────────────────┐
 │ Cenário: Buscar funcionário por email                          │
 ├─────────────────────────────────────────────────────────────────┤
@@ -169,7 +167,7 @@ func main() {
 	// ========================================
 	fmt.Println("=== Trade-offs de Múltiplos Índices ===")
 
-	fmt.Println(`
+	fmt.Print(`
 ┌──────────────────┬─────────────────────────────────────────────┐
 │ Vantagens        │ Desvantagens                                │
 ├──────────────────┼─────────────────────────────────────────────┤
@@ -223,7 +221,7 @@ Quando NÃO criar índice secundário?
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 
 	tableMgr := storage.NewTableMenager()
 

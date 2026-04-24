@@ -3,8 +3,6 @@ package storage_test
 import (
 	"path/filepath"
 	"testing"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -15,7 +13,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -72,7 +70,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	se.Close()
 
 	// 4. Recovery Test
-	hm2, err := heap.NewHeapManager(heapPath)
+	hm2, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap for restart: %v", err)
 	}
@@ -121,7 +119,7 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -161,7 +159,7 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
 	// 1. Create entry for table "ghost"
-	hm1, _ := heap.NewHeapManager(heapPath)
+	hm1, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	mgr1 := storage.NewTableMenager()
 	mgr1.NewTable("ghost", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm1)
 
@@ -189,7 +187,7 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 func TestInsertRow_InvalidDoc(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Heap first
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)

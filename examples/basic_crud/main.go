@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -31,7 +30,7 @@ func main() {
 	// ========================================
 
 	// Inicializar Heap
-	hm, err := heap.NewHeapManager("data.heap")
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, "data.heap", nil)
 	if err != nil {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		return

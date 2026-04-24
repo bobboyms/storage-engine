@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -169,7 +167,7 @@ func main() {
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("accounts", []storage.Index{

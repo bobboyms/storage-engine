@@ -2,12 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"github.com/bobboyms/storage-engine/pkg/types"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
-	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 func TestVacuum_TombstoneReclamation(t *testing.T) {
@@ -26,7 +24,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 	meta := NewTableMenager() // Typo in codebase
 
 	heapPath := filepath.Join(tmpDir, "users_heap")
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,12 +93,11 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify keys still exist in tree (pointing to tombstones)
-	// (Actually Vacuum removes from tree ONLY if it drops from Heap)
-	// So tree should still have entries.
+	// Verify keys still exist in tree (pointing to tombstones).
+	// O vacuum v2 não reescreve o índice; ele apenas compacta o heap.
 	table, _ := meta.GetTableByName("users")
 	idx, _ := table.GetIndex("id")
-	if _, found := idx.Tree.Get(types.IntKey(1)); !found {
+	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
 		t.Error("Vacuum should have preserved key 1 (visible to active old tx)")
 	}
 
@@ -115,15 +112,61 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 7. Verify keys gone from tree
-	if _, found := idx.Tree.Get(types.IntKey(1)); found {
-		t.Error("Vacuum should have removed key 1")
+	// 7. Verify compacted slots are logically invisíveis.
+	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
+		t.Error("Vacuum v2 should keep key 1 indexed even after reclaiming the slot")
 	}
-	if _, found := idx.Tree.Get(types.IntKey(3)); !found {
+	if _, found, _ := se.Get("users", "id", types.IntKey(1)); found {
+		t.Error("Vacuum should have made key 1 unreachable via engine.Get")
+	}
+	if _, found, _ := idx.Tree.Get(types.IntKey(3)); !found {
 		t.Error("Vacuum should have kept key 3")
 	}
 
 	// 8. Verify Heap Size Reduced
 	// We can check file size of active segment (or all segments)
 	// But simply checking Tree is strong enough proof of logical removal.
+}
+
+func TestDeleteAfterVacuumedSlotIsNoop(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	meta := NewTableMenager()
+	hm, err := NewHeapForTable(HeapFormatV2, filepath.Join(tmpDir, "users_heap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := meta.NewTable("users", []Index{
+		{Name: "id", Type: TypeInt, Primary: true},
+	}, 4, hm); err != nil {
+		t.Fatal(err)
+	}
+
+	se, err := NewStorageEngine(meta, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer se.Close()
+
+	if err := se.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := se.Del("users", "id", types.IntKey(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("first delete should find the key")
+	}
+	if err := se.Vacuum("users"); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err = se.Del("users", "id", types.IntKey(1))
+	if err != nil {
+		t.Fatalf("delete after vacuum should be a no-op, got error: %v", err)
+	}
+	if deleted {
+		t.Fatal("delete after vacuumed slot should report not found")
+	}
 }

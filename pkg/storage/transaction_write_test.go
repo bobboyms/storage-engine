@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -16,7 +14,7 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -87,7 +85,7 @@ func TestWriteTransaction_Rollback(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -135,7 +133,7 @@ func TestWriteTransaction_Delete(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -179,7 +177,7 @@ func TestWriteTransaction_InvalidKeyType(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -212,7 +210,7 @@ func TestWriteTransaction_DoubleCommit(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -256,7 +254,7 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -325,7 +323,7 @@ func TestWriteTransaction_EmptyCommit(t *testing.T) {
 
 func TestWriteTransaction_PutErrors(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := NewHeapForTable(HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
@@ -347,7 +345,7 @@ func TestWriteTransaction_PutErrors(t *testing.T) {
 
 func TestWriteTransaction_DelErrors(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := NewHeapForTable(HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	walPath := filepath.Join(tmpDir, "wal")
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := NewStorageEngine(NewTableMenager(), walWriter)
@@ -372,7 +370,7 @@ func TestWriteTransaction_RollbackWAL(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := NewHeapForTable(HeapFormatV2, heapPath)
 	tableMgr := NewTableMenager()
 	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3, hm)
 
@@ -399,7 +397,7 @@ func TestWriteTransaction_RollbackWAL(t *testing.T) {
 func TestWriteTransaction_DateType(t *testing.T) {
 	// Cover TypeDate case in getTypeFromKey
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := NewHeapForTable(HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := NewTableMenager()
 	tableMgr.NewTable("dates", []Index{{Name: "d", Type: TypeDate, Primary: true}}, 3, hm)
 
@@ -431,7 +429,7 @@ func TestWriteTransaction_CoverageCheat(t *testing.T) {
 	}
 
 	tx := se.BeginWriteTransaction()
-	tx.rollbackWAL(100) // Covers rollbackWAL
+	tx.rollbackWAL() // Covers rollbackWAL
 
 	// Default case in getTypeFromKey
 	dt := getTypeFromKey(dummyKey{})
@@ -442,7 +440,7 @@ func TestWriteTransaction_CoverageCheat(t *testing.T) {
 
 func TestWriteTransaction_DelNonExistent(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := NewHeapForTable(HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := NewTableMenager()
 	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3, hm)
 

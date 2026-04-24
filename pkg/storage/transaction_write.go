@@ -12,9 +12,11 @@ import (
 // WriteTransaction accumulates operations for atomic commit
 type WriteTransaction struct {
 	engine    *StorageEngine
+	txID      uint64
 	writeSet  []writeOp
 	committed bool
 	aborted   bool
+	walBegun  bool
 	mu        sync.Mutex
 }
 
@@ -24,12 +26,14 @@ type writeOp struct {
 	indexName string
 	key       types.Comparable
 	document  string
+	lsn       uint64
 }
 
 // BeginWriteTransaction starts a new write transaction
 func (se *StorageEngine) BeginWriteTransaction() *WriteTransaction {
 	return &WriteTransaction{
 		engine:   se,
+		txID:     se.nextTxID(),
 		writeSet: make([]writeOp, 0),
 	}
 }
@@ -110,31 +114,41 @@ func (tx *WriteTransaction) Commit() error {
 		return fmt.Errorf("transaction already finished")
 	}
 
+	se := tx.engine
 	if len(tx.writeSet) == 0 {
+		if se.WAL != nil {
+			beginLSN := se.lsnTracker.Next()
+			if err := tx.writeWALMarker(wal.EntryBegin, beginLSN); err != nil {
+				return err
+			}
+			tx.walBegun = true
+
+			commitLSN := se.lsnTracker.Next()
+			if err := tx.writeWALMarker(wal.EntryCommit, commitLSN); err != nil {
+				return err
+			}
+		}
 		tx.committed = true
 		return nil
 	}
 
-	se := tx.engine
-	lsn := se.lsnTracker.Next() // Commit LSN? Or one LSN per op?
-	// In strict WAL, every op has LSN.
-	// For transaction atomicity:
-	// 1. Write BEGIN
-	// 2. Write Ops
-	// 3. Write COMMIT
-	// All ops usually share the same TransactionID, or we use standard LSNs.
-	// We will use standard LSNs for ops, making them distinct.
+	beginLSN := se.lsnTracker.Next()
+	for i := range tx.writeSet {
+		tx.writeSet[i].lsn = se.lsnTracker.Next()
+	}
 
 	// 1. WAL Writing (Phase 1: Persistence)
 	if se.WAL != nil {
 		// Write BEGIN
-		if err := tx.writeWALMarker(wal.EntryBegin, lsn); err != nil {
+		if err := tx.writeWALMarker(wal.EntryBegin, beginLSN); err != nil {
 			return err
 		}
+		tx.walBegun = true
 
 		// Write Ops
-		for _, op := range tx.writeSet {
-			opLSN := se.lsnTracker.Next() // Assign unique LSN for each op
+		for i := range tx.writeSet {
+			op := &tx.writeSet[i]
+			opLSN := op.lsn
 
 			var payload []byte
 			var err error
@@ -154,22 +168,23 @@ func (tx *WriteTransaction) Commit() error {
 			}
 
 			if err != nil {
-				tx.rollbackWAL(lsn)
+				_ = tx.rollbackWAL()
 				return err
 			}
 
 			entry := wal.AcquireEntry()
 			entry.Header.Magic = wal.WALMagic
-			entry.Header.Version = 1
+			entry.Header.Version = txAwareWALVersion
 			entry.Header.EntryType = op.opType
 			entry.Header.LSN = opLSN
+			payload = wrapTxPayload(tx.txID, payload)
 			entry.Header.PayloadLen = uint32(len(payload))
 			entry.Header.CRC32 = wal.CalculateCRC32(payload)
 			entry.Payload = append(entry.Payload, payload...)
 
 			if err := se.WAL.WriteEntry(entry); err != nil {
 				wal.ReleaseEntry(entry)
-				tx.rollbackWAL(lsn)
+				_ = tx.rollbackWAL()
 				return fmt.Errorf("wal write failed: %w", err)
 			}
 			wal.ReleaseEntry(entry)
@@ -188,30 +203,26 @@ func (tx *WriteTransaction) Commit() error {
 		// Re-fetch index (safe, consistent with WAL checks)
 		table, _ := se.TableMetaData.GetTableByName(op.tableName)
 		index, _ := table.GetIndex(op.indexName)
-
-		opLSN := se.lsnTracker.Next() // We need to match LSNs from WAL?
-		// Actually, in previous step we burned LSNs. We should have stored them.
-		// For simplicity now, let's assume strict serial execution or just use new LSNs.
-		// CORRECTNESS: We MUST use the LSNs recorded in WAL if we want recovery to match.
-		// BUT: Since we are in memory, we can just generate new logic or re-use.
-		// Let's simplify: We won't re-generate LSNs, we just apply.
-		// Refactoring: We need to store LSNs assigned during WAL phase to reuse here.
-		// However, for this implementation, let's just use a fresh LSN for Heap/Tree application
-		// assuming LSNTracker monotonic increase is enough.
-		// Actually, standard ARIES uses Transaction Table. We are simplifying.
+		opLSN := op.lsn
 
 		// Apply Logic
 		if op.opType == wal.EntryDelete {
 			// Delete logic
-			index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+			err := index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
 				if !exists {
 					return 0, nil
 				}
 				if err := table.Heap.Delete(oldOffset, opLSN); err != nil {
+					if isChainEndErr(err) {
+						return oldOffset, nil
+					}
 					return 0, fmt.Errorf("heap delete failed: %w", err)
 				}
 				return oldOffset, nil
 			})
+			if err != nil {
+				return err
+			}
 		} else {
 			// Insert/Update logic
 			bsonDoc, errBson := JsonToBson(op.document)
@@ -222,7 +233,7 @@ func (tx *WriteTransaction) Commit() error {
 				bsonData = []byte(op.document)
 			}
 
-			index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+			err := index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
 				var prevOffset int64 = -1
 				if exists {
 					prevOffset = oldOffset
@@ -233,7 +244,12 @@ func (tx *WriteTransaction) Commit() error {
 				}
 				return offset, nil
 			})
+			if err != nil {
+				return err
+			}
 		}
+
+		se.appliedLSN.MarkApplied(op.tableName, op.indexName, opLSN)
 	}
 
 	tx.committed = true
@@ -249,6 +265,19 @@ func (tx *WriteTransaction) Rollback() error {
 		return nil
 	}
 
+	if tx.engine.WAL != nil {
+		if !tx.walBegun {
+			beginLSN := tx.engine.lsnTracker.Next()
+			if err := tx.writeWALMarker(wal.EntryBegin, beginLSN); err != nil {
+				return err
+			}
+			tx.walBegun = true
+		}
+		if err := tx.rollbackWAL(); err != nil {
+			return err
+		}
+	}
+
 	tx.writeSet = nil
 	tx.aborted = true
 	return nil
@@ -257,11 +286,12 @@ func (tx *WriteTransaction) Rollback() error {
 func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {
 	entry := wal.AcquireEntry()
 	entry.Header.Magic = wal.WALMagic
-	entry.Header.Version = 1
+	entry.Header.Version = txAwareWALVersion
 	entry.Header.EntryType = typeID
 	entry.Header.LSN = lsn
-	entry.Header.PayloadLen = 0
-	entry.Header.CRC32 = 0
+	entry.Payload = append(entry.Payload, wrapTxPayload(tx.txID, nil)...)
+	entry.Header.PayloadLen = uint32(len(entry.Payload))
+	entry.Header.CRC32 = wal.CalculateCRC32(entry.Payload)
 
 	if tx.engine.WAL == nil {
 		wal.ReleaseEntry(entry)
@@ -273,8 +303,12 @@ func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {
 	return err
 }
 
-func (tx *WriteTransaction) rollbackWAL(lsn uint64) {
-	tx.writeWALMarker(wal.EntryAbort, lsn)
+func (tx *WriteTransaction) rollbackWAL() error {
+	if !tx.walBegun || tx.engine.WAL == nil {
+		return nil
+	}
+	abortLSN := tx.engine.lsnTracker.Next()
+	return tx.writeWALMarker(wal.EntryAbort, abortLSN)
 }
 
 func getTypeFromKey(k types.Comparable) DataType {

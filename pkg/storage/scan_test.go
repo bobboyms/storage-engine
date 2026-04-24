@@ -4,8 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -17,7 +15,7 @@ import (
 
 func TestScan_Equal(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	err := tableMgr.NewTable("users", []storage.Index{
@@ -47,7 +45,7 @@ func TestScan_Equal(t *testing.T) {
 
 func TestScan_GreaterThan(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -79,7 +77,7 @@ func TestScan_GreaterThan(t *testing.T) {
 
 func TestScan_GreaterOrEqual(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -106,7 +104,7 @@ func TestScan_GreaterOrEqual(t *testing.T) {
 
 func TestScan_LessThan(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -133,7 +131,7 @@ func TestScan_LessThan(t *testing.T) {
 
 func TestScan_LessOrEqual(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -160,7 +158,7 @@ func TestScan_LessOrEqual(t *testing.T) {
 
 func TestScan_Between(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -188,7 +186,7 @@ func TestScan_Between(t *testing.T) {
 
 func TestScan_NotEqual(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{
@@ -215,7 +213,7 @@ func TestScan_NotEqual(t *testing.T) {
 
 func TestScan_WithVarchar(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("products", []storage.Index{
@@ -243,7 +241,7 @@ func TestScan_WithVarchar(t *testing.T) {
 
 func TestScan_WithDate(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("events", []storage.Index{
@@ -276,7 +274,7 @@ func TestScan_WithDate(t *testing.T) {
 
 func TestRangeScan_BackwardCompatibility(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap.data"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap.data"))
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{

@@ -4,40 +4,37 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 /*
-EXEMPLO: Checkpoint e Recovery
+EXEMPLO: Flush Durável e Recovery
 
 Este exemplo demonstra:
-1. Criação de checkpoints para persistência do estado
-2. Simulação de "crash" (fechamento sem checkpoint)
+1. Flush durável explícito do estado page-based
+2. Simulação de "crash" (fechamento sem flush explícito)
 3. Recovery automático a partir do WAL
 4. Verificação da integridade dos dados após recovery
 
 O sistema usa Write-Ahead Logging (WAL) para garantir durabilidade:
 - Todas as operações são primeiro escritas no WAL
-- Checkpoints salvam o estado completo das B+Trees
-- Recovery reconstrói o estado combinando Checkpoint + WAL
+- CreateCheckpoint agora força flush durável do estado page-based
+- Recovery reconstrói o estado relendo o WAL
 */
 
 func main() {
 	// Configurações de arquivos
 	walPath := "data.wal"
 	heapPath := "data.heap"
-	checkpointDir := "checkpoints"
-
-	cleanup(walPath, heapPath, checkpointDir)
-	defer cleanup(walPath, heapPath, checkpointDir)
+	cleanup(walPath, heapPath)
+	defer cleanup(walPath, heapPath)
 
 	// ========================================
-	// FASE 1: INSERÇÃO DE DADOS + CHECKPOINT
+	// FASE 1: INSERÇÃO DE DADOS + FLUSH DURÁVEL
 	// ========================================
-	fmt.Println("=== FASE 1: Inserção e Checkpoint ===")
+	fmt.Println("=== FASE 1: Inserção e Flush Durável ===")
 
 	engine := setupEngine(heapPath, walPath)
 
@@ -62,12 +59,12 @@ func main() {
 	}
 	fmt.Printf("✓ %d usuários inseridos\n", len(users))
 
-	// Criar checkpoint (persiste estado das B+Trees)
+	// Força flush durável das páginas/árvores
 	err := engine.CreateCheckpoint()
 	if err != nil {
-		fmt.Printf("Erro ao criar checkpoint: %v\n", err)
+		fmt.Printf("Erro ao flushar estado: %v\n", err)
 	} else {
-		fmt.Println("✓ Checkpoint criado com sucesso")
+		fmt.Println("✓ Estado flushado com sucesso")
 	}
 
 	// Verificar dados antes do "crash"
@@ -81,23 +78,22 @@ func main() {
 
 	// Fechar engine (simula shutdown normal)
 	engine.Close()
-	fmt.Println("\n✓ Engine fechado (checkpoint salvo)")
+	fmt.Println("\n✓ Engine fechado (estado flushado)")
 
 	// ========================================
-	// FASE 2: NOVAS OPERAÇÕES SEM CHECKPOINT
+	// FASE 2: NOVAS OPERAÇÕES SEM FLUSH EXPLÍCITO
 	// ========================================
-	fmt.Println("\n=== FASE 2: Operações sem Checkpoint (simulando crash) ===")
+	fmt.Println("\n=== FASE 2: Operações sem Flush Explícito (simulando crash) ===")
 
 	engine = setupEngine(heapPath, walPath)
 
-	// Recuperar do checkpoint anterior
 	err = engine.Recover(walPath)
 	if err != nil {
 		fmt.Printf("Erro no recover inicial: %v\n", err)
 	}
-	fmt.Println("✓ Estado recuperado do checkpoint")
+	fmt.Println("✓ Estado recuperado do WAL")
 
-	// Inserir mais dados (estes só estão no WAL, não no checkpoint)
+	// Inserir mais dados (estes só estão duráveis no WAL)
 	newUsers := []struct {
 		id   int64
 		name string
@@ -121,10 +117,10 @@ func main() {
 	engine.Del("users", "id", types.IntKey(3))
 	fmt.Println("✓ User 3 deletado (apenas no WAL)")
 
-	// **SIMULAR CRASH: Fechar sem checkpoint!**
-	// O WAL não foi sincronizado via checkpoint, mas as operações estão persistidas no WAL
+	// **SIMULAR CRASH: Fechar sem flush explícito**
+	// As operações já estão persistidas no WAL.
 	engine.Close()
-	fmt.Println("\n⚠️  Engine fechado SEM checkpoint (simulando crash)")
+	fmt.Println("\n⚠️  Engine fechado SEM flush explícito (simulando crash)")
 
 	// ========================================
 	// FASE 3: RECOVERY APÓS "CRASH"
@@ -135,8 +131,8 @@ func main() {
 	engine = setupEngine(heapPath, walPath)
 
 	// Executar recovery - deve reconstituir:
-	// 1. Estado do checkpoint (users 1-5)
-	// 2. Operações do WAL após o checkpoint (users 6-8, update user 1, delete user 3)
+	// 1. Estado flushado (users 1-5)
+	// 2. Operações do WAL após o flush (users 6-8, update user 1, delete user 3)
 	err = engine.Recover(walPath)
 	if err != nil {
 		fmt.Printf("❌ Erro no recovery: %v\n", err)
@@ -151,10 +147,10 @@ func main() {
 
 	fmt.Println("\nEstado esperado após recovery:")
 	fmt.Println("- User 1: Alice Updated (atualizado via WAL)")
-	fmt.Println("- User 2: Bob (do checkpoint)")
+	fmt.Println("- User 2: Bob (do flush)")
 	fmt.Println("- User 3: (deletado via WAL)")
-	fmt.Println("- User 4: Diana (do checkpoint)")
-	fmt.Println("- User 5: Eve (do checkpoint)")
+	fmt.Println("- User 4: Diana (do flush)")
+	fmt.Println("- User 5: Eve (do flush)")
 	fmt.Println("- User 6, 7, 8: novos (do WAL)")
 
 	fmt.Println("\nDados reais recuperados:")
@@ -173,7 +169,7 @@ func main() {
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
 	// Criar ou abrir Heap
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath, nil)
 	if err != nil {
 		fmt.Printf("Erro ao criar heap: %v\n", err)
 		os.Exit(1)
@@ -204,8 +200,7 @@ func setupEngine(heapPath, walPath string) *storage.StorageEngine {
 	return engine
 }
 
-func cleanup(walPath, heapPath, checkpointDir string) {
+func cleanup(walPath, heapPath string) {
 	os.Remove(walPath)
 	os.Remove(heapPath)
-	os.RemoveAll(checkpointDir)
 }

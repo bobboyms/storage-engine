@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+*.v2
 
 # Test binary, built with `go test -c`
 *.test
@@ -80,3 +81,4 @@ __debug_bin
 # VS Code
 .vscode/
 *.code-workspace
+data.heap_001.data

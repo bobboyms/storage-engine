@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -212,7 +211,7 @@ func main() {
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath, nil)
 	if err != nil {
 		fmt.Printf("Erro: %v\n", err)
 		os.Exit(1)

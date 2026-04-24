@@ -110,7 +110,7 @@ func TestWALWriter_SyncError(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
-	w.file.Close() // Force future syncs to fail
+	w.pf.Close() // Force future operations to fail via the page file
 
 	entry := AcquireEntry()
 	entry.Header.Magic = WALMagic
@@ -143,7 +143,7 @@ func TestWALWriter_CloseSyncError(t *testing.T) {
 	w.WriteEntry(entry)
 
 	// Close file to force sync error
-	w.file.Close()
+	w.pf.Close()
 
 	err := w.Close()
 	if err == nil {

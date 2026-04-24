@@ -1,17 +1,20 @@
 package wal
 
 import (
-	"encoding/binary"
 	"io"
 	"os"
 	"testing"
 )
 
-func TestWALReader_ReadSeconds(t *testing.T) {
-	tmpFile := "test_wal_read_seconds.log"
-	defer os.Remove(tmpFile)
+// Testes de leitura do WAL no novo backend page-based. Tests que
+// manipulavam bytes raw (TestWALReader_InvalidMagic, _TruncatedPayload,
+// etc) foram removidos — magic/truncation agora são checados na camada
+// do pagestore (checksum de página + magic de página), não no WAL
+// entry level. Tests equivalentes existem em pkg/pagestore.
 
-	// 1. Criar dados válidos
+func TestWALReader_ReadsMultipleEntriesInOrder(t *testing.T) {
+	tmpFile := t.TempDir() + "/wal_read.log"
+
 	opts := Options{SyncPolicy: SyncEveryWrite, BufferSize: 1024}
 	w, _ := NewWALWriter(tmpFile, opts)
 
@@ -39,14 +42,13 @@ func TestWALReader_ReadSeconds(t *testing.T) {
 	w.WriteEntry(e2)
 	w.Close()
 
-	// 2. Ler de volta
+	// Lê de volta
 	r, err := NewWALReader(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to open reader: %v", err)
 	}
 	defer r.Close()
 
-	// Li e1
 	read1, err := r.ReadEntry()
 	if err != nil {
 		t.Fatalf("ReadEntry 1 failed: %v", err)
@@ -56,7 +58,6 @@ func TestWALReader_ReadSeconds(t *testing.T) {
 	}
 	ReleaseEntry(read1)
 
-	// Li e2
 	read2, err := r.ReadEntry()
 	if err != nil {
 		t.Fatalf("ReadEntry 2 failed: %v", err)
@@ -66,134 +67,67 @@ func TestWALReader_ReadSeconds(t *testing.T) {
 	}
 	ReleaseEntry(read2)
 
-	// EOF
 	_, err = r.ReadEntry()
 	if err != io.EOF {
 		t.Errorf("Expected EOF, got %v", err)
 	}
 }
 
-func TestWALReader_Corruption(t *testing.T) {
-	tmpFile := "test_wal_corruption.log"
-	defer os.Remove(tmpFile)
+// TestWALReader_PageCorruption_PropagatesError: corrupção no body da
+// página (bit flip) é detectada pelo checksum CRC32 do pagestore e
+// propagada como ErrChecksumMismatch. Importante pra alerting em
+// produção — NUNCA silenciar corrupção como EOF.
+func TestWALReader_PageCorruption_PropagatesError(t *testing.T) {
+	tmpFile := t.TempDir() + "/wal_corrupt.log"
 
-	// 1. Escrever
-	opts := Options{SyncPolicy: SyncEveryWrite, BufferSize: 1024}
-	w, _ := NewWALWriter(tmpFile, opts)
+	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
 	payload := []byte("critical data")
 	e := AcquireEntry()
 	e.Header.Magic = WALMagic
 	e.Header.Version = 1
+	e.Header.LSN = 1
 	e.Header.PayloadLen = uint32(len(payload))
 	e.Header.CRC32 = CalculateCRC32(payload)
 	e.Payload = append(e.Payload, payload...)
 	w.WriteEntry(e)
 	w.Close()
 
-	// 2. Corromper 1 byte do arquivo (no payload)
+	// Corrompe byte dentro do body da página 1 (pageID 0 é reservado)
 	f, _ := os.OpenFile(tmpFile, os.O_RDWR, 0644)
-	f.Seek(int64(HeaderSize+2), 0) // Pula header + 2 bytes
-	f.Write([]byte{0xFF})          // Inverte bits
+	f.WriteAt([]byte{0xFF}, 8192+200)
 	f.Close()
 
-	// 3. Tentar ler
 	r, _ := NewWALReader(tmpFile)
 	defer r.Close()
 
 	_, err := r.ReadEntry()
 	if err != ErrChecksumMismatch {
-		t.Errorf("Expected ErrChecksumMismatch, got %v", err)
-	}
-}
-
-func TestWALReader_TruncatedPayload(t *testing.T) {
-	tmpFile := "test_wal_truncated.log"
-	defer os.Remove(tmpFile)
-
-	opts := Options{SyncPolicy: SyncEveryWrite}
-	w, _ := NewWALWriter(tmpFile, opts)
-	payload := []byte("loooooong data")
-	e := AcquireEntry()
-	e.Header.Magic = WALMagic
-	e.Header.Version = 1
-	e.Header.PayloadLen = uint32(len(payload))
-	e.Header.CRC32 = CalculateCRC32(payload)
-	e.Payload = append(e.Payload, payload...)
-	w.WriteEntry(e)
-	w.Close()
-
-	// Truncar arquivo removendo últimos bytes
-	os.Truncate(tmpFile, int64(HeaderSize+5)) // Deixa só 5 bytes do payload
-
-	r, _ := NewWALReader(tmpFile)
-	defer r.Close()
-
-	_, err := r.ReadEntry()
-	if err != io.ErrUnexpectedEOF {
-		t.Errorf("Expected ErrUnexpectedEOF, got %v", err)
-	}
-}
-
-func TestWALReader_InvalidMagic(t *testing.T) {
-	tmpFile := "test_wal_magic.log"
-	defer os.Remove(tmpFile)
-
-	f, _ := os.Create(tmpFile)
-	// Escreve header com Magic invalido
-	invalidHeader := make([]byte, HeaderSize)
-	binary.LittleEndian.PutUint32(invalidHeader[0:4], 0xCAFEBABE)
-	f.Write(invalidHeader)
-	f.Close()
-
-	r, _ := NewWALReader(tmpFile)
-	defer r.Close()
-
-	_, err := r.ReadEntry()
-	if err != ErrInvalidMagic {
-		t.Errorf("Expected ErrInvalidMagic, got %v", err)
-	}
-}
-
-func TestWALReader_InvalidPayloadLen(t *testing.T) {
-	tmpFile := "test_wal_payload_len.log"
-	defer os.Remove(tmpFile)
-
-	f, _ := os.Create(tmpFile)
-	header := make([]byte, HeaderSize)
-	binary.LittleEndian.PutUint32(header[0:4], WALMagic)
-	binary.LittleEndian.PutUint32(header[16:20], 2*1024*1024*1024) // 2GB
-	f.Write(header)
-	f.Close()
-
-	r, _ := NewWALReader(tmpFile)
-	defer r.Close()
-
-	_, err := r.ReadEntry()
-	if err != ErrInvalidPayloadLen {
-		t.Errorf("Expected ErrInvalidPayloadLen, got %v", err)
-	}
-}
-
-func TestWALReader_UnexpectedHeaderEOF(t *testing.T) {
-	tmpFile := "test_wal_header_eof.log"
-	defer os.Remove(tmpFile)
-
-	f, _ := os.Create(tmpFile)
-	f.Write([]byte{0x57, 0x41, 0x4C}) // "WAL" (3 bytes, but Header is 24)
-	f.Close()
-
-	r, _ := NewWALReader(tmpFile)
-	defer r.Close()
-
-	_, err := r.ReadEntry()
-	if err == nil || err == io.EOF {
-		t.Errorf("Expected error reading partial header, got %v", err)
+		t.Errorf("Esperava ErrChecksumMismatch, recebi: %v", err)
 	}
 }
 
 func TestNewWALReader_NonExistent(t *testing.T) {
-	_, err := NewWALReader("/path/to/nothing")
+	_, err := NewWALReader("/path/that/does/not/exist/wal.log")
 	if err == nil {
-		t.Error("Expected error for non-existent file")
+		t.Error("Esperava erro para arquivo inexistente")
+	}
+}
+
+// TestWALReader_EmptyWAL: WAL recém-criado sem entries → ReadEntry devolve EOF.
+func TestWALReader_EmptyWAL(t *testing.T) {
+	tmpFile := t.TempDir() + "/wal_empty.log"
+
+	w, _ := NewWALWriter(tmpFile, Options{SyncPolicy: SyncEveryWrite})
+	w.Close()
+
+	r, err := NewWALReader(tmpFile)
+	if err != nil {
+		t.Fatalf("Failed to open reader: %v", err)
+	}
+	defer r.Close()
+
+	_, err = r.ReadEntry()
+	if err != io.EOF {
+		t.Errorf("Esperava EOF em WAL vazio, recebi %v", err)
 	}
 }

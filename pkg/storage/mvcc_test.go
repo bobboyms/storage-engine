@@ -3,8 +3,6 @@ package storage_test
 import (
 	"path/filepath"
 	"testing"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -17,7 +15,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -86,7 +84,7 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_update", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -129,7 +127,7 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("mvcc_del", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -168,7 +166,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("iso_test", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 

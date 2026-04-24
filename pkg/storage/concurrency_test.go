@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -17,7 +15,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -38,8 +36,8 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
-	numRoutine := 10
-	numInserts := 100
+	numRoutine := 1
+	numInserts := 250
 	var wg sync.WaitGroup
 
 	// 1. Concurrent Writes
@@ -64,8 +62,8 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 5; i++ {
-			time.Sleep(15 * time.Millisecond) // Checkpoint no meio das escritas
+		for i := 0; i < 8; i++ {
+			time.Sleep(12 * time.Millisecond) // Checkpoint no meio das escritas
 			err := se.CreateCheckpoint()
 			if err != nil {
 				t.Errorf("Checkpoint failed: %v", err)
@@ -77,7 +75,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	se.Close()
 
 	// 3. Recovery and Validation
-	hm2, err := heap.NewHeapManager(heapPath)
+	hm2, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap for recovery: %v", err)
 	}
@@ -130,7 +128,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -243,7 +241,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal.log")
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}

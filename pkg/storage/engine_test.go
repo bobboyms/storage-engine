@@ -1,21 +1,19 @@
 package storage_test
 
 import (
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/bobboyms/storage-engine/pkg/heap"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
 func TestEngine_GetAndDel(t *testing.T) {
 	tmpDir := t.TempDir()
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -92,7 +90,7 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	heapPath := filepath.Join(tmpDir, "heap.data")
 
 	// 1. Start Engine
-	hm, err := heap.NewHeapManager(heapPath)
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap: %v", err)
 	}
@@ -138,7 +136,7 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	// Re-create TableManager (simulate fresh start)
 	// 7. Recovery
 	// Re-create TableManager (simulate fresh start)
-	hm2, err := heap.NewHeapManager(heapPath)
+	hm2, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	if err != nil {
 		t.Fatalf("Failed to create heap for recovery: %v", err)
 	}
@@ -167,11 +165,9 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	// Verify Data
 	// 10: Updated
 	val, found, _ := se2.Get("test", "id", types.IntKey(10))
-	// FIXME: Recovery bug - incorrectly returns old value "val_10" instead of updated "val_10_updated"
-	// if !found || val != "val_10_updated" {
-	// 	t.Errorf("Expected key 10 to be 'val_10_updated', got %q found=%v", val, found)
-	// }
-	_ = val // Silence unused warning
+	if !found || val != "val_10_updated" {
+		t.Errorf("Expected key 10 to be 'val_10_updated', got %q found=%v", val, found)
+	}
 
 	// 20: Deleted
 	_, found, _ = se2.Get("test", "id", types.IntKey(20))
@@ -202,7 +198,7 @@ func TestEngine_GenerateKey(t *testing.T) {
 
 func TestEngine_ReadCommitted(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -229,8 +225,8 @@ func TestEngine_ReadCommitted(t *testing.T) {
 
 func TestEngine_CloseErrors(t *testing.T) {
 	tmpDir := t.TempDir()
-	hw, _ := heap.NewHeapManager(filepath.Join(tmpDir, "wal"))
-	hh, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hw, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "wal"))
+	hh, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	// Using nil for WALWriter since we are manually closing se.WAL below but NewStorageEngine handles nil.
 	// But the test wants to access se.WAL.Close(). If we pass nil, se.WAL is nil.
 	// We need to pass a real writer.
@@ -254,7 +250,7 @@ func TestEngine_RecoverErrors(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal")
 	heapPath := filepath.Join(tmpDir, "heap")
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
@@ -263,25 +259,18 @@ func TestEngine_RecoverErrors(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	se.Close()
 
-	// Create a DIRECTORY where the checkpoint file should be
-	// Checkpoint name format: checkpoint_<table name>_<index name>_<lsn>.chk
-	// But LoadLatestCheckpoint looks for any match.
-	// Actually, look at checkpoint.go: it reads the directory.
-
-	// If we put a garbage file in the checkpoint dir, it might fail to load.
+	// Legacy checkpoint files are ignored by phase-7 recovery.
 	os.WriteFile(filepath.Join(tmpDir, "checkpoint_users_id_99.chk"), []byte("not a checkpoint"), 0666)
 
-	hm2, _ := heap.NewHeapManager(heapPath)
+	hm2, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr2 := storage.NewTableMenager()
 	tableMgr2.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm2)
 
 	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se2, _ := storage.NewStorageEngine(tableMgr2, walWriter2)
 	err := se2.Recover(walPath)
-	if err == nil {
-		t.Log("Recover might ignore garbage checkpoints or fail silently")
-	} else {
-		t.Logf("Recover returned error as expected: %v", err)
+	if err != nil {
+		t.Fatalf("Recover should ignore legacy checkpoint files: %v", err)
 	}
 }
 
@@ -291,7 +280,7 @@ func TestEngine_RecoverDelete(t *testing.T) {
 	walPath := filepath.Join(tmpDir, "wal")
 	heapPath := filepath.Join(tmpDir, "heap")
 
-	hm, _ := heap.NewHeapManager(heapPath)
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -302,7 +291,7 @@ func TestEngine_RecoverDelete(t *testing.T) {
 	se.Close()
 
 	// Reopen and recover
-	hm2, _ := heap.NewHeapManager(heapPath)
+	hm2, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
 	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 
 	// Create new TableManager with new HeapManager
@@ -323,7 +312,7 @@ func TestEngine_RecoverDelete(t *testing.T) {
 
 func TestEngine_ScanInvisible(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -362,34 +351,12 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	}
 }
 
-func TestEngine_CreateCheckpointError(t *testing.T) {
-	tmpDir := t.TempDir()
-	walPath := filepath.Join(tmpDir, "wal")
-	heapPath := filepath.Join(tmpDir, "heap")
-	hm, _ := heap.NewHeapManager(heapPath)
-
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
-
-	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
-
-	// Corrupt CheckpointManager path to force error
-	// CheckpointManager.baseDir is private but we can manually remove the directory
-	os.RemoveAll(tmpDir)
-
-	err := se.CreateCheckpoint()
-	if err == nil {
-		t.Log("Checkpoint might have succeeded if it created dirs, but expected some friction")
-	}
-}
-
 func TestEngine_RecoverInvalidWAL(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
 	os.WriteFile(walPath, []byte("NOT A WAL FILE"), 0666)
 
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()
 	// Create table even if WAL is invalid to satisfy NewStorageEngine deps if needed,
 	// though here we are testing Recover.
@@ -416,7 +383,7 @@ func TestEngine_PutError_InvalidTable(t *testing.T) {
 
 func TestEngine_PutError_InvalidIndex(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -442,7 +409,7 @@ func TestEngine_DelError_InvalidTable(t *testing.T) {
 
 func TestEngine_DelError_InvalidIndex(t *testing.T) {
 	tmpDir := t.TempDir()
-	hm, _ := heap.NewHeapManager(filepath.Join(tmpDir, "heap"))
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()
 	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 
@@ -452,38 +419,5 @@ func TestEngine_DelError_InvalidIndex(t *testing.T) {
 	_, err := se.Del("users", "invalid_idx", types.IntKey(1))
 	if err == nil {
 		t.Error("Expected error for invalid index")
-	}
-}
-
-func TestEngine_CreateCheckpoint_FailDir(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	heapPath := filepath.Join(tmpDir, "heap.data")
-	hm, _ := heap.NewHeapManager(heapPath)
-
-	tableMgr := storage.NewTableMenager()
-	tableMgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
-
-	// Make checkpoint manager base path a file
-	checkpointFile := filepath.Join(tmpDir, "is_a_file")
-	os.WriteFile(checkpointFile, []byte("data"), 0644)
-
-	// NewStorageEngine uses filepath.Dir(walPath) as checkpointDir in old logic, but now ?
-	// We just pass a bad wal path?
-	badWalPath := filepath.Join(checkpointFile, "wal.log")
-	walWriter, _ := wal.NewWALWriter(badWalPath, wal.DefaultOptions())
-	se2, err := storage.NewStorageEngine(tableMgr, walWriter)
-	if err != nil {
-		t.Logf("Expected NewStorageEngine might fail or return nil se: %v", err)
-		return
-	}
-	if se2 == nil {
-		return
-	}
-	defer se2.Close()
-
-	err = se2.CreateCheckpoint()
-	if err == nil {
-		t.Log("Checkpoint dir failure was not triggered as expected")
 	}
 }
