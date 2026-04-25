@@ -238,7 +238,7 @@ func (pf *PageFile) Sync() error {
 	}
 	pf.syncMu.Lock()
 	defer pf.syncMu.Unlock()
-	return pf.file.Sync()
+	return syncFile(pf.file)
 }
 
 // Close fecha o arquivo. Operações subsequentes falham com ErrClosed.
@@ -253,7 +253,7 @@ func (pf *PageFile) Close() error {
 	}
 	// Tenta fsync — se falhar (ex: disk full), ainda tentamos fechar
 	// pra não vazar descritor, mas propagamos o erro do fsync.
-	syncErr := pf.file.Sync()
+	syncErr := syncFile(pf.file)
 	closeErr := pf.file.Close()
 	if syncErr != nil {
 		return syncErr

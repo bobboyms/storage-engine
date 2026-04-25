@@ -257,8 +257,10 @@ func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
 func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {
 	dir := os.Getenv("STORAGE_ENGINE_FSYNC_FAIL_DIR")
 	if dir == "" {
-		t.Skip("set STORAGE_ENGINE_FSYNC_FAIL_DIR to a filesystem/fuse mount that injects fsync failures")
+		t.Skip("set STORAGE_ENGINE_FSYNC_FAIL_DIR to enable fsync fault injection")
 	}
+	markerPath := filepath.Join(dir, ".fail_fsync_now")
+	_ = os.Remove(markerPath)
 
 	p := pathsFor(filepath.Join(dir, "storage-engine-fsync-"+strconvLikeTime()))
 	if err := os.MkdirAll(p.dir, 0755); err != nil {
@@ -267,6 +269,10 @@ func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {
 	defer os.RemoveAll(p.dir)
 
 	se := openEngine(t, p)
+	if err := os.WriteFile(markerPath, []byte("1"), 0644); err != nil {
+		_ = se.Close()
+		t.Fatalf("enable fsync fault injection: %v", err)
+	}
 	err := se.Put("t", "id", types.IntKey(1), `{"id":1}`)
 	closeErr := se.Close()
 	if err == nil && closeErr == nil {

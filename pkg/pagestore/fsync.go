@@ -5,6 +5,10 @@ import (
 	"os"
 )
 
+var syncFile = func(f *os.File) error {
+	return f.Sync()
+}
+
 // fsyncDir abre o diretório e chama Sync — garantia POSIX de que
 // criações/renames dentro dele persistem além de um crash.
 //
@@ -18,7 +22,7 @@ func fsyncDir(dirPath string) error {
 		return fmt.Errorf("pagestore: open dir %s: %w", dirPath, err)
 	}
 	defer d.Close()
-	if err := d.Sync(); err != nil {
+	if err := syncFile(d); err != nil {
 		return fmt.Errorf("pagestore: fsync dir %s: %w", dirPath, err)
 	}
 	return nil

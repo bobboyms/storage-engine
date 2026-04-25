@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  regular:
+    name: regular tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Race tests
+        run: go test ./pkg/... -race
+
+      - name: Chaos tests
+        run: go test ./tests/chaos -tags chaos -count=1 -v
+
+      - name: Stress tests with race detector
+        run: go test ./tests/stress -tags stress -race -count=1 -v
+
+  faults:
+    name: disk fault tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run corruption fault tests
+        run: go test ./tests/faults -tags faults -run 'TestFault(WAL|Heap|BTree)' -count=1 -v
+
+      - name: Mount small filesystem for ENOSPC
+        run: |
+          sudo mkdir -p /mnt/se-enospc
+          sudo mount -t tmpfs -o size=32M tmpfs /mnt/se-enospc
+          sudo chown "$USER:$USER" /mnt/se-enospc
+
+      - name: Run ENOSPC fault test
+        env:
+          STORAGE_ENGINE_ENOSPC_DIR: /mnt/se-enospc
+        run: go test ./tests/faults -tags faults -run TestFaultENOSPCOnConstrainedFilesystem -count=1 -v
+
+      - name: Unmount ENOSPC filesystem
+        if: always()
+        run: sudo umount /mnt/se-enospc || true
+
+      - name: Run fsync failure fault test
+        env:
+          STORAGE_ENGINE_FSYNC_FAIL_DIR: ${{ runner.temp }}/se-fsync-fail
+        run: |
+          mkdir -p "$STORAGE_ENGINE_FSYNC_FAIL_DIR"
+          go test ./tests/faults -tags faults -run TestFaultFsyncFailureOnFaultingFilesystem -count=1 -v
