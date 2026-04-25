@@ -247,9 +247,9 @@ func TestBufferPool_ReleaseIsIdempotent(t *testing.T) {
 // TestBufferPool_Concurrent valida o critério de pronto da Fase 2:
 // 100 goroutines lendo/escrevendo concorrentemente, -race limpo.
 func TestBufferPool_Concurrent(t *testing.T) {
-	bp, _ := newPoolWithFile(t, 16)
-
 	const numPages = 50
+	bp, _ := newPoolWithFile(t, numPages)
+
 	ids := make([]PageID, numPages)
 	for i := range ids {
 		ids[i] = allocAndWrite(t, bp, byte(i))
