@@ -44,6 +44,7 @@ type StorageEngine struct {
 	appliedLSN    *AppliedLSNTracker
 	TxRegistry    *TransactionRegistry
 	metaMu        sync.RWMutex // Lock apenas para operações de metadados (ListTables, etc)
+	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
@@ -264,6 +265,9 @@ func (se *StorageEngine) readVisibleValue(tx *Transaction, table *Table, key typ
 
 // Put: Insert ou Update com Durabilidade (WAL)
 func (se *StorageEngine) Put(tableName string, indexName string, key types.Comparable, document string) error {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
@@ -311,7 +315,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 			if !sameComparableKey(docKey, key) {
 				return fmt.Errorf("storage: chave informada %v diverge do campo indexado %s=%v", key, indexName, docKey)
 			}
-			return se.UpsertRow(tableName, document, keys)
+			return se.writeRowLocked(tableName, document, keys, false)
 		}
 	} else {
 		// Fallback to raw bytes
@@ -541,6 +545,9 @@ func (se *StorageEngine) RangeScan(tableName string, indexName string, start, en
 
 // Delete: Remove (DELETE FROM WHERE id = x)
 func (se *StorageEngine) Del(tableName string, indexName string, key types.Comparable) (bool, error) {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
@@ -642,6 +649,9 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 // CreateCheckpoint agora faz flush durável do estado page-based.
 // O formato `.chk` legado não é mais usado pelo runtime do engine.
 func (se *StorageEngine) CreateCheckpoint() error {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
 	if se.WAL != nil {
 		if err := se.WAL.Sync(); err != nil {
 			return err
@@ -798,6 +808,9 @@ func (se *StorageEngine) walCipher() crypto.Cipher {
 // It removes dead Tombstones (deleted records visible to no active transaction)
 // and compacts the Heap file, reclaiming space.
 func (se *StorageEngine) Vacuum(tableName string) error {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
 	// 1. Acquire Table Lock (Exclusive)
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {

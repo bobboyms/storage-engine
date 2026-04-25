@@ -38,6 +38,13 @@ import (
 // de checkpoint no WAL, permitindo que recovery pule entradas anteriores
 // ao beginLSN.
 func (se *StorageEngine) FuzzyCheckpoint() error {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
+	return se.fuzzyCheckpointLocked()
+}
+
+func (se *StorageEngine) fuzzyCheckpointLocked() error {
 	if se.WAL == nil {
 		// Sem WAL não há recovery, checkpoint fuzzy é no-op.
 		return nil

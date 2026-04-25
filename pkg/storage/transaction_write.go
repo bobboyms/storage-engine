@@ -115,6 +115,9 @@ func (tx *WriteTransaction) Commit() error {
 	}
 
 	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
 	if len(tx.writeSet) == 0 {
 		if se.WAL != nil {
 			beginLSN := se.lsnTracker.Next()
@@ -265,9 +268,13 @@ func (tx *WriteTransaction) Rollback() error {
 		return nil
 	}
 
-	if tx.engine.WAL != nil {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
+	if se.WAL != nil {
 		if !tx.walBegun {
-			beginLSN := tx.engine.lsnTracker.Next()
+			beginLSN := se.lsnTracker.Next()
 			if err := tx.writeWALMarker(wal.EntryBegin, beginLSN); err != nil {
 				return err
 			}

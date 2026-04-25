@@ -18,6 +18,13 @@ type indexUpdateUndo struct {
 }
 
 func (se *StorageEngine) writeRow(tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+
+	return se.writeRowLocked(tableName, doc, providedKeys, insertOnly)
+}
+
+func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return err

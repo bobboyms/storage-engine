@@ -121,7 +121,7 @@ O engine NÃO expõe metrics hoje. Você precisa instrumentar na sua camada. Mí
 
 ### Operacional
 
-- **Backup consistente**: `se.Close()` → copiar o diretório inteiro → reabrir. **NÃO** copie com engine rodando sem snapshot do FS.
+- **Backup/restore online**: use `se.BackupOnline(dir)` com o engine aberto. A API pausa writes, executa checkpoint/flush, copia heap/índices/WAL segmentado para `dir/files` e grava `manifest.json` com tamanho + SHA-256. Valide com `storage.VerifyBackup(dir)` e restaure em diretório vazio com `storage.RestoreBackup(dir, targetDir)`.
 - **WAL lifecycle**: `wal.DefaultOptions()` habilita rotação por tamanho (`MaxSegmentBytes`) e retenção segura (`RetentionSegments`). Configure `ArchiveDir` se quiser arquivar segmentos removidos; restaure com `wal.RestoreArchivedSegments`.
 - **Key rotation da master key**: `keystore.RotateMasterKey` suportado sem reescrever dados (apenas re-wrap das DEKs)
 
@@ -156,7 +156,6 @@ go test ./pkg/btree/v2/ -race -run Concurrent
 |---|---|---|
 | Page-level redo com pageLSN no Recover | 🟡 média | 1 semana |
 | Hardening do latch crabbing em variable-key | 🟢 baixa | 1-2 semanas |
-| Backup/restore API | 🟢 baixa | 1 semana |
 | Metrics/observabilidade built-in | 🟢 baixa | 1-2 semanas |
 | Replication | ⚪ opcional | semanas-meses |
 
