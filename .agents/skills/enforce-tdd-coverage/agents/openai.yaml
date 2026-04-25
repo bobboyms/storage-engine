@@ -1,0 +1,6 @@
+interface:
+  display_name: "Enforce TDD Coverage"
+  short_description: "Exige TDD e cobertura minima de 70%"
+  default_prompt: "Use $enforce-tdd-coverage para implementar mudancas seguindo TDD e mantendo cobertura minima de 70%."
+policy:
+  allow_implicit_invocation: true
