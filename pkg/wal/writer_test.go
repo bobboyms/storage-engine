@@ -7,6 +7,25 @@ import (
 	"time"
 )
 
+func waitForFileContent(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		info, err := os.Stat(path)
+		if err == nil && info.Size() > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("Stat failed after waiting for background sync: %v", err)
+			}
+			t.Fatalf("File size is 0 after waiting %v for background sync", timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestWALWriter_IntervalSync(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test_wal_interval.log")
 
@@ -41,17 +60,9 @@ func TestWALWriter_IntervalSync(t *testing.T) {
 	}
 	ReleaseEntry(entry)
 
-	// Espera o background sync (50ms)
-	time.Sleep(100 * time.Millisecond)
-
-	// Verifica se o arquivo tem tamanho > 0
-	info, err := os.Stat(tmpFile)
-	if err != nil {
-		t.Fatalf("Stat failed: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Error("File size is 0 after background sync, expected content")
-	}
+	// Under -race the background ticker can take noticeably longer to run,
+	// so wait for the observable condition instead of sleeping a fixed time.
+	waitForFileContent(t, tmpFile, 2*time.Second)
 
 	w.Close()
 }
