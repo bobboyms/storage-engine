@@ -43,8 +43,8 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
-	if tx.committed || tx.aborted {
-		return fmt.Errorf("transaction already finished")
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
 	}
 
 	// Validate metadata immediately to fail fast
@@ -68,6 +68,14 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 		}
 	}
 
+	resource, err := lockResourceForKey(tableName, indexName, key)
+	if err != nil {
+		return err
+	}
+	if err := tx.acquireLockLocked(resource); err != nil {
+		return err
+	}
+
 	tx.writeSet = append(tx.writeSet, writeOp{
 		opType:    wal.EntryInsert, // We treat updates as inserts (log-structured)
 		tableName: tableName,
@@ -83,8 +91,8 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
-	if tx.committed || tx.aborted {
-		return fmt.Errorf("transaction already finished")
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
 	}
 
 	// Validate metadata
@@ -93,6 +101,14 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 		return err
 	}
 	if _, err := table.GetIndex(indexName); err != nil {
+		return err
+	}
+
+	resource, err := lockResourceForKey(tableName, indexName, key)
+	if err != nil {
+		return err
+	}
+	if err := tx.acquireLockLocked(resource); err != nil {
 		return err
 	}
 
@@ -106,12 +122,21 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 }
 
 // Commit persists all operations atomically
-func (tx *WriteTransaction) Commit() error {
+func (tx *WriteTransaction) Commit() (err error) {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
+	if tx.engine.LockManager != nil {
+		defer tx.engine.LockManager.ReleaseAll(tx.txID)
+	}
+	defer func() {
+		if err != nil && !tx.committed {
+			tx.aborted = true
+			tx.writeSet = nil
+		}
+	}()
 
-	if tx.committed || tx.aborted {
-		return fmt.Errorf("transaction already finished")
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
 	}
 
 	se := tx.engine
@@ -221,6 +246,9 @@ func (tx *WriteTransaction) Commit() error {
 func (tx *WriteTransaction) Rollback() error {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
+	if tx.engine.LockManager != nil {
+		defer tx.engine.LockManager.ReleaseAll(tx.txID)
+	}
 
 	if tx.committed || tx.aborted {
 		return nil
@@ -245,6 +273,46 @@ func (tx *WriteTransaction) Rollback() error {
 
 	tx.writeSet = nil
 	tx.aborted = true
+	return nil
+}
+
+func (tx *WriteTransaction) ensureWritableLocked() error {
+	if tx.committed {
+		return fmt.Errorf("transaction already finished")
+	}
+	if tx.aborted {
+		if err := tx.lockManagerAbortErrorLocked(); err != nil {
+			return err
+		}
+		return fmt.Errorf("transaction already finished")
+	}
+	if err := tx.lockManagerAbortErrorLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tx *WriteTransaction) acquireLockLocked(resource string) error {
+	if tx.engine.LockManager == nil {
+		return nil
+	}
+	if err := tx.engine.LockManager.Acquire(tx.txID, resource); err != nil {
+		tx.aborted = true
+		tx.writeSet = nil
+		return err
+	}
+	return nil
+}
+
+func (tx *WriteTransaction) lockManagerAbortErrorLocked() error {
+	if tx.engine.LockManager == nil {
+		return nil
+	}
+	if err := tx.engine.LockManager.IsAborted(tx.txID); err != nil {
+		tx.aborted = true
+		tx.writeSet = nil
+		return err
+	}
 	return nil
 }
 

@@ -39,53 +39,60 @@ func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKe
 		return err
 	}
 
-	table.Lock()
-	defer table.Unlock()
-
-	primary, primaryKey, err := primaryIndexAndKey(table, keys)
+	resources, err := lockResourcesForKeys(tableName, keys)
 	if err != nil {
 		return err
 	}
 
-	oldPrimaryOffset, primaryExists, err := primary.Tree.Get(primaryKey)
-	if err != nil {
-		return fmt.Errorf("primary index get failed: %w", err)
-	}
-	if insertOnly && primaryExists {
-		return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
-	}
+	return se.withAutoCommitLocks(resources, func() error {
+		table.Lock()
+		defer table.Unlock()
 
-	currentLSN := se.lsnTracker.Next()
-	if se.WAL != nil {
-		if err := se.writeMultiIndexWAL(tableName, keys, bsonData, currentLSN); err != nil {
+		primary, primaryKey, err := primaryIndexAndKey(table, keys)
+		if err != nil {
 			return err
 		}
-	}
 
-	prevOffset := int64(-1)
-	if primaryExists {
-		prevOffset = oldPrimaryOffset
-	}
-	offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
-	if err != nil {
-		return fmt.Errorf("heap write failed: %w", err)
-	}
-
-	if err := applyIndexPointersWithLSN(table, keys, offset, currentLSN); err != nil {
-		return err
-	}
-
-	if primaryExists {
-		if err := table.Heap.Delete(oldPrimaryOffset, currentLSN); err != nil && !isChainEndErr(err) {
-			_ = applyIndexPointers(table, map[string]types.Comparable{primary.Name: primaryKey}, oldPrimaryOffset)
-			return fmt.Errorf("heap delete previous version failed: %w", err)
+		oldPrimaryOffset, primaryExists, err := primary.Tree.Get(primaryKey)
+		if err != nil {
+			return fmt.Errorf("primary index get failed: %w", err)
 		}
-	}
+		if insertOnly && primaryExists {
+			return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
+		}
 
-	for indexName := range keys {
-		se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
-	}
-	return nil
+		currentLSN := se.lsnTracker.Next()
+		if se.WAL != nil {
+			if err := se.writeMultiIndexWAL(tableName, keys, bsonData, currentLSN); err != nil {
+				return err
+			}
+		}
+
+		prevOffset := int64(-1)
+		if primaryExists {
+			prevOffset = oldPrimaryOffset
+		}
+		offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
+		if err != nil {
+			return fmt.Errorf("heap write failed: %w", err)
+		}
+
+		if err := applyIndexPointersWithLSN(table, keys, offset, currentLSN); err != nil {
+			return err
+		}
+
+		if primaryExists {
+			if err := table.Heap.Delete(oldPrimaryOffset, currentLSN); err != nil && !isChainEndErr(err) {
+				_ = applyIndexPointers(table, map[string]types.Comparable{primary.Name: primaryKey}, oldPrimaryOffset)
+				return fmt.Errorf("heap delete previous version failed: %w", err)
+			}
+		}
+
+		for indexName := range keys {
+			se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
+		}
+		return nil
+	})
 }
 
 func (se *StorageEngine) writeMultiIndexWAL(tableName string, keys map[string]types.Comparable, bsonData []byte, lsn uint64) error {

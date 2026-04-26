@@ -39,6 +39,7 @@ func GenerateKey() string {
 type StorageEngine struct {
 	TableMetaData *TableMetaData
 	WAL           *wal.WALWriter // WAL persistente
+	LockManager   *LockManager
 	lsnTracker    *LSNTracker
 	txIDCounter   uint64
 	appliedLSN    *AppliedLSNTracker
@@ -101,6 +102,7 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*
 	se := &StorageEngine{
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
+		LockManager:   NewLockManager(LockManagerConfig{}),
 		lsnTracker:    NewLSNTracker(initialLSN),
 		txIDCounter:   initialLSN,
 		appliedLSN:    NewAppliedLSNTracker(),
@@ -338,69 +340,76 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		bsonData = []byte(document)
 	}
 
-	// LSN Management
-	// Geramos o LSN *antes* de escrever no WAL ou Heap para garantir ordem
-	currentLSN := se.lsnTracker.Next()
-
-	// 1. Write Ahead Log
-	if se.WAL != nil {
-		payload, err := SerializeDocumentEntry(tableName, indexName, key, bsonData)
-		if err != nil {
-			return err
-		}
-
-		entry := wal.AcquireEntry()
-		entry.Header.Magic = wal.WALMagic
-		entry.Header.Version = 1
-		entry.Header.EntryType = wal.EntryInsert // Tratamos Update como Insert no WAL log-structured
-
-		entry.Header.LSN = currentLSN
-
-		entry.Header.PayloadLen = uint32(len(payload))
-		entry.Header.CRC32 = wal.CalculateCRC32(payload)
-		entry.Payload = append(entry.Payload, payload...)
-
-		if err := se.WAL.WriteEntry(entry); err != nil {
-			wal.ReleaseEntry(entry)
-			return fmt.Errorf("wal write failed: %w", err)
-		}
-		wal.ReleaseEntry(entry)
-	}
-
-	// 2 ~ 4. Atomic Upsert (Write Heap -> Update Tree)
-	// Usamos Upsert para garantir atomocidade no acesso à versão anterior e atualização do ponteiro HEAD.
-	table.Lock()
-	defer table.Unlock()
-	upsert := func(oldOffset int64, exists bool) (int64, error) {
-		var prevOffset int64 = -1
-		if exists {
-			prevOffset = oldOffset
-		}
-
-		// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
-		// TODO: Otimização futura - Se heap write for lento, refatorar.
-		// Mas como é append-only bufio, deve ser rápido.
-		offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
-		if err != nil {
-			return 0, fmt.Errorf("heap write failed: %w", err)
-		}
-
-		return offset, nil
-	}
-
-	if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-		err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
-	} else {
-		err = index.Tree.Upsert(key, upsert)
-	}
-
+	resource, err := lockResourceForKey(tableName, indexName, key)
 	if err != nil {
 		return err
 	}
 
-	se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
+	return se.withAutoCommitLocks([]string{resource}, func() error {
+		// LSN Management
+		// Geramos o LSN *antes* de escrever no WAL ou Heap para garantir ordem
+		currentLSN := se.lsnTracker.Next()
 
-	return nil
+		// 1. Write Ahead Log
+		if se.WAL != nil {
+			payload, err := SerializeDocumentEntry(tableName, indexName, key, bsonData)
+			if err != nil {
+				return err
+			}
+
+			entry := wal.AcquireEntry()
+			entry.Header.Magic = wal.WALMagic
+			entry.Header.Version = 1
+			entry.Header.EntryType = wal.EntryInsert // Tratamos Update como Insert no WAL log-structured
+
+			entry.Header.LSN = currentLSN
+
+			entry.Header.PayloadLen = uint32(len(payload))
+			entry.Header.CRC32 = wal.CalculateCRC32(payload)
+			entry.Payload = append(entry.Payload, payload...)
+
+			if err := se.WAL.WriteEntry(entry); err != nil {
+				wal.ReleaseEntry(entry)
+				return fmt.Errorf("wal write failed: %w", err)
+			}
+			wal.ReleaseEntry(entry)
+		}
+
+		// 2 ~ 4. Atomic Upsert (Write Heap -> Update Tree)
+		// Usamos Upsert para garantir atomocidade no acesso à versão anterior e atualização do ponteiro HEAD.
+		table.Lock()
+		defer table.Unlock()
+		upsert := func(oldOffset int64, exists bool) (int64, error) {
+			var prevOffset int64 = -1
+			if exists {
+				prevOffset = oldOffset
+			}
+
+			// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
+			// TODO: Otimização futura - Se heap write for lento, refatorar.
+			// Mas como é append-only bufio, deve ser rápido.
+			offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
+			if err != nil {
+				return 0, fmt.Errorf("heap write failed: %w", err)
+			}
+
+			return offset, nil
+		}
+
+		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
+			err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+		} else {
+			err = index.Tree.Upsert(key, upsert)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
+
+		return nil
+	})
 }
 
 // Get executa uma busca no contexto da transação (Snapshot Isolation)
@@ -597,91 +606,102 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 		return false, err
 	}
 
-	// LSN Management
-	currentLSN := se.lsnTracker.Next()
-
-	// 1. Write Ahead Log
-	if se.WAL != nil {
-		// Para delete, apenas precisamos da chave. Documento vazio.
-		payload, err := SerializeDocumentEntry(tableName, indexName, key, nil)
-		if err != nil {
-			return false, err
-		}
-
-		entry := wal.AcquireEntry()
-		entry.Header.Magic = wal.WALMagic
-		entry.Header.Version = 1
-		entry.Header.EntryType = wal.EntryDelete
-
-		entry.Header.LSN = currentLSN
-
-		entry.Header.PayloadLen = uint32(len(payload))
-		entry.Header.CRC32 = wal.CalculateCRC32(payload)
-		entry.Payload = append(entry.Payload, payload...)
-
-		if err := se.WAL.WriteEntry(entry); err != nil {
-			wal.ReleaseEntry(entry)
-			return false, fmt.Errorf("wal write failed: %w", err)
-		}
-		wal.ReleaseEntry(entry)
-	}
-
-	// 2. Modifica Memória e Heap
-	// Usa Upsert para remover logicamente (ou manter apontando para Tombstone)
-	// Precisamos escrever o Tombstone no Heap e atualizar a árvore para apontar para ele.
-	// O Delete atual apenas marca no Heap, e NÃO remove da árvore (conforme comentários comentados abaixo).
-	// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
-
-	var wasFound bool
-	upsert := func(oldOffset int64, exists bool) (int64, error) {
-		if !exists {
-			return 0, nil // Key not found, nothing to delete
-		}
-		// Escreve registro de Delete no Heap (Tombstone)
-		// Delete no Heap requer o offset antigo? O método Heap.Delete atual pede offset.
-		// Wait, Heap.Delete(offset) marca o registro OLD como deletado?
-		// Engine.go original:
-		// offset := node.DataPtrs[idx]
-		// se.Heap.Delete(offset, currentLSN) -> Modifica in-place o header do registro antigo?
-		// Se Heap.Delete modifica in-place, então não criamos nova versão?
-		// Isso viola imutabilidade do WAL/AppendOnly.
-		// O comentário dizia: "Para Phase 2 simplificado: Update in-place Head com DeleteLSN."
-		// Se for in-place, não precisamos atualizar a árvore (ela aponta pro mesmo offset).
-		// ENTRETANTO,		// Para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
-
-		if err := table.Heap.Delete(oldOffset, currentLSN); err != nil {
-			if isChainEndErr(err) {
-				return oldOffset, nil
-			}
-			return 0, fmt.Errorf("heap delete failed: %w", err)
-		}
-		wasFound = true
-
-		// Retorna o MESMO offset, pois a árvore não muda (aponta pro mesmo lugar, que agora está marcado deletado)
-		return oldOffset, nil
-	}
-
-	if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-		err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
-	} else {
-		err = index.Tree.Upsert(key, upsert)
-	}
-
+	resource, err := lockResourceForKey(tableName, indexName, key)
 	if err != nil {
 		return false, err
 	}
 
-	// MVCC Phase 2: Do NOT remove from B-Tree.
-	// We need to keep the key pointing to the "Deleted" record (Tombstone)
-	// so that older transactions can check visibility (DeleteLSN) and potential previous versions.
-	// Garbage Collection (Vacuum) will eventually remove these when safe.
-	// removed := index.Tree.Root.Remove(key)
-	// if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
-	// 	index.Tree.Root = index.Tree.Root.Children[0]
-	// }
+	var wasFound bool
+	err = se.withAutoCommitLocks([]string{resource}, func() error {
+		// LSN Management
+		currentLSN := se.lsnTracker.Next()
 
-	if wasFound {
-		se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
+		// 1. Write Ahead Log
+		if se.WAL != nil {
+			// Para delete, apenas precisamos da chave. Documento vazio.
+			payload, err := SerializeDocumentEntry(tableName, indexName, key, nil)
+			if err != nil {
+				return err
+			}
+
+			entry := wal.AcquireEntry()
+			entry.Header.Magic = wal.WALMagic
+			entry.Header.Version = 1
+			entry.Header.EntryType = wal.EntryDelete
+
+			entry.Header.LSN = currentLSN
+
+			entry.Header.PayloadLen = uint32(len(payload))
+			entry.Header.CRC32 = wal.CalculateCRC32(payload)
+			entry.Payload = append(entry.Payload, payload...)
+
+			if err := se.WAL.WriteEntry(entry); err != nil {
+				wal.ReleaseEntry(entry)
+				return fmt.Errorf("wal write failed: %w", err)
+			}
+			wal.ReleaseEntry(entry)
+		}
+
+		// 2. Modifica Memória e Heap
+		// Usa Upsert para remover logicamente (ou manter apontando para Tombstone)
+		// Precisamos escrever o Tombstone no Heap e atualizar a árvore para apontar para ele.
+		// O Delete atual apenas marca no Heap, e NÃO remove da árvore (conforme comentários comentados abaixo).
+		// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
+		upsert := func(oldOffset int64, exists bool) (int64, error) {
+			if !exists {
+				return 0, nil // Key not found, nothing to delete
+			}
+			// Escreve registro de Delete no Heap (Tombstone)
+			// Delete no Heap requer o offset antigo? O método Heap.Delete atual pede offset.
+			// Wait, Heap.Delete(offset) marca o registro OLD como deletado?
+			// Engine.go original:
+			// offset := node.DataPtrs[idx]
+			// se.Heap.Delete(offset, currentLSN) -> Modifica in-place o header do registro antigo?
+			// Se Heap.Delete modifica in-place, então não criamos nova versão?
+			// Isso viola imutabilidade do WAL/AppendOnly.
+			// O comentário dizia: "Para Phase 2 simplificado: Update in-place Head com DeleteLSN."
+			// Se for in-place, não precisamos atualizar a árvore (ela aponta pro mesmo offset).
+			// ENTRETANTO,		// Para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
+
+			if err := table.Heap.Delete(oldOffset, currentLSN); err != nil {
+				if isChainEndErr(err) {
+					return oldOffset, nil
+				}
+				return 0, fmt.Errorf("heap delete failed: %w", err)
+			}
+			wasFound = true
+
+			// Retorna o MESMO offset, pois a árvore não muda (aponta pro mesmo lugar, que agora está marcado deletado)
+			return oldOffset, nil
+		}
+
+		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
+			err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+		} else {
+			err = index.Tree.Upsert(key, upsert)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		// MVCC Phase 2: Do NOT remove from B-Tree.
+		// We need to keep the key pointing to the "Deleted" record (Tombstone)
+		// so that older transactions can check visibility (DeleteLSN) and potential previous versions.
+		// Garbage Collection (Vacuum) will eventually remove these when safe.
+		// removed := index.Tree.Root.Remove(key)
+		// if index.Tree.Root.N == 0 && !index.Tree.Root.Leaf {
+		// 	index.Tree.Root = index.Tree.Root.Children[0]
+		// }
+
+		if wasFound {
+			se.appliedLSN.MarkApplied(tableName, indexName, currentLSN)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
 
 	return wasFound, nil

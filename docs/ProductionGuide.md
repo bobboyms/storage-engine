@@ -4,9 +4,9 @@ Este documento descreve, de forma objetiva, quais recursos o storage engine impl
 
 ## Status Geral
 
-O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
+O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, lock manager transacional para writes, deadlock detection com waits-for graph, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
 
-Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo com dirty page table persistida, undo fisico por pagina, lock manager com deadlock detection, metricas internas, compressao, replicacao e isolamento serializable.
+Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo com dirty page table persistida, undo fisico por pagina, locks de range para `Serializable`, anti-starvation formal, metricas internas, compressao e replicacao.
 
 ## Como Usar em Modo Mais Seguro
 
@@ -64,7 +64,7 @@ Regras:
 | Concorrencia | lock-free real | Nao implementado |
 | Concorrencia | MVCC | Implementado |
 | Concorrencia | isolamento | Parcial |
-| Concorrencia | deadlock handling | Parcial |
+| Concorrencia | deadlock handling | Implementado |
 | Concorrencia | starvation handling | Nao implementado |
 | Concorrencia | controle de snapshots | Implementado |
 | Transacoes | atomicidade | Parcial |
@@ -378,6 +378,7 @@ A API exposta permite `Put`, `Get`, `Del` e `Scan` por chave de indice, entao el
 O projeto usa:
 
 - `sync.Mutex` e `sync.RWMutex`;
+- lock manager transacional para writes;
 - lock por tabela;
 - `opMu` para coordenar operacoes globais como backup/checkpoint;
 - latches por frame no BufferPool;
@@ -403,9 +404,47 @@ O `TransactionRegistry` rastreia transacoes ativas e calcula o menor `SnapshotLS
 Existe `WriteTransaction` com:
 
 - buffer de operacoes;
+- strict 2PL para writes via lock exclusivo por item logico;
 - markers WAL `BEGIN`, `COMMIT` e `ABORT`;
 - commit que escreve WAL antes de aplicar mudancas;
 - rollback que descarta o write set e grava abort marker quando ha WAL.
+
+**Modelo de lock transacional**
+
+O escopo formal dos locks transacionais hoje e:
+
+- lock exclusivo por item logico `(table, index, key)` para writes;
+- autocommit (`Put`, `Del`, `InsertRow`, `UpsertRow`) usa o mesmo lock manager;
+- operacoes multi-index autocommit travam todos os itens de indice afetados em ordem canonica;
+- `WriteTransaction` segura os locks ate `Commit` ou `Rollback` (strict 2PL).
+
+O que NAO existe nesse modelo:
+
+- lock transacional por pagina;
+- lock transacional por tabela inteira para DML comum;
+- range locks / predicate locks;
+- isolamento `Serializable`.
+
+**Compatibilidade com MVCC**
+
+Leituras continuam MVCC e nao pegam lock transacional. O lock manager cobre os casos em que MVCC sozinho nao basta no runtime atual:
+
+- writes concorrentes no mesmo item;
+- manutencao coerente de ponteiros de indice para o item afetado;
+- verificacao de duplicidade/unicidade no caminho atual de indice/primary key;
+- coordenacao de writes autocommit e `WriteTransaction` sobre o mesmo item logico.
+
+**Deadlocks**
+
+O engine agora mantem um waits-for graph implicito para requests bloqueadas. Quando detecta ciclo:
+
+- escolhe como vitima a transacao mais jovem no ciclo (maior `txID`);
+- marca a vitima como abortada;
+- libera imediatamente todos os locks dela;
+- devolve erro ao chamador via `ErrDeadlockVictim`;
+- permite que o sobrevivente prossiga sem ficar bloqueado indefinidamente.
+
+Tambem existe timeout de espera de lock (5s por padrao) como cerca adicional para requests que nao formam ciclo, mas ficam contenciosas por tempo demais.
 
 ### Parcial
 
@@ -416,19 +455,7 @@ Existem dois niveis:
 - `RepeatableRead`: snapshot fixo durante a transacao.
 - `ReadCommitted`: atualiza snapshot antes de cada operacao.
 
-Nao ha isolamento `Serializable` nem validacao formal de conflitos write-write alem dos mecanismos de indice/Upsert existentes.
-
-**Deadlocks**
-
-O BufferPool documenta ordem fixa de aquisicao (`pool.mu -> frame.rw`), e a B+ tree usa latch crabbing top-down. Isso reduz risco de deadlock em paths internos.
-
-Mas nao ha:
-
-- lock manager;
-- waits-for graph;
-- detector de deadlock;
-- timeout de locks;
-- vitima/abort automatico.
+Ha validacao formal de conflitos write-write no escopo dos locks exclusivos por item logico. Ainda nao ha isolamento `Serializable`, predicate locking nem protecao formal contra phantoms/write skew.
 
 ### Nao implementado
 
@@ -436,7 +463,7 @@ Mas nao ha:
 - Politica formal contra starvation.
 - Fairness/priority/aging para writers e readers.
 - Serializable isolation.
-- Deadlock detection completo.
+- Range locking / predicate locking.
 
 ## Transacoes
 
@@ -449,6 +476,8 @@ O projeto tem `WriteTransaction`, criada por `BeginWriteTransaction`. Ela acumul
 - `Put` adiciona insert/update ao write set;
 - `Del` adiciona delete ao write set;
 - validacao basica de tabela, indice e tipo de chave acontece antes do commit;
+- lock exclusivo por item logico e adquirido no `Put`/`Del` e mantido ate o fim da transacao;
+- deadlocks entre writers sao detectados e a vitima e abortada automaticamente;
 - dados nao ficam visiveis antes de `Commit`;
 - depois de `Commit` ou `Rollback`, novas operacoes na mesma transacao sao rejeitadas.
 
@@ -536,8 +565,7 @@ Ainda nao ha:
 
 - isolamento `Serializable`;
 - deteccao de write skew;
-- validacao formal de conflitos write-write entre transacoes longas;
-- lock manager transacional;
+- range protection/predicate locking;
 - leitura dos writes pendentes da propria `WriteTransaction` antes do commit.
 
 **Recovery apos crash**
@@ -1076,7 +1104,7 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 - isolamento serializable;
 - atomicidade runtime forte para transacoes multi-operacao apos `COMMIT`;
 - rollback de transacao parcialmente aplicada;
-- deadlock detection;
+- range locks/predicate locks para serializacao completa;
 - anti-starvation formal;
 - replicacao/failover;
 - compressao;
@@ -1104,7 +1132,7 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 Prioridade alta:
 
 1. Evoluir de undo logico com CLRs para ARIES completo com dirty page table e undo fisico por pagina.
-2. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
+2. Adicionar anti-starvation, metricas de lock contention e locks de range/predicate para `Serializable`.
 3. Persistir e endurecer free space map.
 4. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
 5. Persistir dirty page table/checkpoint state de forma mais completa.
@@ -1141,6 +1169,6 @@ Prioridade baixa ou futura:
 
 ## Veredito
 
-O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
+O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, lock manager com deadlock handling para writes, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
 
-Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo fisico por pagina, atomicidade runtime forte pos-commit, deadlock handling, starvation handling, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.
+Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo fisico por pagina, atomicidade runtime forte pos-commit, starvation handling, range locking para `Serializable`, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.
