@@ -275,6 +275,40 @@ func (h *HeapV2) Delete(rid int64, deleteLSN uint64) error {
 	return nil
 }
 
+func (h *HeapV2) Undelete(rid int64, expectedDeleteLSN uint64, pageLSN uint64) error {
+	pid, slotID := DecodeRecordID(rid)
+	if pid == pagestore.InvalidPageID {
+		return fmt.Errorf("heap/v2: RecordID %d inválido (pageID=0)", rid)
+	}
+
+	handle, err := h.bp.FetchForWrite(pid)
+	if err != nil {
+		return err
+	}
+	defer handle.Release()
+
+	sp := OpenSlottedPage(handle.Page())
+	doc, rh, err := sp.Read(slotID)
+	if err != nil {
+		return err
+	}
+	_ = doc
+	if rh.DeleteLSN == 0 && rh.Valid {
+		handle.Page().AdvancePageLSN(pageLSN)
+		handle.MarkDirty()
+		return nil
+	}
+	if expectedDeleteLSN != 0 && rh.DeleteLSN != expectedDeleteLSN {
+		return nil
+	}
+	if err := sp.MarkUndeleted(slotID); err != nil {
+		return err
+	}
+	handle.Page().AdvancePageLSN(pageLSN)
+	handle.MarkDirty()
+	return nil
+}
+
 // Sync persiste tudo no disco (buffer pool → fsync).
 func (h *HeapV2) Sync() error {
 	return h.bp.FlushAll()

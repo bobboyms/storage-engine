@@ -6,7 +6,7 @@ Este documento descreve, de forma objetiva, quais recursos o storage engine impl
 
 O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
 
-Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo, dirty page table persistida em checkpoint, undo fisico robusto pos-crash com CLRs, lock manager com deadlock detection, metricas internas, compressao, replicacao e isolamento serializable.
+Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo com dirty page table persistida, undo fisico por pagina, lock manager com deadlock detection, metricas internas, compressao, replicacao e isolamento serializable.
 
 ## Como Usar em Modo Mais Seguro
 
@@ -41,7 +41,7 @@ Regras:
 | Consistencia e durabilidade | WAL / redo log | Implementado |
 | Consistencia e durabilidade | fsync nos momentos corretos | Implementado no caminho duravel |
 | Consistencia e durabilidade | checksums em paginas/blocos | Implementado |
-| Consistencia e durabilidade | recovery deterministico | Implementado em modo ARIES-lite |
+| Consistencia e durabilidade | recovery deterministico | Implementado em modo ARIES-lite com CLRs |
 | Consistencia e durabilidade | testes de crash/falhas simuladas | Implementado |
 | Integridade dos dados | checksums | Implementado |
 | Integridade dos dados | magic bytes | Implementado |
@@ -71,7 +71,7 @@ Regras:
 | Transacoes | commit protocol | Implementado |
 | Transacoes | rollback | Parcial |
 | Transacoes | isolamento | Parcial |
-| Transacoes | recovery apos crash | Implementado em modo ARIES-lite |
+| Transacoes | recovery apos crash | Implementado em modo ARIES-lite com undo logico |
 | Transacoes | operacoes parcialmente aplicadas | Parcial |
 | Recuperacao de espaco | free lists | Parcial |
 | Recuperacao de espaco | compaction | Parcial |
@@ -142,7 +142,7 @@ O recovery atual segue um modelo ARIES-lite com fases claras:
 - analysis: varre o WAL, monta tabela de transacoes, identifica winners/losers e calcula o ponto de redo a partir do checkpoint;
 - redo fisico: reaplica after-images de paginas quando `record.LSN > page.pageLSN` ou quando a pagina on-disk esta ilegivel/corrompida;
 - redo logico: reaplica apenas operacoes winners/autocommit que ainda nao estao refletidas no estado atual;
-- undo-lite: losers sao descartadas porque o write path explicito continua apply-after-commit, sem paginas uncommitted visiveis.
+- undo logico: CLRs sao reaplicadas no redo e losers pendentes sao desfeitas ao fim do recovery com escrita de novos CLRs e `ABORT`.
 
 Cada pagina persiste `pageLSN` no header e esse valor e obedecido no redo fisico. Isso torna o replay idempotente e permite reparar pagina rasgada de heap ou indice quando o WAL contem o after-image correspondente.
 
@@ -150,8 +150,8 @@ Limites atuais:
 
 - Nao ha ARIES completo.
 - Nao ha dirty page table persistida no checkpoint; o checkpoint atual calcula o menor `pageLSN` sujo em memoria no momento do flush.
-- Undo pos-crash e limitado: transacoes loser sao descartadas no redo, mas nao ha CLRs nem undo fisico.
-- Transacoes multi-operacao com rollback pos-crash nao devem ser tratadas como garantia forte de banco de dados completo.
+- O undo pos-crash atual e logico e orientado por LSN/chains de versao, nao undo fisico por pagina.
+- A atomicidade runtime continua parcial quando a aplicacao em memoria falha depois do `COMMIT`.
 
 ### Nao implementado
 
@@ -470,7 +470,7 @@ Com `wal.DefaultOptions()`, cada `WriteEntry` usa `SyncEveryWrite`, entao o `COM
 
 **Rollback antes de aplicar**
 
-`Rollback` descarta o write set e, quando ha WAL, escreve `BEGIN` se necessario e depois `ABORT`. Como o write set ainda nao foi aplicado em heap/indices, o rollback normal nao precisa desfazer paginas.
+`Rollback` descarta o write set e, quando ha WAL, escreve `BEGIN` se necessario e depois `ABORT`. Como o write set normal ainda nao foi aplicado em heap/indices, o rollback em processo vivo continua barato; se o recovery encontrar paginas de loser persistidas, ele executa undo logico e grava CLRs/`ABORT`.
 
 **Recovery de winners e losers**
 
@@ -479,10 +479,10 @@ O recovery faz uma fase de analise do WAL:
 - monta tabela de transacoes por `txID`;
 - identifica transacoes commitadas;
 - identifica losers (`BEGIN` sem `COMMIT`/`ABORT`);
-- reaplica somente operacoes autocommit ou operacoes transacionais cujo `txID` esta commitado;
-- ignora records de transacoes losers ou abortadas.
+- reaplica operacoes autocommit, operacoes transacionais commitadas e CLRs;
+- executa undo logico das losers ao final, gerando CLRs e `ABORT` quando necessario.
 
-O teste `TestRecovery_ExplicitTransaction_CommitsWinnersAndDropsLosers` valida que uma transacao commitada reaparece apos recovery e uma loser nao fica visivel.
+Os testes cobrem winners/losers, losers multi-operacao em varias paginas, restauracao de heap+indices e recovery de recovery apos crash no meio do undo.
 
 **Isolamento de leitura**
 
@@ -509,16 +509,15 @@ Consequencia:
 
 **Rollback**
 
-Rollback funciona bem antes da aplicacao, porque as operacoes estao apenas no write set.
+Rollback funciona bem antes da aplicacao, porque as operacoes estao apenas no write set. No recovery, rollback pos-crash de losers persistidas agora grava CLRs e leva heap/indices ao mesmo estado final mesmo se houver crash no meio do undo.
 
 Nao ha:
 
 - rollback de uma transacao ja parcialmente aplicada;
 - savepoints;
 - nested transactions;
-- CLRs;
 - undo log fisico;
-- rollback pos-crash de paginas modificadas por transacoes loser, porque o modelo atual assume que losers nunca sao aplicadas antes do commit.
+- rollback runtime all-or-nothing se a aplicacao em memoria falhar apos o `COMMIT`.
 
 **Isolamento**
 
@@ -540,8 +539,7 @@ Ainda e parcial como garantia de banco maduro porque:
 
 - nao ha ARIES completo;
 - nao ha undo fisico de paginas;
-- nao ha CLRs;
-- a fase de undo continua sendo undo-lite;
+- o undo usa restauracao logica de chains/ponteiros, nao page-oriented undo;
 - checkpoint ainda nao persiste uma dirty page table completa.
 
 **Operacoes parcialmente aplicadas**
@@ -795,6 +793,8 @@ Tambem existem testes de recovery no pacote `pkg/storage`, incluindo:
 - recovery durante checkpoint em andamento;
 - auto-recovery via `NewProductionStorageEngine`;
 - recovery de transacoes winners/losers;
+- undo pos-crash com CLRs, incluindo crash no meio do undo;
+- rollback de losers com inserts, updates e deletes em varias paginas;
 - fuzzy checkpoint e truncamento seguro do WAL.
 
 **Concorrencia pesada**
@@ -934,7 +934,7 @@ Limitacao: o engine nao expoe metrica interna de:
 
 Recovery imprime contadores de entries aplicadas/puladas e checkpoint LSN. Isso e util para diagnostico manual.
 
-Limitacao: nao mede tempo de recovery, throughput de replay, quantidade de bytes lidos, tempo por fase de analysis/redo/undo-lite, nem exporta esses dados como metricas.
+Limitacao: nao mede tempo de recovery, throughput de replay, quantidade de bytes lidos, tempo por fase de analysis/redo/undo, nem exporta esses dados como metricas.
 
 ### Nao implementado
 
@@ -1096,8 +1096,8 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 
 Prioridade alta:
 
-1. Implementar undo/CLRs ou documentar formalmente o modelo sem undo fisico.
-2. Fortalecer atomicidade runtime de `WriteTransaction` quando a aplicacao pos-commit falhar.
+1. Fortalecer atomicidade runtime de `WriteTransaction` quando a aplicacao pos-commit falhar.
+2. Evoluir de undo logico com CLRs para ARIES completo com dirty page table e undo fisico por pagina.
 3. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
 4. Persistir e endurecer free space map.
 5. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
@@ -1136,4 +1136,4 @@ Prioridade baixa ou futura:
 
 O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
 
-Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo/CLRs, atomicidade runtime forte pos-commit, deadlock handling, starvation handling, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.
+Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo fisico por pagina, atomicidade runtime forte pos-commit, deadlock handling, starvation handling, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.

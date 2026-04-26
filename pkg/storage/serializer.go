@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"google.golang.org/protobuf/proto"
 )
+
+const compensationEntryHeaderSize = 21
 
 // SerializeDocumentEntry serializa uma entrada com documento para WAL usando Protobuf
 func SerializeDocumentEntry(tableName, indexName string, key types.Comparable, document []byte) ([]byte, error) {
@@ -80,6 +83,34 @@ func DeserializeMultiIndexEntry(data []byte) (tableName string, keys map[string]
 		keys[name] = k
 	}
 
+	return
+}
+
+func SerializeCompensationEntry(originalLSN uint64, originalEntryType uint8, originalPayload []byte, undoNextLSN uint64) []byte {
+	buf := make([]byte, compensationEntryHeaderSize+len(originalPayload))
+	binary.LittleEndian.PutUint64(buf[0:8], originalLSN)
+	buf[8] = originalEntryType
+	binary.LittleEndian.PutUint64(buf[9:17], undoNextLSN)
+	binary.LittleEndian.PutUint32(buf[17:21], uint32(len(originalPayload)))
+	copy(buf[21:], originalPayload)
+	return buf
+}
+
+func DeserializeCompensationEntry(data []byte) (originalLSN uint64, originalEntryType uint8, originalPayload []byte, undoNextLSN uint64, err error) {
+	if len(data) < compensationEntryHeaderSize {
+		err = fmt.Errorf("compensation entry too short: %d", len(data))
+		return
+	}
+
+	originalLSN = binary.LittleEndian.Uint64(data[0:8])
+	originalEntryType = data[8]
+	undoNextLSN = binary.LittleEndian.Uint64(data[9:17])
+	payloadLen := int(binary.LittleEndian.Uint32(data[17:21]))
+	if len(data) < compensationEntryHeaderSize+payloadLen {
+		err = fmt.Errorf("compensation payload truncated: header=%d payload=%d data=%d", compensationEntryHeaderSize, payloadLen, len(data))
+		return
+	}
+	originalPayload = data[21 : 21+payloadLen]
 	return
 }
 

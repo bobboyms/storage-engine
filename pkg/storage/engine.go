@@ -840,6 +840,11 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 				wal.ReleaseEntry(entry)
 				return fmt.Errorf("redo multi-insert failed at entry %d: %w", count, err)
 			}
+		case wal.EntryCLR:
+			if err := se.redoCompensationEntry(entry, payload); err != nil {
+				wal.ReleaseEntry(entry)
+				return fmt.Errorf("redo clr failed at entry %d: %w", count, err)
+			}
 		default:
 			skipped++
 		}
@@ -850,7 +855,9 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 
 	// 2. Undo-lite: loser txs nunca chegaram ao estado visível porque o
 	// write path só aplica heap/tree após COMMIT durável.
-	se.undoLoserTransactions(analysis)
+	if err := se.undoLoserTransactions(walPath, cipher, analysis); err != nil {
+		return err
+	}
 
 	se.lsnTracker.Set(maxLSN)
 	atomic.StoreUint64(&se.txIDCounter, maxLSN)

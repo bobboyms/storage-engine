@@ -85,6 +85,7 @@ type recoveryAnalysis struct {
 	TxTable       map[uint64]recoveryTxnState
 	CommittedTxs  map[uint64]struct{}
 	LoserTxs      map[uint64]struct{}
+	UndoneLSNs    map[uint64]map[uint64]struct{}
 }
 
 func newRecoveryAnalysis() *recoveryAnalysis {
@@ -93,6 +94,7 @@ func newRecoveryAnalysis() *recoveryAnalysis {
 		TxTable:      make(map[uint64]recoveryTxnState),
 		CommittedTxs: make(map[uint64]struct{}),
 		LoserTxs:     make(map[uint64]struct{}),
+		UndoneLSNs:   make(map[uint64]map[uint64]struct{}),
 	}
 }
 
@@ -191,6 +193,18 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 				}
 			}
 			result.TxTable[txID] = state
+
+			if entry.Header.EntryType == wal.EntryCLR {
+				originalLSN, _, _, _, clrErr := DeserializeCompensationEntry(payload)
+				if clrErr != nil {
+					wal.ReleaseEntry(entry)
+					return nil, fmt.Errorf("analysis deserialize clr failed at entry %d: %w", count, clrErr)
+				}
+				if _, ok := result.UndoneLSNs[txID]; !ok {
+					result.UndoneLSNs[txID] = make(map[uint64]struct{})
+				}
+				result.UndoneLSNs[txID][originalLSN] = struct{}{}
+			}
 		}
 
 		switch entry.Header.EntryType {
@@ -250,6 +264,8 @@ func (ra *recoveryAnalysis) shouldRedo(entry *wal.WALEntry) ([]byte, bool, error
 	switch entry.Header.EntryType {
 	case wal.EntryBegin, wal.EntryCommit, wal.EntryAbort, wal.EntryCheckpoint, wal.EntryPageRedo:
 		return payload, false, nil
+	case wal.EntryCLR:
+		return payload, true, nil
 	}
 
 	if !transactional {
@@ -442,24 +458,6 @@ func (se *StorageEngine) redoPageEntry(entry *wal.WALEntry, targets map[string]p
 	}
 	return target.ApplyPageRedo(pageID, page, entry.Header.LSN)
 }
-
-func (se *StorageEngine) undoLoserTransactions(analysis *recoveryAnalysis) {
-	// ARIES-lite do write path atual:
-	// transações explícitas só aplicam mudanças em heap/tree APÓS o
-	// COMMIT estar durável no WAL. Portanto, tx "loser" (BEGIN sem
-	// COMMIT/ABORT no crash) nunca chegaram a alterar o estado visível,
-	// e o undo pós-crash reduz-se a descartar seus log records no redo.
-	//
-	// Mantemos a fase explícita porque ela fecha o contrato de recovery
-	// e preserva o ponto de extensão caso o write path evolua para
-	// updates uncommitted em página com CLRs.
-	for txID := range analysis.LoserTxs {
-		state := analysis.TxTable[txID]
-		state.Status = recoveryTxnAborted
-		analysis.TxTable[txID] = state
-	}
-}
-
 func cloneKeys(src map[string]uint64) map[string]uint64 {
 	dst := make(map[string]uint64, len(src))
 	for k, v := range src {

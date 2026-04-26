@@ -347,6 +347,28 @@ func (sp *SlottedPage) MarkDeleted(slotID uint16, deleteLSN uint64) error {
 	return nil
 }
 
+func (sp *SlottedPage) MarkUndeleted(slotID uint16) error {
+	h := sp.header()
+	if slotID >= h.numSlots {
+		return fmt.Errorf("%w: slotID %d >= numSlots %d", ErrSlotNotFound, slotID, h.numSlots)
+	}
+
+	offset, length := sp.readSlot(slotID)
+	if length == 0 {
+		return ErrVacuumed
+	}
+	if length < RecordHeaderSize {
+		return ErrBadRecord
+	}
+
+	var rh RecordHeader
+	decodeRecordHeader(&rh, sp.body[offset:offset+RecordHeaderSize])
+	rh.Valid = true
+	rh.DeleteLSN = 0
+	encodeRecordHeader(&rh, sp.body[offset:offset+RecordHeaderSize])
+	return nil
+}
+
 // Read devolve o doc e o header do slot indicado.
 func (sp *SlottedPage) Read(slotID uint16) ([]byte, RecordHeader, error) {
 	h := sp.header()
