@@ -1,12 +1,14 @@
 package storage
 
 import (
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 
-	"time"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"time"
 )
 
 func TestWriteTransaction_Commit(t *testing.T) {
@@ -488,5 +490,134 @@ func TestWriteTransaction_DelAfterCommit(t *testing.T) {
 	// Del after commit
 	if err := tx.Del("any", "idx", types.IntKey(1)); err == nil {
 		t.Error("Expected error calling Del on committed tx")
+	}
+}
+
+func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConverges(t *testing.T) {
+	tmpDir := t.TempDir()
+	walPath := filepath.Join(tmpDir, "wal.log")
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
+	openEngine := func(t *testing.T, production bool) *StorageEngine {
+		t.Helper()
+
+		hm, err := NewHeapForTable(HeapFormatV2, heapPath)
+		if err != nil {
+			t.Fatalf("new heap: %v", err)
+		}
+
+		tableMgr := NewTableMenager()
+		if err := tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 4, hm); err != nil {
+			t.Fatalf("new table: %v", err)
+		}
+
+		walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+		if err != nil {
+			t.Fatalf("new wal writer: %v", err)
+		}
+
+		if production {
+			se, err := NewProductionStorageEngine(tableMgr, walWriter)
+			if err != nil {
+				_ = walWriter.Close()
+				t.Fatalf("new production engine: %v", err)
+			}
+			return se
+		}
+
+		se, err := NewStorageEngine(tableMgr, walWriter)
+		if err != nil {
+			_ = walWriter.Close()
+			t.Fatalf("new storage engine: %v", err)
+		}
+		return se
+	}
+
+	se := openEngine(t, false)
+
+	tx := se.BeginWriteTransaction()
+	if err := tx.Put("users", "id", types.IntKey(1), `{"id":1,"name":"Alice"}`); err != nil {
+		t.Fatalf("tx put key1: %v", err)
+	}
+	if err := tx.Put("users", "id", types.IntKey(2), `{"id":2,"name":"Bob"}`); err != nil {
+		t.Fatalf("tx put key2: %v", err)
+	}
+
+	injectedErr := errors.New("injected post-commit apply failure")
+	applyStarted := make(chan struct{})
+	releaseFailure := make(chan struct{})
+	var startedOnce sync.Once
+	se.testHooks.onPostCommitApplyStage = func(info postCommitApplyInfo) error {
+		if info.Stage != postCommitStageAfterHeapMutation || info.Step != 1 {
+			return nil
+		}
+		startedOnce.Do(func() { close(applyStarted) })
+		<-releaseFailure
+		return injectedErr
+	}
+
+	commitErrCh := make(chan error, 1)
+	go func() {
+		commitErrCh <- tx.Commit()
+	}()
+
+	<-applyStarted
+
+	getDone := make(chan struct{})
+	var (
+		gotDoc   string
+		gotFound bool
+		gotErr   error
+	)
+	go func() {
+		gotDoc, gotFound, gotErr = se.Get("users", "id", types.IntKey(1))
+		close(getDone)
+	}()
+
+	select {
+	case <-getDone:
+		t.Fatal("Get returned while post-commit apply was still in-flight")
+	default:
+	}
+
+	close(releaseFailure)
+
+	if err := <-commitErrCh; !errors.Is(err, injectedErr) {
+		t.Fatalf("expected injected commit error, got %v", err)
+	}
+
+	<-getDone
+	if !errors.Is(gotErr, ErrEngineDegraded) {
+		t.Fatalf("expected degraded read error after failed apply, got found=%v doc=%q err=%v", gotFound, gotDoc, gotErr)
+	}
+	if gotFound || gotDoc != "" {
+		t.Fatalf("expected no visible document after degraded read, got found=%v doc=%q", gotFound, gotDoc)
+	}
+
+	if err := se.Put("users", "id", types.IntKey(3), `{"id":3,"name":"Carol"}`); !errors.Is(err, ErrEngineDegraded) {
+		t.Fatalf("expected degraded write error, got %v", err)
+	}
+
+	if err := se.Close(); err != nil {
+		t.Fatalf("close degraded engine: %v", err)
+	}
+
+	recovered := openEngine(t, true)
+	defer recovered.Close()
+
+	doc1, found1, err := recovered.Get("users", "id", types.IntKey(1))
+	if err != nil {
+		t.Fatalf("recovered get key1: %v", err)
+	}
+	if !found1 || doc1 != `{"id":1,"name":"Alice"}` {
+		t.Fatalf("recovered key1 mismatch: found=%v doc=%q", found1, doc1)
+	}
+
+	doc2, found2, err := recovered.Get("users", "id", types.IntKey(2))
+	if err != nil {
+		t.Fatalf("recovered get key2: %v", err)
+	}
+	if !found2 || doc2 != `{"id":2,"name":"Bob"}` {
+		t.Fatalf("recovered key2 mismatch: found=%v doc=%q", found2, doc2)
 	}
 }

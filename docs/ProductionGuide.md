@@ -497,15 +497,24 @@ O MVCC percorre cadeias de versoes e usa `CreateLSN`, `DeleteLSN` e `PrevRecordI
 
 **Atomicidade**
 
-A atomicidade e forte no caminho de recovery de transacoes explicitas: se o crash acontece antes do `COMMIT` duravel, o redo descarta a transacao; se o `COMMIT` esta duravel, o redo reaplica suas operacoes.
+A atomicidade e forte tanto no recovery quanto no runtime para `WriteTransaction`.
 
-No runtime, porem, a atomicidade ainda e parcial. Depois que o `COMMIT` foi escrito no WAL, `Commit` aplica operacoes uma a uma em heap e indices. Se uma aplicacao falhar no meio, nao ha undo runtime para desfazer operacoes ja aplicadas naquela chamada.
+O protocolo atual de `Commit` explicito e:
+
+1. escreve `BEGIN`, operacoes e `COMMIT` no WAL;
+2. so depois do `COMMIT` duravel entra na fase de aplicacao local;
+3. segura `opMu` em modo exclusivo durante toda a fase de aplicacao, bloqueando novas leituras/escritas publicas ate a convergencia;
+4. para `INSERT`/`UPDATE`, grava primeiro a nova versao no heap e so depois instala o ponteiro do indice;
+5. para `DELETE`, marca o registro no heap primeiro e mantem o indice apontando para o mesmo head tombstoned;
+6. se qualquer etapa falhar, o engine entra em modo `degraded` e passa a devolver `ErrEngineDegraded` nas APIs publicas ate `Recover` ou reopen.
+
+Isso define a ordem formal heap/index e evita visibilidade parcial em processo vivo: enquanto a fase pos-commit esta em andamento, nenhuma API publica observa o prefixo aplicado; se a aplicacao falha, a janela e fechada com erro explicito em vez de deixar o processo continuar em cima de estado intermediario.
 
 Consequencia:
 
-- crash depois do `COMMIT` pode ser corrigido pelo recovery;
-- erro em processo vivo depois do `COMMIT` pode deixar estado parcialmente aplicado ate reopen/recovery ou reparo manual;
-- nao ha protocolo two-phase interno entre heap e todos os indices para tornar a aplicacao em memoria all-or-nothing.
+- crash depois do `COMMIT` continua sendo corrigido pelo recovery;
+- erro em processo vivo depois do `COMMIT` nao expoe estado parcial; o engine exige recovery antes de voltar a aceitar trafego;
+- reopen/recovery reaplica deterministicamente a transacao winner e converge heap+indices ao mesmo estado final.
 
 **Rollback**
 
@@ -517,7 +526,7 @@ Nao ha:
 - savepoints;
 - nested transactions;
 - undo log fisico;
-- rollback runtime all-or-nothing se a aplicacao em memoria falhar apos o `COMMIT`.
+- rollback runtime all-or-nothing generico para caminhos fora de `WriteTransaction`.
 
 **Isolamento**
 
@@ -544,14 +553,14 @@ Ainda e parcial como garantia de banco maduro porque:
 
 **Operacoes parcialmente aplicadas**
 
-O comportamento atual e:
+Para `WriteTransaction`, o comportamento agora e:
 
 - antes do `COMMIT`: operacoes ficam no write set e nao sao visiveis;
-- depois do `COMMIT` duravel: operacoes sao aplicadas em sequencia;
-- em crash durante a aplicacao: recovery deve reaplicar a transacao commitada;
-- em erro retornado durante a aplicacao sem crash: nao ha rollback automatico do prefixo ja aplicado.
+- depois do `COMMIT` duravel: operacoes sao aplicadas sob barreira exclusiva de runtime;
+- em crash durante a aplicacao: recovery reaplica a transacao commitada;
+- em erro retornado durante a aplicacao sem crash: o engine marca `degraded`, bloqueia observacao do estado parcial e exige recovery.
 
-Este ponto deve ser tratado como uma lacuna importante antes de uso critico.
+Esse mecanismo foi validado com fault injection no meio da aplicacao pos-commit, incluindo falha entre mutacao de heap e instalacao do indice.
 
 ### Nao implementado
 
@@ -562,8 +571,7 @@ Este ponto deve ser tratado como uma lacuna importante antes de uso critico.
 - Nested transactions.
 - Undo log fisico.
 - Compensation log records.
-- Commit atomico multi-recurso em memoria depois que o WAL ja recebeu `COMMIT`.
-- Teste especifico de falha injetada no meio da aplicacao pos-commit.
+- Commit atomico multi-recurso generico para caminhos que nao usam `WriteTransaction`.
 
 ## Recuperacao de Espaco
 
@@ -848,7 +856,6 @@ Ainda e parcial porque nao ha uma camada generica de injecao de falhas para:
 - short reads/writes;
 - falha aleatoria de `ReadAt`/`WriteAt`;
 - falha no meio de `BufferPool.FlushAll`;
-- falha no meio da aplicacao pos-commit de uma `WriteTransaction`;
 - falha no meio de rename/copy de backup;
 - clock/scheduler adversarial.
 
@@ -1096,13 +1103,13 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 
 Prioridade alta:
 
-1. Fortalecer atomicidade runtime de `WriteTransaction` quando a aplicacao pos-commit falhar.
-2. Evoluir de undo logico com CLRs para ARIES completo com dirty page table e undo fisico por pagina.
-3. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
-4. Persistir e endurecer free space map.
-5. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
-6. Persistir dirty page table/checkpoint state de forma mais completa.
-7. Validar explicitamente versoes desconhecidas em PageFile e WALReader.
+1. Evoluir de undo logico com CLRs para ARIES completo com dirty page table e undo fisico por pagina.
+2. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
+3. Persistir e endurecer free space map.
+4. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
+5. Persistir dirty page table/checkpoint state de forma mais completa.
+6. Validar explicitamente versoes desconhecidas em PageFile e WALReader.
+7. Estender a mesma cerca de atomicidade/degraded state para outros caminhos multi-recurso que ainda nao usam `WriteTransaction`.
 8. Criar metricas internas para WAL, BufferPool, recovery, vacuum e erros de corrupcao.
 
 Prioridade media:

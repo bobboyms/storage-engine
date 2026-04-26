@@ -43,6 +43,9 @@ type StorageEngine struct {
 	txIDCounter   uint64
 	appliedLSN    *AppliedLSNTracker
 	TxRegistry    *TransactionRegistry
+	runtimeMu     sync.RWMutex
+	degradedErr   error
+	testHooks     storageEngineTestHooks
 	metaMu        sync.RWMutex // Lock apenas para operações de metadados (ListTables, etc)
 	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
 	// Nota: Lock por tabela agora está em Table.mu
@@ -164,8 +167,12 @@ type Transaction struct {
 
 // BeginTransaction inicia uma transação com o nível de isolamento especificado
 func (se *StorageEngine) BeginTransaction(level IsolationLevel) *Transaction {
+	se.opMu.RLock()
+	snapshot := se.lsnTracker.Current()
+	se.opMu.RUnlock()
+
 	tx := &Transaction{
-		SnapshotLSN: se.lsnTracker.Current(), // Captura o "agora" linearizável
+		SnapshotLSN: snapshot, // Captura o "agora" linearizável
 		Level:       level,
 		engine:      se,
 	}
@@ -273,6 +280,9 @@ func (se *StorageEngine) readVisibleValue(tx *Transaction, table *Table, key typ
 func (se *StorageEngine) Put(tableName string, indexName string, key types.Comparable, document string) error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
@@ -395,10 +405,15 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 // Get executa uma busca no contexto da transação (Snapshot Isolation)
 func (tx *Transaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return "", false, err
+	}
+
 	// Se Read Committed, atualiza o snapshot antes de começar
 	tx.refreshSnapshot()
-
-	se := tx.engine
 
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
@@ -474,10 +489,15 @@ func (se *StorageEngine) Get(tableName string, indexName string, key types.Compa
 
 // Scan executa uma busca por range no contexto da transação
 func (tx *Transaction) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return nil, err
+	}
+
 	// Se Read Committed, atualiza snapshot
 	tx.refreshSnapshot()
-
-	se := tx.engine
 
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
@@ -559,6 +579,9 @@ func (se *StorageEngine) RangeScan(tableName string, indexName string, start, en
 func (se *StorageEngine) Del(tableName string, indexName string, key types.Comparable) (bool, error) {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return false, err
+	}
 
 	// Obtém a tabela primeiro (sem lock)
 	table, err := se.TableMetaData.GetTableByName(tableName)
@@ -669,6 +692,9 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 func (se *StorageEngine) CreateCheckpoint() error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	if se.WAL != nil {
 		if err := se.WAL.Sync(); err != nil {
@@ -861,6 +887,7 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 
 	se.lsnTracker.Set(maxLSN)
 	atomic.StoreUint64(&se.txIDCounter, maxLSN)
+	se.clearDegraded()
 	if analysis.CheckpointLSN > 0 {
 		fmt.Printf("Recovered: physical redo applied=%d skipped=%d; logical entries applied=%d skipped=%d (checkpoint LSN=%d → redo start). Current LSN: %d\n",
 			physicalApplied, physicalSkipped, count, skipped, analysis.CheckpointLSN, maxLSN)
@@ -884,6 +911,9 @@ func (se *StorageEngine) walCipher() crypto.Cipher {
 func (se *StorageEngine) Vacuum(tableName string) error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	// 1. Acquire Table Lock (Exclusive)
 	table, err := se.TableMetaData.GetTableByName(tableName)

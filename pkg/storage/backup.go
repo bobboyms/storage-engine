@@ -59,6 +59,9 @@ func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error)
 
 	se.opMu.Lock()
 	defer se.opMu.Unlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return nil, err
+	}
 
 	if se.WAL != nil {
 		if err := se.fuzzyCheckpointLocked(); err != nil {

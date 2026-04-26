@@ -115,8 +115,11 @@ func (tx *WriteTransaction) Commit() error {
 	}
 
 	se := tx.engine
-	se.opMu.RLock()
-	defer se.opMu.RUnlock()
+	se.opMu.Lock()
+	defer se.opMu.Unlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	if len(tx.writeSet) == 0 {
 		if se.WAL != nil {
@@ -199,63 +202,18 @@ func (tx *WriteTransaction) Commit() error {
 			return err
 		}
 	}
+	tx.committed = true
 
 	// 2. Memory Application (Phase 2: Visibility)
-	// Apply all changes to Heap and Trees
-	for _, op := range tx.writeSet {
-		// Re-fetch index (safe, consistent with WAL checks)
-		table, _ := se.TableMetaData.GetTableByName(op.tableName)
-		index, _ := table.GetIndex(op.indexName)
-		opLSN := op.lsn
-
-		// Apply Logic
-		if op.opType == wal.EntryDelete {
-			// Delete logic
-			err := index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
-				if !exists {
-					return 0, nil
-				}
-				if err := table.Heap.Delete(oldOffset, opLSN); err != nil {
-					if isChainEndErr(err) {
-						return oldOffset, nil
-					}
-					return 0, fmt.Errorf("heap delete failed: %w", err)
-				}
-				return oldOffset, nil
-			})
-			if err != nil {
-				return err
-			}
-		} else {
-			// Insert/Update logic
-			bsonDoc, errBson := JsonToBson(op.document)
-			var bsonData []byte
-			if errBson == nil {
-				bsonData, _ = MarshalBson(bsonDoc)
-			} else {
-				bsonData = []byte(op.document)
-			}
-
-			err := index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
-				var prevOffset int64 = -1
-				if exists {
-					prevOffset = oldOffset
-				}
-				offset, err := table.Heap.Write(bsonData, opLSN, prevOffset)
-				if err != nil {
-					return 0, err
-				}
-				return offset, nil
-			})
-			if err != nil {
-				return err
-			}
+	// Apply all changes to Heap and Trees under the engine-wide write barrier.
+	for i, op := range tx.writeSet {
+		if err := tx.applyCommittedWriteOp(i+1, len(tx.writeSet), op); err != nil {
+			applyErr := fmt.Errorf("post-commit apply failed for tx %d at op %d/%d (%s.%s): %w", tx.txID, i+1, len(tx.writeSet), op.tableName, op.indexName, err)
+			se.markDegraded(applyErr)
+			return applyErr
 		}
-
-		se.appliedLSN.MarkApplied(op.tableName, op.indexName, opLSN)
 	}
 
-	tx.committed = true
 	return nil
 }
 
@@ -337,4 +295,96 @@ func getTypeFromKey(k types.Comparable) DataType {
 	default:
 		return TypeVarchar // Fallback
 	}
+}
+
+func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeOp) error {
+	table, err := tx.engine.TableMetaData.GetTableByName(op.tableName)
+	if err != nil {
+		return err
+	}
+	index, err := table.GetIndex(op.indexName)
+	if err != nil {
+		return err
+	}
+
+	info := postCommitApplyInfo{
+		TxID:      tx.txID,
+		Step:      step,
+		Total:     total,
+		OpType:    op.opType,
+		TableName: op.tableName,
+		IndexName: op.indexName,
+		Key:       op.key,
+	}
+	if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageBeforeOp)); err != nil {
+		return err
+	}
+
+	if op.opType == wal.EntryDelete {
+		err = index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+			if !exists {
+				return 0, nil
+			}
+			if err := table.Heap.Delete(oldOffset, op.lsn); err != nil {
+				if isChainEndErr(err) {
+					return oldOffset, nil
+				}
+				return 0, fmt.Errorf("heap delete failed: %w", err)
+			}
+			if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageAfterHeapMutation)); err != nil {
+				return 0, err
+			}
+			return oldOffset, nil
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		bsonData, err := tx.opDocumentBytes(op)
+		if err != nil {
+			return err
+		}
+
+		err = index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+			prevOffset := int64(-1)
+			if exists {
+				prevOffset = oldOffset
+			}
+			offset, err := table.Heap.Write(bsonData, op.lsn, prevOffset)
+			if err != nil {
+				return 0, err
+			}
+			if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageAfterHeapMutation)); err != nil {
+				return 0, err
+			}
+			return offset, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageAfterIndexInstall)); err != nil {
+		return err
+	}
+
+	tx.engine.appliedLSN.MarkApplied(op.tableName, op.indexName, op.lsn)
+	return nil
+}
+
+func (tx *WriteTransaction) opDocumentBytes(op writeOp) ([]byte, error) {
+	bsonDoc, errBson := JsonToBson(op.document)
+	if errBson == nil {
+		bsonData, err := MarshalBson(bsonDoc)
+		if err != nil {
+			return nil, err
+		}
+		return bsonData, nil
+	}
+	return []byte(op.document), nil
+}
+
+func withPostCommitStage(info postCommitApplyInfo, stage postCommitApplyStage) postCommitApplyInfo {
+	info.Stage = stage
+	return info
 }

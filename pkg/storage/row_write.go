@@ -21,6 +21,9 @@ type indexUpdateUndo struct {
 func (se *StorageEngine) writeRow(tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	return se.writeRowLocked(tableName, doc, providedKeys, insertOnly)
 }

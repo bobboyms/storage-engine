@@ -41,6 +41,9 @@ import (
 func (se *StorageEngine) FuzzyCheckpoint() error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
 
 	return se.fuzzyCheckpointLocked()
 }
