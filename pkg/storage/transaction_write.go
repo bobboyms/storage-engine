@@ -1,23 +1,49 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
-	"github.com/bobboyms/storage-engine/pkg/errors"
+	storageerrors "github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+var ErrSerializationConflict = errors.New("storage: serialization conflict")
+
+type SerializationConflictError struct {
+	TableName string
+	IndexName string
+	Key       types.Comparable
+}
+
+func (e *SerializationConflictError) Error() string {
+	return fmt.Sprintf("storage: serialization conflict on %s.%s key %v", e.TableName, e.IndexName, e.Key)
+}
+
+func (e *SerializationConflictError) Unwrap() error {
+	return ErrSerializationConflict
+}
 
 // WriteTransaction accumulates operations for atomic commit
 type WriteTransaction struct {
 	engine    *StorageEngine
 	txID      uint64
+	readView  *Transaction
 	writeSet  []writeOp
+	readSet   map[string]readObservation
+	pending   map[string]int
 	committed bool
 	aborted   bool
+	abortErr  error
 	walBegun  bool
 	mu        sync.Mutex
+}
+
+type readObservation struct {
+	found     bool
+	createLSN uint64
 }
 
 type writeOp struct {
@@ -31,10 +57,17 @@ type writeOp struct {
 
 // BeginWriteTransaction starts a new write transaction
 func (se *StorageEngine) BeginWriteTransaction() *WriteTransaction {
+	return se.BeginWriteTransactionWithIsolation(RepeatableRead)
+}
+
+func (se *StorageEngine) BeginWriteTransactionWithIsolation(level IsolationLevel) *WriteTransaction {
 	return &WriteTransaction{
 		engine:   se,
 		txID:     se.nextTxID(),
+		readView: se.BeginTransaction(level),
 		writeSet: make([]writeOp, 0),
+		readSet:  make(map[string]readObservation),
+		pending:  make(map[string]int),
 	}
 }
 
@@ -62,7 +95,7 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 	// Better to duplicate critical checks or reuse existing private methods
 	// We will validate basically here
 	if index.Type != getTypeFromKey(key) {
-		return &errors.InvalidKeyTypeError{
+		return &storageerrors.InvalidKeyTypeError{
 			Name:     indexName,
 			TypeName: index.Type.String(),
 		}
@@ -75,6 +108,9 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 	if err := tx.acquireLockLocked(resource); err != nil {
 		return err
 	}
+	if err := tx.checkReadWriteConflictLocked(resource, tableName, indexName, key); err != nil {
+		return err
+	}
 
 	tx.writeSet = append(tx.writeSet, writeOp{
 		opType:    wal.EntryInsert, // We treat updates as inserts (log-structured)
@@ -83,6 +119,7 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 		key:       key,
 		document:  document,
 	})
+	tx.pending[resource] = len(tx.writeSet) - 1
 	return nil
 }
 
@@ -111,6 +148,9 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 	if err := tx.acquireLockLocked(resource); err != nil {
 		return err
 	}
+	if err := tx.checkReadWriteConflictLocked(resource, tableName, indexName, key); err != nil {
+		return err
+	}
 
 	tx.writeSet = append(tx.writeSet, writeOp{
 		opType:    wal.EntryDelete,
@@ -118,7 +158,39 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 		indexName: indexName,
 		key:       key,
 	})
+	tx.pending[resource] = len(tx.writeSet) - 1
 	return nil
+}
+
+func (tx *WriteTransaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	if err := tx.ensureWritableLocked(); err != nil {
+		return "", false, err
+	}
+
+	resource, err := lockResourceForKey(tableName, indexName, key)
+	if err != nil {
+		return "", false, err
+	}
+	if idx, ok := tx.pending[resource]; ok {
+		op := tx.writeSet[idx]
+		if op.opType == wal.EntryDelete {
+			return "", false, nil
+		}
+		return op.document, true, nil
+	}
+
+	record, err := tx.readCommittedRecordLocked(tableName, indexName, key)
+	if err != nil {
+		return "", false, err
+	}
+	tx.readSet[resource] = readObservation{
+		found:     record.Found,
+		createLSN: record.CreateLSN,
+	}
+	return record.Document, record.Found, nil
 }
 
 // Commit persists all operations atomically
@@ -128,6 +200,7 @@ func (tx *WriteTransaction) Commit() (err error) {
 	if tx.engine.LockManager != nil {
 		defer tx.engine.LockManager.ReleaseAll(tx.txID)
 	}
+	defer tx.closeReadViewLocked()
 	defer func() {
 		if err != nil && !tx.committed {
 			tx.aborted = true
@@ -249,6 +322,7 @@ func (tx *WriteTransaction) Rollback() error {
 	if tx.engine.LockManager != nil {
 		defer tx.engine.LockManager.ReleaseAll(tx.txID)
 	}
+	defer tx.closeReadViewLocked()
 
 	if tx.committed || tx.aborted {
 		return nil
@@ -281,6 +355,9 @@ func (tx *WriteTransaction) ensureWritableLocked() error {
 		return fmt.Errorf("transaction already finished")
 	}
 	if tx.aborted {
+		if tx.abortErr != nil {
+			return tx.abortErr
+		}
 		if err := tx.lockManagerAbortErrorLocked(); err != nil {
 			return err
 		}
@@ -292,14 +369,51 @@ func (tx *WriteTransaction) ensureWritableLocked() error {
 	return nil
 }
 
+func (tx *WriteTransaction) closeReadViewLocked() {
+	if tx.readView != nil {
+		tx.readView.Close()
+		tx.readView = nil
+	}
+}
+
 func (tx *WriteTransaction) acquireLockLocked(resource string) error {
 	if tx.engine.LockManager == nil {
 		return nil
 	}
 	if err := tx.engine.LockManager.Acquire(tx.txID, resource); err != nil {
 		tx.aborted = true
+		tx.abortErr = err
 		tx.writeSet = nil
 		return err
+	}
+	return nil
+}
+
+func (tx *WriteTransaction) checkReadWriteConflictLocked(resource string, tableName string, indexName string, key types.Comparable) error {
+	if _, alreadyPending := tx.pending[resource]; alreadyPending {
+		return nil
+	}
+
+	observed, ok := tx.readSet[resource]
+	if !ok {
+		return nil
+	}
+
+	current, err := tx.currentCommittedObservationLocked(tableName, indexName, key)
+	if err != nil {
+		return err
+	}
+	if observed != current {
+		tx.aborted = true
+		conflictErr := &SerializationConflictError{
+			TableName: tableName,
+			IndexName: indexName,
+			Key:       key,
+		}
+		tx.abortErr = conflictErr
+		tx.writeSet = nil
+		tx.pending = make(map[string]int)
+		return conflictErr
 	}
 	return nil
 }
@@ -310,10 +424,49 @@ func (tx *WriteTransaction) lockManagerAbortErrorLocked() error {
 	}
 	if err := tx.engine.LockManager.IsAborted(tx.txID); err != nil {
 		tx.aborted = true
+		tx.abortErr = err
 		tx.writeSet = nil
 		return err
 	}
 	return nil
+}
+
+func (tx *WriteTransaction) readCommittedRecordLocked(tableName string, indexName string, key types.Comparable) (visibleRecord, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return visibleRecord{}, err
+	}
+
+	if tx.readView == nil {
+		return visibleRecord{}, fmt.Errorf("transaction already finished")
+	}
+	tx.readView.refreshSnapshot()
+	return se.visibleRecordForKey(tx.readView, tableName, indexName, key)
+}
+
+func (tx *WriteTransaction) currentCommittedObservationLocked(tableName string, indexName string, key types.Comparable) (readObservation, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return readObservation{}, err
+	}
+
+	view := &Transaction{
+		SnapshotLSN: se.lsnTracker.Current(),
+		Level:       RepeatableRead,
+		engine:      se,
+	}
+	record, err := se.visibleRecordForKey(view, tableName, indexName, key)
+	if err != nil {
+		return readObservation{}, err
+	}
+	return readObservation{
+		found:     record.Found,
+		createLSN: record.CreateLSN,
+	}, nil
 }
 
 func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {

@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"time"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"os"
+	"time"
 )
 
 /*
@@ -18,15 +18,21 @@ Este exemplo demonstra os dois níveis de isolamento suportados:
    - Transação vê um snapshot consistente do momento em que iniciou
    - Leituras repetidas retornam os mesmos dados
    - Não vê alterações feitas por outras transações após seu início
+   - Evita dirty read, non-repeatable read e phantom read observacional
+   - Ainda não é Serializable: write skew continua possível
 
 2. ReadCommitted:
    - Cada leitura vê os dados mais recentes commitados
    - Pode ver alterações feitas por outras transações durante sua execução
    - Menos isolada, mas mais "fresca"
+   - Evita dirty read, mas permite non-repeatable read e phantom read
 
 Fenômenos de concorrência:
 - RepeatableRead previne "non-repeatable reads"
-- ReadCommitted permite "non-repeatable reads"
+- RepeatableRead previne phantom read observacional
+- ReadCommitted permite "non-repeatable reads" e phantoms
+- Lost update por leitura obsoleta em WriteTransaction é rejeitado
+- Write skew ainda pode acontecer porque não há Serializable/range locking
 */
 
 func main() {

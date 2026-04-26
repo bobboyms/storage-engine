@@ -452,10 +452,19 @@ Tambem existe timeout de espera de lock (5s por padrao) como cerca adicional par
 
 Existem dois niveis:
 
-- `RepeatableRead`: snapshot fixo durante a transacao.
-- `ReadCommitted`: atualiza snapshot antes de cada operacao.
+- `ReadCommitted`: cada leitura usa um snapshot novo do estado commitado no momento da operacao.
+- `RepeatableRead`: usa snapshot fixo por transacao, com semantica de snapshot isolation.
 
-Ha validacao formal de conflitos write-write no escopo dos locks exclusivos por item logico. Ainda nao ha isolamento `Serializable`, predicate locking nem protecao formal contra phantoms/write skew.
+Garantias formais no runtime atual:
+
+- `ReadCommitted` impede dirty read;
+- `ReadCommitted` permite non-repeatable read e phantom read;
+- `RepeatableRead` impede dirty read, non-repeatable read e phantom read observacional dentro da mesma transacao;
+- `RepeatableRead` ainda permite write skew porque nao ha predicate/range locking;
+- `WriteTransaction` detecta conflito de escrita baseado em leitura obsoleta no mesmo item e aborta com `ErrSerializationConflict`, evitando lost update classico por read-modify-write;
+- conflitos write-write no mesmo item continuam serializados pelo lock manager.
+
+Ainda nao ha isolamento `Serializable`, predicate locking nem validacao serializavel completa entre predicados/ranges.
 
 ### Nao implementado
 
@@ -475,9 +484,11 @@ O projeto tem `WriteTransaction`, criada por `BeginWriteTransaction`. Ela acumul
 
 - `Put` adiciona insert/update ao write set;
 - `Del` adiciona delete ao write set;
+- `Get` enxerga os writes pendentes da propria transacao;
 - validacao basica de tabela, indice e tipo de chave acontece antes do commit;
 - lock exclusivo por item logico e adquirido no `Put`/`Del` e mantido ate o fim da transacao;
 - deadlocks entre writers sao detectados e a vitima e abortada automaticamente;
+- lost update classico por leitura obsoleta no mesmo item e rejeitado com `ErrSerializationConflict`;
 - dados nao ficam visiveis antes de `Commit`;
 - depois de `Commit` ou `Rollback`, novas operacoes na mesma transacao sao rejeitadas.
 
@@ -513,14 +524,14 @@ O recovery faz uma fase de analise do WAL:
 
 Os testes cobrem winners/losers, losers multi-operacao em varias paginas, restauracao de heap+indices e recovery de recovery apos crash no meio do undo.
 
-**Isolamento de leitura**
+**Isolamento de leitura e leitura propria**
 
-Leituras usam `Transaction` separado do `WriteTransaction`, com dois niveis:
+Leituras usam `Transaction` ou o read-view interno de `WriteTransaction`, com dois niveis:
 
 - `RepeatableRead`: snapshot fixo no LSN de inicio;
 - `ReadCommitted`: atualiza snapshot antes de cada operacao.
 
-O MVCC percorre cadeias de versoes e usa `CreateLSN`, `DeleteLSN` e `PrevRecordID` para decidir visibilidade.
+O MVCC percorre cadeias de versoes e usa `CreateLSN`, `DeleteLSN` e `PrevRecordID` para decidir visibilidade. Em `WriteTransaction`, `Get` consulta primeiro o write set pendente e depois cai para esse read-view MVCC.
 
 ### Parcial
 
@@ -559,14 +570,19 @@ Nao ha:
 
 **Isolamento**
 
-O isolamento de leitura e baseado em snapshot por LSN. Isso cobre `RepeatableRead` e `ReadCommitted` basicos.
+O isolamento de leitura e baseado em snapshot por LSN, e `WriteTransaction` tambem ganhou leitura propria e deteccao de conflito por leitura obsoleta no mesmo item.
+
+Matriz resumida de anomalias:
+
+- `ReadCommitted`: dirty read proibido; non-repeatable read permitido; phantom read permitido; lost update por stale read em `WriteTransaction` proibido; write skew permitido.
+- `RepeatableRead`: dirty read proibido; non-repeatable read proibido; phantom read observacional proibido; lost update por stale read em `WriteTransaction` proibido; write skew permitido.
 
 Ainda nao ha:
 
 - isolamento `Serializable`;
 - deteccao de write skew;
 - range protection/predicate locking;
-- leitura dos writes pendentes da propria `WriteTransaction` antes do commit.
+- validacao serializavel de predicados.
 
 **Recovery apos crash**
 

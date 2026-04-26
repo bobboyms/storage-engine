@@ -156,8 +156,8 @@ func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
 type IsolationLevel int
 
 const (
-	ReadCommitted  IsolationLevel = iota // Leituras veem dados commitados recentemente
-	RepeatableRead                       // Snapshot Isolation (Padrão)
+	ReadCommitted  IsolationLevel = iota // Cada leitura pega um novo snapshot commitado; permite non-repeatable read e phantom.
+	RepeatableRead                       // Snapshot fixo por transação; impede dirty/non-repeatable/phantom read observacional.
 )
 
 // Transaction representa um contexto de execução com Snapshot Isolation
@@ -165,6 +165,12 @@ type Transaction struct {
 	SnapshotLSN uint64
 	Level       IsolationLevel
 	engine      *StorageEngine
+}
+
+type visibleRecord struct {
+	Document  string
+	Found     bool
+	CreateLSN uint64
 }
 
 // BeginTransaction inicia uma transação com o nível de isolamento especificado
@@ -251,31 +257,66 @@ func (se *StorageEngine) Close() error {
 }
 
 func (se *StorageEngine) readVisibleValue(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (string, bool, error) {
+	record, err := se.readVisibleRecord(tx, table, key, currentOffset)
+	if err != nil {
+		return "", false, err
+	}
+	return record.Document, record.Found, nil
+}
+
+func (se *StorageEngine) readVisibleRecord(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (visibleRecord, error) {
 	for currentOffset != -1 {
 		docBytes, header, err := table.Heap.Read(currentOffset)
 		if isChainEndErr(err) {
-			return "", false, nil
+			return visibleRecord{}, nil
 		}
 		if err != nil {
-			return "", false, fmt.Errorf("heap read failed at key %v: %w", key, err)
+			return visibleRecord{}, fmt.Errorf("heap read failed at key %v: %w", key, err)
 		}
 
 		if tx.IsVisible(header.CreateLSN) {
 			isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
 			if !isVisibleVersion {
-				return "", false, nil
+				return visibleRecord{}, nil
 			}
 
 			jsonStr, err := BsonToJson(docBytes)
 			if err == nil {
-				return jsonStr, true, nil
+				return visibleRecord{
+					Document:  jsonStr,
+					Found:     true,
+					CreateLSN: header.CreateLSN,
+				}, nil
 			}
-			return string(docBytes), true, nil
+			return visibleRecord{
+				Document:  string(docBytes),
+				Found:     true,
+				CreateLSN: header.CreateLSN,
+			}, nil
 		}
 		currentOffset = header.PrevRecordID
 	}
 
-	return "", false, nil
+	return visibleRecord{}, nil
+}
+
+func (se *StorageEngine) visibleRecordForKey(tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecord, error) {
+	table, err := se.TableMetaData.GetTableByName(tableName)
+	if err != nil {
+		return visibleRecord{}, err
+	}
+	index, err := table.GetIndex(indexName)
+	if err != nil {
+		return visibleRecord{}, err
+	}
+	currentOffset, found, err := index.Tree.Get(key)
+	if err != nil {
+		return visibleRecord{}, fmt.Errorf("tree get: %w", err)
+	}
+	if !found {
+		return visibleRecord{}, nil
+	}
+	return se.readVisibleRecord(tx, table, key, currentOffset)
 }
 
 // Put: Insert ou Update com Durabilidade (WAL)
@@ -424,69 +465,11 @@ func (tx *Transaction) Get(tableName string, indexName string, key types.Compara
 	// Se Read Committed, atualiza o snapshot antes de começar
 	tx.refreshSnapshot()
 
-	// Obtém a tabela primeiro (sem lock)
-	table, err := se.TableMetaData.GetTableByName(tableName)
+	record, err := se.visibleRecordForKey(tx, tableName, indexName, key)
 	if err != nil {
 		return "", false, err
 	}
-
-	// Lock-Free Read: Não travamos a tabela. Usamos latching interno da árvore.
-
-	// Obtém o índice (já temos o lock da tabela)
-	index, err := table.GetIndex(indexName)
-	if err != nil {
-		return "", false, err
-	}
-
-	// Busca na árvore thread-safe
-	currentOffset, found, err := index.Tree.Get(key)
-	if err != nil {
-		return "", false, fmt.Errorf("tree get: %w", err)
-	}
-	if !found {
-		return "", false, nil
-	}
-
-	// Version Chain Traversal (Time Travel)
-	for currentOffset != -1 {
-		docBytes, header, err := table.Heap.Read(currentOffset)
-		if isChainEndErr(err) {
-			// Record foi vacuumado — chain termina aqui. Não é erro.
-			return "", false, nil
-		}
-		if err != nil {
-			return "", true, fmt.Errorf("failed to read from heap: %w", err)
-		}
-
-		// Visibility Check
-		if tx.IsVisible(header.CreateLSN) {
-			// 1. Se Valid=true, está viva.
-			// 2. Se Valid=false (Delete), verificamos SE a deleção aconteceu DEPOIS do snapshot.
-
-			isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
-
-			if isVisibleVersion {
-				// Encontramos a versão visível!
-				jsonStr, err := BsonToJson(docBytes)
-				if err == nil {
-					return jsonStr, true, nil
-				}
-				return string(docBytes), true, nil
-			} else {
-				// A versão existe e é visível quanto a CRIAÇÃO, mas já estava DELETADA no snapshot.
-				// Portanto, para este snapshot, a chave não existe.
-				return "", false, nil
-			}
-		}
-
-		// Se a versão atual é MUITO NOVA (CreateLSN > SnapshotLSN),
-		// precisamos olhar a versão anterior na corrente.
-		currentOffset = header.PrevRecordID
-	}
-
-	// Chegamos ao fim da chain sem achar versão visível
-	return "", false, nil
-
+	return record.Document, record.Found, nil
 }
 
 // Get wrapper para conveniência (Autocommit / Snapshot instantâneo)
