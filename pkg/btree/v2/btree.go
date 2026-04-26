@@ -80,6 +80,9 @@ type BTreeV2 struct {
 	metaMu sync.RWMutex
 
 	rootPageID pagestore.PageID
+
+	writeMu            sync.Mutex
+	currentMutationLSN uint64
 }
 
 // NewBTreeV2 abre ou cria uma B+ tree page-based em `path` com IntKeyCodec
@@ -164,6 +167,122 @@ func (tr *BTreeV2) Sync() error {
 // Path devolve o caminho do arquivo.
 func (tr *BTreeV2) Path() string { return tr.pf.Path() }
 
+func (tr *BTreeV2) SetBeforeFlushHook(hook func(pageID pagestore.PageID, page *pagestore.Page) error) {
+	tr.bp.SetBeforeFlushHook(hook)
+}
+
+func (tr *BTreeV2) DirtyPages() []pagestore.DirtyPageInfo {
+	return tr.bp.DirtyPages()
+}
+
+func (tr *BTreeV2) ApplyPageRedo(pageID pagestore.PageID, page *pagestore.Page, lsn uint64) (bool, error) {
+	current, err := tr.pf.ReadPage(pageID)
+	if err == nil {
+		hdr, hdrErr := current.GetHeader()
+		if hdrErr == nil && hdr.PageLSN >= lsn {
+			tr.bp.ReplacePageImage(pageID, current)
+			return false, nil
+		}
+	}
+	if err := tr.pf.WritePage(pageID, page); err != nil {
+		return false, err
+	}
+	tr.bp.ReplacePageImage(pageID, page)
+	return true, nil
+}
+
+func (tr *BTreeV2) withMutationLSN(lsn uint64, fn func() error) error {
+	tr.writeMu.Lock()
+	tr.currentMutationLSN = lsn
+	defer func() {
+		tr.currentMutationLSN = 0
+		tr.writeMu.Unlock()
+	}()
+	return fn()
+}
+
+func (tr *BTreeV2) markDirty(h *pagestore.PageHandle) {
+	if h == nil {
+		return
+	}
+	if tr.currentMutationLSN > 0 {
+		h.Page().AdvancePageLSN(tr.currentMutationLSN)
+	}
+	h.MarkDirty()
+}
+
+func (tr *BTreeV2) InsertWithLSN(key types.Comparable, value int64, lsn uint64) error {
+	return tr.withMutationLSN(lsn, func() error {
+		if tr.isVariable {
+			return tr.insertCrabbingVar(tr.varCodec.Encode(key), value)
+		}
+		return tr.insertCrabbingFixed(tr.codec.Encode(key), value)
+	})
+}
+
+func (tr *BTreeV2) UpsertWithLSN(key types.Comparable, lsn uint64, fn func(oldValue int64, exists bool) (int64, error)) error {
+	return tr.withMutationLSN(lsn, func() error {
+		if tr.isVariable {
+			encKey := tr.varCodec.Encode(key)
+			leafH, leafVP, err := tr.descendToLeafForInsertVar(encKey)
+			if err != nil {
+				return err
+			}
+			defer leafH.Release()
+
+			oldValue, exists := leafVP.LeafGetVar(encKey)
+			newValue, err := fn(oldValue, exists)
+			if err != nil {
+				return err
+			}
+			if err := leafVP.LeafInsertVar(encKey, newValue); err != nil {
+				return err
+			}
+			tr.markDirty(leafH)
+			return nil
+		}
+
+		encKey := tr.codec.Encode(key)
+		leafH, leafNP, err := tr.descendToLeafForInsertFixed(encKey)
+		if err != nil {
+			return err
+		}
+		defer leafH.Release()
+
+		oldValue, exists := leafNP.LeafGet(encKey)
+		newValue, err := fn(oldValue, exists)
+		if err != nil {
+			return err
+		}
+
+		if err := leafNP.LeafInsert(encKey, newValue); err != nil {
+			return err
+		}
+		tr.markDirty(leafH)
+		return nil
+	})
+}
+
+func (tr *BTreeV2) ReplaceWithLSN(key types.Comparable, value int64, lsn uint64) error {
+	return tr.UpsertWithLSN(key, lsn, func(int64, bool) (int64, error) { return value, nil })
+}
+
+func (tr *BTreeV2) DeleteWithLSN(key types.Comparable, lsn uint64) (bool, error) {
+	var (
+		found bool
+		err   error
+	)
+	err = tr.withMutationLSN(lsn, func() error {
+		if tr.isVariable {
+			found, err = tr.removeCrabbingVar(tr.varCodec.Encode(key))
+			return err
+		}
+		found, err = tr.removeCrabbingFixed(tr.codec.Encode(key))
+		return err
+	})
+	return found, err
+}
+
 // loadOrInitMeta lê a meta page. Se a árvore é nova, cria meta + folha raiz.
 func (tr *BTreeV2) loadOrInitMeta() error {
 	if tr.pf.NumPages() <= 1 {
@@ -206,7 +325,7 @@ func (tr *BTreeV2) initFreshTree() error {
 	} else {
 		_ = InitLeafPage(rootH.Page(), tr.maxBodySize, tr.codec.Compare)
 	}
-	rootH.MarkDirty()
+	tr.markDirty(rootH)
 	rootPageID := rootH.ID()
 	rootH.Release()
 
@@ -216,7 +335,7 @@ func (tr *BTreeV2) initFreshTree() error {
 		rootPageID: rootPageID,
 	}
 	m.encode(metaH.Page().Body())
-	metaH.MarkDirty()
+	tr.markDirty(metaH)
 	metaH.Release()
 
 	tr.metaMu.Lock()
@@ -228,68 +347,25 @@ func (tr *BTreeV2) initFreshTree() error {
 // Insert coloca (key, value) na árvore. Sobrescreve valor se key existe.
 // Pode causar splits propagando até criar novo root.
 func (tr *BTreeV2) Insert(key types.Comparable, value int64) error {
-	if tr.isVariable {
-		return tr.insertCrabbingVar(tr.varCodec.Encode(key), value)
-	}
-	return tr.insertCrabbingFixed(tr.codec.Encode(key), value)
+	return tr.InsertWithLSN(key, value, 0)
 }
 
 // Upsert é insert + callback. Se key existe, `fn(oldValue, true)`;
 // senão `fn(0, false)`. O valor retornado por fn é gravado.
 // Essencial pro engine MVCC (engine.go usa Upsert pra chain de versões).
 func (tr *BTreeV2) Upsert(key types.Comparable, fn func(oldValue int64, exists bool) (int64, error)) error {
-	if tr.isVariable {
-		encKey := tr.varCodec.Encode(key)
-		leafH, leafVP, err := tr.descendToLeafForInsertVar(encKey)
-		if err != nil {
-			return err
-		}
-		defer leafH.Release()
-
-		oldValue, exists := leafVP.LeafGetVar(encKey)
-		newValue, err := fn(oldValue, exists)
-		if err != nil {
-			return err
-		}
-		if err := leafVP.LeafInsertVar(encKey, newValue); err != nil {
-			return err
-		}
-		leafH.MarkDirty()
-		return nil
-	}
-
-	encKey := tr.codec.Encode(key)
-	leafH, leafNP, err := tr.descendToLeafForInsertFixed(encKey)
-	if err != nil {
-		return err
-	}
-	defer leafH.Release()
-
-	oldValue, exists := leafNP.LeafGet(encKey)
-	newValue, err := fn(oldValue, exists)
-	if err != nil {
-		return err
-	}
-
-	if err := leafNP.LeafInsert(encKey, newValue); err != nil {
-		return err
-	}
-	leafH.MarkDirty()
-	return nil
+	return tr.UpsertWithLSN(key, 0, fn)
 }
 
 // Replace sobrescreve unconditionally. Equivalente a Upsert(k, func(_,_) (v, nil)).
 func (tr *BTreeV2) Replace(key types.Comparable, value int64) error {
-	return tr.Upsert(key, func(int64, bool) (int64, error) { return value, nil })
+	return tr.ReplaceWithLSN(key, value, 0)
 }
 
 // Remove apaga fisicamente `key` do índice com rebalance top-down:
 // trata underflow com borrow/merge e colapsa a raiz quando necessário.
 func (tr *BTreeV2) Remove(key types.Comparable) (bool, error) {
-	if tr.isVariable {
-		return tr.removeCrabbingVar(tr.varCodec.Encode(key))
-	}
-	return tr.removeCrabbingFixed(tr.codec.Encode(key))
+	return tr.DeleteWithLSN(key, 0)
 }
 
 // Delete é alias mais explícito para Remove.
@@ -357,9 +433,9 @@ func (tr *BTreeV2) ensureRootSafeForInsertFixed() (*pagestore.PageHandle, *NodeP
 		return nil, nil, err
 	}
 
-	rootH.MarkDirty()
-	rightH.MarkDirty()
-	newRootH.MarkDirty()
+	tr.markDirty(rootH)
+	tr.markDirty(rightH)
+	tr.markDirty(newRootH)
 
 	newRootPageID := newRootH.ID()
 	if err := tr.updateRootLocked(newRootPageID); err != nil {
@@ -392,8 +468,8 @@ func (tr *BTreeV2) splitFixedNode(h *pagestore.PageHandle, np *NodePage) (*pages
 		sepKey = np.splitInternalInto(rightNP)
 	}
 
-	h.MarkDirty()
-	rightH.MarkDirty()
+	tr.markDirty(h)
+	tr.markDirty(rightH)
 	return rightH, sepKey, nil
 }
 
@@ -415,7 +491,7 @@ func (tr *BTreeV2) splitChildAndChooseFixed(
 		childH.Release()
 		return nil, nil, err
 	}
-	parentH.MarkDirty()
+	tr.markDirty(parentH)
 
 	if tr.codec.Compare(key, sepKey) < 0 {
 		rightH.Release()
@@ -482,7 +558,7 @@ func (tr *BTreeV2) insertCrabbingFixed(encKey uint64, value int64) error {
 	if err := leafNP.LeafInsert(encKey, value); err != nil {
 		return err
 	}
-	leafH.MarkDirty()
+	tr.markDirty(leafH)
 	return nil
 }
 
@@ -531,7 +607,7 @@ func (tr *BTreeV2) removeCrabbingFixed(encKey uint64) (bool, error) {
 		}
 		return removed, err
 	}
-	currH.MarkDirty()
+	tr.markDirty(currH)
 
 	held := make(map[pagestore.PageID]*NodePage, len(nodes))
 	for i, h := range handles {
@@ -574,7 +650,7 @@ func (tr *BTreeV2) removeCrabbingFixed(encKey uint64) (bool, error) {
 				}
 				return false, err
 			}
-			parentH.MarkDirty()
+			tr.markDirty(parentH)
 		}
 
 		childH.Release()
@@ -610,7 +686,7 @@ func (tr *BTreeV2) updateRootLocked(newRootPageID pagestore.PageID) error {
 	}
 	m.rootPageID = newRootPageID
 	m.encode(metaH.Page().Body())
-	metaH.MarkDirty()
+	tr.markDirty(metaH)
 
 	tr.rootPageID = newRootPageID
 	return nil

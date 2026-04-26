@@ -27,6 +27,7 @@ package storage
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/bobboyms/storage-engine/pkg/btree"
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
@@ -50,10 +51,13 @@ func (se *StorageEngine) fuzzyCheckpointLocked() error {
 		return nil
 	}
 
-	// 1. Captura o LSN atual ANTES de começar o flush.
-	//    Qualquer operação com LSN ≤ beginLSN foi escrita no WAL e no
-	//    heap/tree antes deste ponto — será coberta pelo flush abaixo.
-	beginLSN := se.lsnTracker.Current()
+	// 1. Determina o menor pageLSN ainda sujo. Esse é o ponto seguro de
+	//    redo para o checkpoint, porque qualquer página anterior já está
+	//    durável e qualquer página suja a partir daqui será flushada já.
+	beginLSN := se.oldestDirtyPageLSN()
+	if beginLSN == 0 {
+		beginLSN = se.lsnTracker.Current()
+	}
 
 	// 2. Flush do WAL: garante que entradas até beginLSN estão em disco.
 	if err := se.WAL.Sync(); err != nil {
@@ -76,6 +80,51 @@ func (se *StorageEngine) fuzzyCheckpointLocked() error {
 	}
 
 	return nil
+}
+
+func (se *StorageEngine) oldestDirtyPageLSN() uint64 {
+	oldest := uint64(math.MaxUint64)
+	found := false
+
+	for _, tableName := range se.TableMetaData.ListTables() {
+		table, err := se.TableMetaData.GetTableByName(tableName)
+		if err != nil {
+			continue
+		}
+
+		if hookable, ok := table.Heap.(redoHookable); ok {
+			for _, info := range hookable.DirtyPages() {
+				if info.PageLSN == 0 {
+					continue
+				}
+				found = true
+				if info.PageLSN < oldest {
+					oldest = info.PageLSN
+				}
+			}
+		}
+
+		for _, idx := range table.GetIndices() {
+			hookable, ok := idx.Tree.(redoHookable)
+			if !ok {
+				continue
+			}
+			for _, info := range hookable.DirtyPages() {
+				if info.PageLSN == 0 {
+					continue
+				}
+				found = true
+				if info.PageLSN < oldest {
+					oldest = info.PageLSN
+				}
+			}
+		}
+	}
+
+	if !found {
+		return 0
+	}
+	return oldest
 }
 
 // flushAllDirtyPages flusha todas as páginas sujas de heaps e árvores

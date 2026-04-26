@@ -29,8 +29,8 @@ func (tr *BTreeV2) splitVarNode(h *pagestore.PageHandle, vp *VariableNodePage) (
 		sepKey = vp.splitInternalIntoVar(rightVP)
 	}
 
-	h.MarkDirty()
-	rightH.MarkDirty()
+	tr.markDirty(h)
+	tr.markDirty(rightH)
 	return rightH, sepKey, nil
 }
 
@@ -125,9 +125,9 @@ func (tr *BTreeV2) ensureRootSafeForInsertVar(key []byte) (*pagestore.PageHandle
 		return nil, nil, err
 	}
 
-	rootH.MarkDirty()
-	rightH.MarkDirty()
-	newRootH.MarkDirty()
+	tr.markDirty(rootH)
+	tr.markDirty(rightH)
+	tr.markDirty(newRootH)
 
 	newRootPageID := newRootH.ID()
 	if err := tr.updateRootLocked(newRootPageID); err != nil {
@@ -162,7 +162,7 @@ func (tr *BTreeV2) splitChildAndChooseVar(
 		childH.Release()
 		return nil, nil, err
 	}
-	parentH.MarkDirty()
+	tr.markDirty(parentH)
 
 	if tr.varCodec.Compare(key, sepKey) < 0 {
 		rightH.Release()
@@ -235,7 +235,7 @@ func (tr *BTreeV2) insertCrabbingVar(key []byte, value int64) error {
 	if err := leafVP.LeafInsertVar(key, value); err != nil {
 		return err
 	}
-	leafH.MarkDirty()
+	tr.markDirty(leafH)
 	return nil
 }
 
@@ -283,7 +283,7 @@ func (tr *BTreeV2) removeCrabbingVar(encKey []byte) (bool, error) {
 		}
 		return removed, err
 	}
-	currH.MarkDirty()
+	tr.markDirty(currH)
 
 	held := make(map[pagestore.PageID]*VariableNodePage, len(nodes))
 	for i, h := range handles {
@@ -326,7 +326,7 @@ func (tr *BTreeV2) removeCrabbingVar(encKey []byte) (bool, error) {
 				}
 				return false, err
 			}
-			parentH.MarkDirty()
+			tr.markDirty(parentH)
 		}
 
 		childH.Release()

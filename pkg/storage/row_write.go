@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 
+	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
 	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -67,7 +68,7 @@ func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKe
 		return fmt.Errorf("heap write failed: %w", err)
 	}
 
-	if err := applyIndexPointers(table, keys, offset); err != nil {
+	if err := applyIndexPointersWithLSN(table, keys, offset, currentLSN); err != nil {
 		return err
 	}
 
@@ -206,6 +207,10 @@ func primaryIndexAndKey(table *Table, keys map[string]types.Comparable) (*Index,
 }
 
 func applyIndexPointers(table *Table, keys map[string]types.Comparable, offset int64) error {
+	return applyIndexPointersWithLSN(table, keys, offset, 0)
+}
+
+func applyIndexPointersWithLSN(table *Table, keys map[string]types.Comparable, offset int64, lsn uint64) error {
 	undos := make([]indexUpdateUndo, 0, len(keys))
 	for indexName, key := range keys {
 		idx, ok := table.Indices[indexName]
@@ -219,7 +224,12 @@ func applyIndexPointers(table *Table, keys map[string]types.Comparable, offset i
 			return fmt.Errorf("index %s get failed: %w", indexName, err)
 		}
 		undo := indexUpdateUndo{index: idx, key: key, old: old, exists: exists}
-		if err := idx.Tree.Replace(key, offset); err != nil {
+		if treeV2, ok := idx.Tree.(*btreev2.BTreeV2); ok {
+			if err := treeV2.ReplaceWithLSN(key, offset, lsn); err != nil {
+				rollbackIndexPointers(undos)
+				return fmt.Errorf("failed to update index %s: %w", indexName, err)
+			}
+		} else if err := idx.Tree.Replace(key, offset); err != nil {
 			rollbackIndexPointers(undos)
 			return fmt.Errorf("failed to update index %s: %w", indexName, err)
 		}

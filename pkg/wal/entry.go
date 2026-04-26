@@ -24,6 +24,7 @@ const (
 	EntryAbort                        // 6: Rollback
 	EntryMultiInsert                  // 7: Insert with multiple indices
 	EntryCheckpoint                   // 8: Checkpoint record (fuzzy checkpoint begin LSN)
+	EntryPageRedo                     // 9: after-image físico de página para recovery
 )
 
 // WALHeader cabeçalho de 24 bytes para cada entrada

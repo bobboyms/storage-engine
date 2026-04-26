@@ -137,7 +137,7 @@ func TestFaultWALPageCorruptionFailsRecovery(t *testing.T) {
 	}
 }
 
-func TestFaultHeapPageCorruptionDetectedOnOpenOrRead(t *testing.T) {
+func TestFaultHeapPageCorruptionRecoveredFromWAL(t *testing.T) {
 	p := pathsFor(t.TempDir())
 	seedAndClose(t, p, 10)
 
@@ -145,19 +145,19 @@ func TestFaultHeapPageCorruptionDetectedOnOpenOrRead(t *testing.T) {
 
 	se, err := tryOpenEngine(p)
 	if err != nil {
-		if errors.Is(err, pagestore.ErrChecksumMismatch) {
-			return
-		}
 		t.Fatalf("open engine after heap corruption: %v", err)
 	}
 	defer se.Close()
 
-	_, _, err = se.Get("t", "id", types.IntKey(1))
-	if err == nil {
-		t.Fatal("expected heap page corruption to be detected on read")
+	doc, found, err := se.Get("t", "id", types.IntKey(1))
+	if err != nil {
+		t.Fatalf("expected WAL-based heap recovery, got read error: %v", err)
 	}
-	if !errors.Is(err, pagestore.ErrChecksumMismatch) {
-		t.Fatalf("expected checksum mismatch, got %v", err)
+	if !found {
+		t.Fatal("expected heap page corruption to be repaired from WAL")
+	}
+	if doc == "" {
+		t.Fatal("expected recovered document payload after heap page repair")
 	}
 }
 

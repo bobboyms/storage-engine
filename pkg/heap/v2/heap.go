@@ -70,6 +70,30 @@ func NewHeapV2(path string, bufferPoolCapacity int, cipher crypto.Cipher) (*Heap
 // Path devolve o caminho do page file subjacente.
 func (h *HeapV2) Path() string { return h.pf.Path() }
 
+func (h *HeapV2) SetBeforeFlushHook(hook func(pageID pagestore.PageID, page *pagestore.Page) error) {
+	h.bp.SetBeforeFlushHook(hook)
+}
+
+func (h *HeapV2) DirtyPages() []pagestore.DirtyPageInfo {
+	return h.bp.DirtyPages()
+}
+
+func (h *HeapV2) ApplyPageRedo(pageID pagestore.PageID, page *pagestore.Page, lsn uint64) (bool, error) {
+	current, err := h.pf.ReadPage(pageID)
+	if err == nil {
+		hdr, hdrErr := current.GetHeader()
+		if hdrErr == nil && hdr.PageLSN >= lsn {
+			h.bp.ReplacePageImage(pageID, current)
+			return false, nil
+		}
+	}
+	if err := h.pf.WritePage(pageID, page); err != nil {
+		return false, err
+	}
+	h.bp.ReplacePageImage(pageID, page)
+	return true, nil
+}
+
 // Close flusha o buffer pool e fecha o page file.
 func (h *HeapV2) Close() error {
 	if err := h.bp.Close(); err != nil {
@@ -290,6 +314,7 @@ func (h *HeapV2) Vacuum(minLSN uint64) (int, error) {
 			return total, err
 		}
 		if n > 0 {
+			handle.Page().AdvancePageLSN(minLSN)
 			handle.MarkDirty()
 			// Registra espaço recém-liberado no FSM para reutilização futura.
 			h.fsm.Register(pageID, sp.FreeSpace())

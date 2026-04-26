@@ -95,14 +95,16 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*
 		initialLSN = maxLSN
 	}
 
-	return &StorageEngine{
+	se := &StorageEngine{
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
 		lsnTracker:    NewLSNTracker(initialLSN),
 		txIDCounter:   initialLSN,
 		appliedLSN:    NewAppliedLSNTracker(),
 		TxRegistry:    NewTransactionRegistry(),
-	}, nil
+	}
+	se.registerPageRedoHooks()
+	return se, nil
 }
 
 func (se *StorageEngine) nextTxID() uint64 {
@@ -189,11 +191,6 @@ func (tx *Transaction) IsVisible(createLSN uint64) bool {
 
 func (se *StorageEngine) Close() error {
 	var err error
-	if se.WAL != nil {
-		if wErr := se.WAL.Close(); wErr != nil {
-			err = wErr
-		}
-	}
 	// TODO: Clean up TxRegistry? Not strictly needed as Engine is closing.
 
 	// Fecha as trees do runtime page-based.
@@ -230,6 +227,15 @@ func (se *StorageEngine) Close() error {
 				}
 			}
 			closedHeaps[table.Heap] = true
+		}
+	}
+	if se.WAL != nil {
+		if wErr := se.WAL.Close(); wErr != nil {
+			if err == nil {
+				err = wErr
+			} else {
+				err = fmt.Errorf("%v; wal close error: %v", err, wErr)
+			}
 		}
 	}
 	return err
@@ -355,7 +361,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 	// Usamos Upsert para garantir atomocidade no acesso à versão anterior e atualização do ponteiro HEAD.
 	table.Lock()
 	defer table.Unlock()
-	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
+	upsert := func(oldOffset int64, exists bool) (int64, error) {
 		var prevOffset int64 = -1
 		if exists {
 			prevOffset = oldOffset
@@ -370,7 +376,13 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		}
 
 		return offset, nil
-	})
+	}
+
+	if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
+		err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+	} else {
+		err = index.Tree.Upsert(key, upsert)
+	}
 
 	if err != nil {
 		return err
@@ -598,7 +610,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
 
 	var wasFound bool
-	err = index.Tree.Upsert(key, func(oldOffset int64, exists bool) (int64, error) {
+	upsert := func(oldOffset int64, exists bool) (int64, error) {
 		if !exists {
 			return 0, nil // Key not found, nothing to delete
 		}
@@ -624,7 +636,13 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 
 		// Retorna o MESMO offset, pois a árvore não muda (aponta pro mesmo lugar, que agora está marcado deletado)
 		return oldOffset, nil
-	})
+	}
+
+	if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
+		err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+	} else {
+		err = index.Tree.Upsert(key, upsert)
+	}
 
 	if err != nil {
 		return false, err
@@ -709,6 +727,7 @@ func (se *StorageEngine) Recover(walPath string) error {
 func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher) error {
 	var maxLSN uint64
 	loadedLSNs := make(map[string]uint64)
+	pageRedoTargets := se.pageRedoTargets()
 
 	analysis, err := se.analyzeRecoveryWithCipher(walPath, cipher)
 	if err != nil {
@@ -729,10 +748,57 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
 
+	physicalApplied := 0
+	physicalSkipped := 0
 	count := 0
 	skipped := 0
+
+	for {
+		entry, err := reader.ReadEntry()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if isExpectedWALTail(err) {
+				break
+			}
+			return fmt.Errorf("physical redo error at entry %d: %w", physicalApplied+physicalSkipped, err)
+		}
+
+		if entry.Header.LSN > maxLSN {
+			maxLSN = entry.Header.LSN
+		}
+		if analysis.CheckpointLSN > 0 && entry.Header.LSN < analysis.CheckpointLSN {
+			physicalSkipped++
+			wal.ReleaseEntry(entry)
+			continue
+		}
+		if entry.Header.EntryType != wal.EntryPageRedo {
+			physicalSkipped++
+			wal.ReleaseEntry(entry)
+			continue
+		}
+		applied, err := se.redoPageEntry(entry, pageRedoTargets)
+		wal.ReleaseEntry(entry)
+		if err != nil {
+			return fmt.Errorf("physical redo apply failed at entry %d: %w", physicalApplied+physicalSkipped, err)
+		}
+		if applied {
+			physicalApplied++
+		} else {
+			physicalSkipped++
+		}
+	}
+	if err := reader.Close(); err != nil {
+		return err
+	}
+
+	reader, err = wal.NewWALReaderWithCipher(walPath, cipher)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
 
 	for {
 		entry, err := reader.ReadEntry()
@@ -789,10 +855,11 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 	se.lsnTracker.Set(maxLSN)
 	atomic.StoreUint64(&se.txIDCounter, maxLSN)
 	if analysis.CheckpointLSN > 0 {
-		fmt.Printf("Recovered: %d entries applied, %d skipped (checkpoint LSN=%d → redo start). Current LSN: %d\n",
-			count, skipped, analysis.CheckpointLSN, maxLSN)
+		fmt.Printf("Recovered: physical redo applied=%d skipped=%d; logical entries applied=%d skipped=%d (checkpoint LSN=%d → redo start). Current LSN: %d\n",
+			physicalApplied, physicalSkipped, count, skipped, analysis.CheckpointLSN, maxLSN)
 	} else {
-		fmt.Printf("Recovered: %d entries from WAL applied, %d skipped. Current LSN: %d\n", count, skipped, maxLSN)
+		fmt.Printf("Recovered: physical redo applied=%d skipped=%d; logical entries applied=%d skipped=%d. Current LSN: %d\n",
+			physicalApplied, physicalSkipped, count, skipped, maxLSN)
 	}
 	return nil
 }

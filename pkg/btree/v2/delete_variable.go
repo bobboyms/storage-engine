@@ -254,9 +254,9 @@ func (tr *BTreeV2) fixChildUnderflowVar(
 				rebuildInternalVar(childVP, movedChild, childEntries)
 			}
 
-			leftH.MarkDirty()
-			childH.MarkDirty()
-			parentH.MarkDirty()
+			tr.markDirty(leftH)
+			tr.markDirty(childH)
+			tr.markDirty(parentH)
 			leftH.Release()
 			return childH, childVP, childPos, nil
 		}
@@ -304,9 +304,9 @@ tryRight:
 				rebuildInternalVar(rightVP, newRightLeftmost, rightEntries)
 			}
 
-			childH.MarkDirty()
-			rightH.MarkDirty()
-			parentH.MarkDirty()
+			tr.markDirty(childH)
+			tr.markDirty(rightH)
+			tr.markDirty(parentH)
 			rightH.Release()
 			return childH, childVP, childPos, nil
 		}
@@ -351,8 +351,8 @@ tryMerge:
 		parentEntries = append(parentEntries[:childPos-1], parentEntries[childPos:]...)
 		rebuildInternalVar(parentVP, parentLeftmost, parentEntries)
 
-		leftH.MarkDirty()
-		parentH.MarkDirty()
+		tr.markDirty(leftH)
+		tr.markDirty(parentH)
 		childH.Release()
 		return leftH, leftVP, childPos - 1, nil
 	}
@@ -398,8 +398,8 @@ mergeRight:
 	parentEntries = append(parentEntries[:childPos], parentEntries[childPos+1:]...)
 	rebuildInternalVar(parentVP, parentLeftmost, parentEntries)
 
-	childH.MarkDirty()
-	parentH.MarkDirty()
+	tr.markDirty(childH)
+	tr.markDirty(parentH)
 	rightH.Release()
 	return childH, childVP, childPos, nil
 }

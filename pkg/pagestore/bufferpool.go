@@ -42,6 +42,13 @@ type BufferPool struct {
 	mu     sync.Mutex
 	frames map[PageID]*frame
 	lru    *list.List // front = mais recente, back = menos recente
+
+	beforeFlush func(pageID PageID, page *Page) error
+}
+
+type DirtyPageInfo struct {
+	PageID  PageID
+	PageLSN uint64
 }
 
 type frame struct {
@@ -77,6 +84,57 @@ func (bp *BufferPool) Size() int {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 	return len(bp.frames)
+}
+
+// SetBeforeFlushHook registra um callback executado imediatamente antes
+// de cada flush de página suja para o PageFile. O hook pode gravar WAL,
+// métricas ou outros side-effects e DEVE obedecer WAL-before-data.
+func (bp *BufferPool) SetBeforeFlushHook(hook func(pageID PageID, page *Page) error) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.beforeFlush = hook
+}
+
+// DirtyPages devolve um snapshot das páginas sujas atualmente em cache,
+// incluindo o pageLSN visto no frame.
+func (bp *BufferPool) DirtyPages() []DirtyPageInfo {
+	bp.mu.Lock()
+	frames := make([]*frame, 0, len(bp.frames))
+	for _, f := range bp.frames {
+		if f.dirty.Load() {
+			frames = append(frames, f)
+		}
+	}
+	bp.mu.Unlock()
+
+	dirty := make([]DirtyPageInfo, 0, len(frames))
+	for _, f := range frames {
+		f.rw.RLock()
+		hdr, err := f.page.GetHeader()
+		f.rw.RUnlock()
+		if err != nil {
+			continue
+		}
+		dirty = append(dirty, DirtyPageInfo{
+			PageID:  f.pageID,
+			PageLSN: hdr.PageLSN,
+		})
+	}
+	return dirty
+}
+
+// ReplacePageImage atualiza o frame em cache, se existir, com uma imagem
+// reaplicada pelo recovery. Não cria novo frame nem toca disco.
+func (bp *BufferPool) ReplacePageImage(pageID PageID, page *Page) {
+	bp.mu.Lock()
+	f := bp.frames[pageID]
+	bp.mu.Unlock()
+	if f == nil {
+		return
+	}
+	f.rw.Lock()
+	copy(f.page[:], page[:])
+	f.rw.Unlock()
 }
 
 // Fetch traz a página pageID pro pool com latch COMPARTILHADO (leitura).
@@ -151,6 +209,12 @@ func (bp *BufferPool) tryEvictLocked() bool {
 			// Segura RLock enquanto flusheamos (ninguém está escrevendo
 			// porque pinCount == 0, mas o contrato exige lock).
 			f.rw.RLock()
+			if bp.beforeFlush != nil {
+				if err := bp.beforeFlush(f.pageID, &f.page); err != nil {
+					f.rw.RUnlock()
+					return false
+				}
+			}
 			err := bp.pf.WritePage(f.pageID, &f.page)
 			f.rw.RUnlock()
 			if err != nil {
@@ -209,6 +273,12 @@ func (bp *BufferPool) FlushAll() error {
 
 	for _, f := range dirty {
 		f.rw.RLock()
+		if bp.beforeFlush != nil {
+			if err := bp.beforeFlush(f.pageID, &f.page); err != nil {
+				f.rw.RUnlock()
+				return err
+			}
+		}
 		err := bp.pf.WritePage(f.pageID, &f.page)
 		f.rw.RUnlock()
 		if err != nil {

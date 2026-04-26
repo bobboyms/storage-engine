@@ -203,9 +203,9 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 				rebuildInternalFixed(childNP, movedChild, childEntries)
 			}
 
-			leftH.MarkDirty()
-			childH.MarkDirty()
-			parentH.MarkDirty()
+			tr.markDirty(leftH)
+			tr.markDirty(childH)
+			tr.markDirty(parentH)
 			leftH.Release()
 			return childH, childNP, childPos, nil
 		}
@@ -244,9 +244,9 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 				rebuildInternalFixed(rightNP, newRightLeftmost, rightEntries)
 			}
 
-			childH.MarkDirty()
-			rightH.MarkDirty()
-			parentH.MarkDirty()
+			tr.markDirty(childH)
+			tr.markDirty(rightH)
+			tr.markDirty(parentH)
 			rightH.Release()
 			return childH, childNP, childPos, nil
 		}
@@ -282,8 +282,8 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 		parentEntries = append(parentEntries[:childPos-1], parentEntries[childPos:]...)
 		rebuildInternalFixed(parentNP, parentLeftmost, parentEntries)
 
-		leftH.MarkDirty()
-		parentH.MarkDirty()
+		tr.markDirty(leftH)
+		tr.markDirty(parentH)
 		childH.Release()
 		return leftH, leftNP, childPos - 1, nil
 	}
@@ -316,8 +316,8 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 	parentEntries = append(parentEntries[:childPos], parentEntries[childPos+1:]...)
 	rebuildInternalFixed(parentNP, parentLeftmost, parentEntries)
 
-	childH.MarkDirty()
-	parentH.MarkDirty()
+	tr.markDirty(childH)
+	tr.markDirty(parentH)
 	rightH.Release()
 	return childH, childNP, childPos, nil
 }

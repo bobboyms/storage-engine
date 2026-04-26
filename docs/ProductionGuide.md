@@ -4,9 +4,9 @@ Este documento descreve, de forma objetiva, quais recursos o storage engine impl
 
 ## Status Geral
 
-O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery logico, MVCC basico, snapshots, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
+O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
 
-Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo, redo fisico por pagina, undo robusto pos-crash, lock manager com deadlock detection, metricas internas, compressao, replicacao e isolamento serializable.
+Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo, dirty page table persistida em checkpoint, undo fisico robusto pos-crash com CLRs, lock manager com deadlock detection, metricas internas, compressao, replicacao e isolamento serializable.
 
 ## Como Usar em Modo Mais Seguro
 
@@ -41,14 +41,14 @@ Regras:
 | Consistencia e durabilidade | WAL / redo log | Implementado |
 | Consistencia e durabilidade | fsync nos momentos corretos | Implementado no caminho duravel |
 | Consistencia e durabilidade | checksums em paginas/blocos | Implementado |
-| Consistencia e durabilidade | recovery deterministico | Parcial |
+| Consistencia e durabilidade | recovery deterministico | Implementado em modo ARIES-lite |
 | Consistencia e durabilidade | testes de crash/falhas simuladas | Implementado |
 | Integridade dos dados | checksums | Implementado |
 | Integridade dos dados | magic bytes | Implementado |
 | Integridade dos dados | versao do formato | Parcial |
 | Integridade dos dados | validacao de headers | Parcial |
 | Integridade dos dados | limites de tamanho | Implementado |
-| Integridade dos dados | protecao contra partial writes | Parcial |
+| Integridade dos dados | protecao contra partial writes | Implementado com redo fisico por pagina |
 | Integridade dos dados | testes com arquivos truncados/corrompidos | Parcial |
 | Modelo de armazenamento | paginas/blocos fixos | Implementado |
 | Modelo de armazenamento | registros variaveis dentro de paginas | Implementado com limite |
@@ -71,7 +71,7 @@ Regras:
 | Transacoes | commit protocol | Implementado |
 | Transacoes | rollback | Parcial |
 | Transacoes | isolamento | Parcial |
-| Transacoes | recovery apos crash | Parcial |
+| Transacoes | recovery apos crash | Implementado em modo ARIES-lite |
 | Transacoes | operacoes parcialmente aplicadas | Parcial |
 | Recuperacao de espaco | free lists | Parcial |
 | Recuperacao de espaco | compaction | Parcial |
@@ -112,7 +112,7 @@ Regras:
 
 **WAL / redo log**
 
-O engine escreve no WAL antes de aplicar mudancas no heap e na B+ tree. `Put` e `Del` criam entradas WAL com LSN, tipo, payload e CRC. O recovery le o WAL e reaplica operacoes autocommit ou transacoes commitadas.
+O engine escreve no WAL antes de aplicar mudancas no heap e na B+ tree. `Put` e `Del` criam entradas WAL com LSN, tipo, payload e CRC. Quando uma pagina suja vai para disco, o runtime tambem grava um after-image fisico dessa pagina no WAL antes do flush efetivo. O recovery primeiro reaplica essas paginas fisicas por `pageLSN` e depois roda o replay logico idempotente de operacoes autocommit ou transacoes commitadas.
 
 **fsync**
 
@@ -137,12 +137,19 @@ Existem testes de:
 
 **Recovery deterministico**
 
-O recovery atual e logico e idempotente. Ele reconstrui heap e indices a partir do WAL e pula entradas anteriores ao ultimo fuzzy checkpoint quando possivel.
+O recovery atual segue um modelo ARIES-lite com fases claras:
+
+- analysis: varre o WAL, monta tabela de transacoes, identifica winners/losers e calcula o ponto de redo a partir do checkpoint;
+- redo fisico: reaplica after-images de paginas quando `record.LSN > page.pageLSN` ou quando a pagina on-disk esta ilegivel/corrompida;
+- redo logico: reaplica apenas operacoes winners/autocommit que ainda nao estao refletidas no estado atual;
+- undo-lite: losers sao descartadas porque o write path explicito continua apply-after-commit, sem paginas uncommitted visiveis.
+
+Cada pagina persiste `pageLSN` no header e esse valor e obedecido no redo fisico. Isso torna o replay idempotente e permite reparar pagina rasgada de heap ou indice quando o WAL contem o after-image correspondente.
 
 Limites atuais:
 
-- Nao ha page-level redo usando `pageLSN`.
 - Nao ha ARIES completo.
+- Nao ha dirty page table persistida no checkpoint; o checkpoint atual calcula o menor `pageLSN` sujo em memoria no momento do flush.
 - Undo pos-crash e limitado: transacoes loser sao descartadas no redo, mas nao ha CLRs nem undo fisico.
 - Transacoes multi-operacao com rollback pos-crash nao devem ser tratadas como garantia forte de banco de dados completo.
 
@@ -203,7 +210,7 @@ Existem testes para:
 - chave errada/TDE com `ErrDecryptFailed`;
 - AAD amarrado ao `PageID`;
 - corrupcao de pagina WAL;
-- corrupcao de heap detectada em open/read;
+- corrupcao de heap recuperavel via WAL quando existe after-image fisico valido;
 - corrupcao de B+ tree detectada em open/recovery/read;
 - payload WAL corrompido em recovery;
 - stress/chaos validando que dados commitados nao voltam corrompidos apos recovery.
@@ -252,7 +259,7 @@ Ainda faltam validacoes mais rigorosas:
 
 **Protecao contra partial writes**
 
-Partial/torn writes sao detectados em muitos casos:
+Partial/torn writes sao detectados e, no caso de heap/B+ tree com WAL integro, podem ser reparados:
 
 - se o arquivo fica com tamanho nao multiplo de 8192 bytes, `NewPageFile` falha;
 - se uma pagina parcialmente escrita fica com body inconsistente, o checksum falha;
@@ -265,8 +272,8 @@ Mas isto ainda e protecao parcial:
 - nao ha copia espelhada de pagina;
 - nao ha setor/page atomic write garantido;
 - `WritePage` usa um write de 8KB via `WriteAt`, sem protocolo de commit por pagina;
-- nao ha reparo automatico de pagina rasgada, apenas deteccao;
-- recovery ainda nao usa redo fisico por `pageLSN` para reconstruir pagina rasgada a partir do WAL.
+- o reparo depende de o WAL ainda conter o after-image fisico da pagina;
+- nao ha garantias equivalentes a full_page_writes + backup para corrupcao arbitraria fora da janela coberta pelo WAL.
 
 **Testes com arquivos truncados/corrompidos**
 
@@ -288,7 +295,6 @@ Ainda falta ampliar a matriz:
 - Checksums por registro individual dentro da pagina.
 - Merkle tree/hash end-to-end por tabela ou arquivo.
 - Double-write buffer para protecao forte contra torn pages.
-- Recuperacao fisica por `pageLSN` para reparar pagina rasgada.
 - Validacao rigorosa de versao em todos os leitores de formato.
 
 ## Modelo de Armazenamento
@@ -528,15 +534,15 @@ Ainda nao ha:
 
 **Recovery apos crash**
 
-O recovery transacional e suficiente para o desenho atual, em que transacoes explicitas escrevem WAL completo e so aplicam mudancas depois do `COMMIT`.
+O recovery transacional e fisico e suficiente para o desenho atual, em que transacoes explicitas escrevem WAL completo e so aplicam mudancas depois do `COMMIT`.
 
 Ainda e parcial como garantia de banco maduro porque:
 
 - nao ha ARIES completo;
 - nao ha undo fisico de paginas;
 - nao ha CLRs;
-- redo e logico, nao page-level redo;
-- `pageLSN` ainda nao e usado para reconstruir paginas rasgadas ou decidir redo por pagina.
+- a fase de undo continua sendo undo-lite;
+- checkpoint ainda nao persiste uma dirty page table completa.
 
 **Operacoes parcialmente aplicadas**
 
@@ -783,7 +789,10 @@ O projeto tem testes dedicados com build tag `chaos`:
 Tambem existem testes de recovery no pacote `pkg/storage`, incluindo:
 
 - crash simulado depois de WAL fsyncado e antes de flush de heap/tree;
-- recovery idempotente;
+- recovery fisico de heap com pagina rasgada;
+- recovery fisico de indice com pagina rasgada;
+- recovery repetido sem duplicar versoes;
+- recovery durante checkpoint em andamento;
 - auto-recovery via `NewProductionStorageEngine`;
 - recovery de transacoes winners/losers;
 - fuzzy checkpoint e truncamento seguro do WAL.
@@ -802,10 +811,10 @@ O alvo `make test-stress-race` executa stress com race detector.
 
 **Arquivos corrompidos**
 
-Os testes com build tag `faults` corrompem arquivos fisicos e validam falha controlada:
+Os testes com build tag `faults` corrompem arquivos fisicos e validam falha controlada ou reparo via WAL, conforme o caso:
 
 - WAL corrompido deve falhar startup/recovery;
-- heap corrompido deve ser detectado no open/read;
+- heap corrompido deve ser reparado quando o WAL contem after-image valido;
 - B+ tree corrompida deve falhar no open/recovery/read.
 
 Tambem ha testes unitarios de page store para checksum mismatch, magic invalido, arquivo com tamanho invalido, chave TDE errada e AAD amarrado ao `PageID`.
@@ -1087,12 +1096,12 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 
 Prioridade alta:
 
-1. Implementar page-level redo usando `pageLSN`.
-2. Implementar undo/CLRs ou documentar formalmente o modelo sem undo fisico.
-3. Fortalecer atomicidade runtime de `WriteTransaction` quando a aplicacao pos-commit falhar.
-4. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
-5. Persistir e endurecer free space map.
-6. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
+1. Implementar undo/CLRs ou documentar formalmente o modelo sem undo fisico.
+2. Fortalecer atomicidade runtime de `WriteTransaction` quando a aplicacao pos-commit falhar.
+3. Adicionar detector/timeout de deadlocks se houver transacoes longas com multiplos recursos.
+4. Persistir e endurecer free space map.
+5. Implementar free list persistente e page allocator com reaproveitamento de paginas inteiras.
+6. Persistir dirty page table/checkpoint state de forma mais completa.
 7. Validar explicitamente versoes desconhecidas em PageFile e WALReader.
 8. Criar metricas internas para WAL, BufferPool, recovery, vacuum e erros de corrupcao.
 
@@ -1125,6 +1134,6 @@ Prioridade baixa ou futura:
 
 ## Veredito
 
-O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery logico, MVCC, snapshots, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
+O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
 
-Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, undo/CLRs, atomicidade runtime forte pos-commit, deadlock handling, starvation handling, validacao completa de formato, reparo de torn pages, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.
+Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo/CLRs, atomicidade runtime forte pos-commit, deadlock handling, starvation handling, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.

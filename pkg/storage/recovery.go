@@ -1,13 +1,16 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 
+	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
 	"github.com/bobboyms/storage-engine/pkg/crypto"
+	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
@@ -245,7 +248,7 @@ func (ra *recoveryAnalysis) shouldRedo(entry *wal.WALEntry) ([]byte, bool, error
 	}
 
 	switch entry.Header.EntryType {
-	case wal.EntryBegin, wal.EntryCommit, wal.EntryAbort, wal.EntryCheckpoint:
+	case wal.EntryBegin, wal.EntryCommit, wal.EntryAbort, wal.EntryCheckpoint, wal.EntryPageRedo:
 		return payload, false, nil
 	}
 
@@ -262,11 +265,7 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 	if err != nil {
 		return err
 	}
-
 	lookupKey := appliedLSNKey(tableName, indexName)
-	if loadedLSNs[lookupKey] >= entry.Header.LSN {
-		return nil
-	}
 
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
@@ -278,6 +277,11 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 	}
 
 	if entry.Header.EntryType == wal.EntryDelete {
+		if shouldSkipDeleteRedo(table, index, key, entry.Header.LSN) {
+			loadedLSNs[appliedLSNKey(tableName, indexName)] = entry.Header.LSN
+			se.appliedLSN.MarkApplied(tableName, indexName, entry.Header.LSN)
+			return nil
+		}
 		if offset, found, _ := index.Tree.Get(key); found {
 			if err := table.Heap.Delete(offset, entry.Header.LSN); err != nil {
 				if isChainEndErr(err) {
@@ -289,6 +293,15 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 			}
 		}
 	} else {
+		skip, err := shouldSkipInsertRedo(table, index, key, docBytes, entry.Header.LSN)
+		if err != nil {
+			return err
+		}
+		if skip {
+			loadedLSNs[appliedLSNKey(tableName, indexName)] = entry.Header.LSN
+			se.appliedLSN.MarkApplied(tableName, indexName, entry.Header.LSN)
+			return nil
+		}
 		prevOffset := int64(-1)
 		if prev, found, _ := index.Tree.Get(key); found {
 			prevOffset = prev
@@ -298,7 +311,12 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 		if err != nil {
 			return fmt.Errorf("heap write failed: %w", err)
 		}
-		if err := index.Tree.Replace(key, offset); err != nil {
+		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
+			err = treeV2.ReplaceWithLSN(key, offset, entry.Header.LSN)
+		} else {
+			err = index.Tree.Replace(key, offset)
+		}
+		if err != nil {
 			return fmt.Errorf("failed to update tree during recovery: %w", err)
 		}
 	}
@@ -316,6 +334,17 @@ func (se *StorageEngine) redoMultiInsertEntry(entry *wal.WALEntry, payload []byt
 
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
+		return nil
+	}
+
+	if skip, err := shouldSkipMultiInsertRedo(table, keys, docBytes, entry.Header.LSN); err != nil {
+		return err
+	} else if skip {
+		for indexName := range keys {
+			lookupKey := appliedLSNKey(tableName, indexName)
+			loadedLSNs[lookupKey] = entry.Header.LSN
+			se.appliedLSN.MarkApplied(tableName, indexName, entry.Header.LSN)
+		}
 		return nil
 	}
 
@@ -348,7 +377,7 @@ func (se *StorageEngine) redoMultiInsertEntry(entry *wal.WALEntry, payload []byt
 		return fmt.Errorf("heap write failed: %w", err)
 	}
 
-	if err := applyIndexPointers(table, keys, offset); err != nil {
+	if err := applyIndexPointersWithLSN(table, keys, offset, entry.Header.LSN); err != nil {
 		return err
 	}
 
@@ -365,6 +394,53 @@ func (se *StorageEngine) redoMultiInsertEntry(entry *wal.WALEntry, payload []byt
 	}
 
 	return nil
+}
+
+func shouldSkipDeleteRedo(table *Table, index *Index, key types.Comparable, lsn uint64) bool {
+	offset, found, err := index.Tree.Get(key)
+	if err != nil || !found {
+		return err == nil
+	}
+	_, hdr, err := table.Heap.Read(offset)
+	if err != nil {
+		return false
+	}
+	return hdr.DeleteLSN >= lsn || hdr.CreateLSN > lsn
+}
+
+func shouldSkipInsertRedo(table *Table, index *Index, key types.Comparable, docBytes []byte, lsn uint64) (bool, error) {
+	offset, found, err := index.Tree.Get(key)
+	if err != nil || !found {
+		return false, err
+	}
+	currentDoc, hdr, err := table.Heap.Read(offset)
+	if err != nil {
+		return false, nil
+	}
+	if hdr.CreateLSN > lsn {
+		return true, nil
+	}
+	return hdr.CreateLSN == lsn && bytes.Equal(currentDoc, docBytes), nil
+}
+
+func shouldSkipMultiInsertRedo(table *Table, keys map[string]types.Comparable, docBytes []byte, lsn uint64) (bool, error) {
+	primary, primaryKey, err := primaryIndexAndKey(table, keys)
+	if err != nil {
+		return false, err
+	}
+	return shouldSkipInsertRedo(table, primary, primaryKey, docBytes, lsn)
+}
+
+func (se *StorageEngine) redoPageEntry(entry *wal.WALEntry, targets map[string]pageRedoTarget) (bool, error) {
+	path, pageID, page, err := deserializePageRedoPayload(entry.Payload)
+	if err != nil {
+		return false, err
+	}
+	target := targets[path]
+	if target == nil {
+		return false, nil
+	}
+	return target.ApplyPageRedo(pageID, page, entry.Header.LSN)
 }
 
 func (se *StorageEngine) undoLoserTransactions(analysis *recoveryAnalysis) {
