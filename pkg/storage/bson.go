@@ -64,7 +64,7 @@ func DoesTheKeyExist(doc bson.D, key string) (bool, DataType) {
 			case time.Time:
 				return true, TypeDate
 			default:
-				// Verificamos via string para tipos que não importamos diretamente (ex: primitive.DateTime)
+				// Verificamos via string para tipos que not importamos diretamente (ex: primitive.DateTime)
 				if fmt.Sprintf("%T", v.Value) == "primitive.DateTime" {
 					return true, TypeDate
 				}

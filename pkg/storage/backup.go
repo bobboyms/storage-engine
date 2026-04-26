@@ -47,10 +47,10 @@ type pathProvider interface {
 }
 
 // BackupOnline cria um snapshot consistente do engine com ele aberto.
-// Escritas ficam pausadas durante o checkpoint/cópia; leituras continuam.
+// Escritas ficam pausadas durante o checkpoint/cópia; reads continuam.
 func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error) {
 	if backupDir == "" {
-		return nil, fmt.Errorf("backup: backupDir vazio")
+		return nil, fmt.Errorf("backup: backupDir empty")
 	}
 
 	if err := prepareEmptyBackupDir(backupDir); err != nil {
@@ -147,10 +147,10 @@ func VerifyBackup(backupDir string) (*BackupManifest, error) {
 		return nil, err
 	}
 	if manifest.Version != backupManifestVer {
-		return nil, fmt.Errorf("backup: versão de manifest não suportada: %d", manifest.Version)
+		return nil, fmt.Errorf("backup: unsupported manifest version: %d", manifest.Version)
 	}
 	if len(manifest.Files) == 0 {
-		return nil, fmt.Errorf("backup: manifest sem arquivos")
+		return nil, fmt.Errorf("backup: manifest has no files")
 	}
 
 	filesDir := filepath.Join(backupDir, backupFilesDirName)
@@ -161,29 +161,29 @@ func VerifyBackup(backupDir string) (*BackupManifest, error) {
 			return nil, err
 		}
 		if _, ok := seen[file.Path]; ok {
-			return nil, fmt.Errorf("backup: arquivo duplicado no manifest: %s", file.Path)
+			return nil, fmt.Errorf("backup: duplicate file in manifest: %s", file.Path)
 		}
 		seen[file.Path] = struct{}{}
 
 		size, sum, err := hashExistingFile(filepath.Join(filesDir, rel))
 		if err != nil {
-			return nil, fmt.Errorf("backup: verificar %s: %w", file.Path, err)
+			return nil, fmt.Errorf("backup: verify %s: %w", file.Path, err)
 		}
 		if size != file.Size {
-			return nil, fmt.Errorf("backup: tamanho inválido em %s: got %d want %d", file.Path, size, file.Size)
+			return nil, fmt.Errorf("backup: invalid size for %s: got %d want %d", file.Path, size, file.Size)
 		}
 		if sum != file.SHA256 {
-			return nil, fmt.Errorf("backup: sha256 inválido em %s", file.Path)
+			return nil, fmt.Errorf("backup: invalid sha256 for %s", file.Path)
 		}
 	}
 	return manifest, nil
 }
 
 // RestoreBackup verifica um backup e restaura seus arquivos em targetDir.
-// Arquivos existentes não são sobrescritos.
+// Arquivos existsntes are not sobrescritos.
 func RestoreBackup(backupDir, targetDir string) (*BackupManifest, error) {
 	if targetDir == "" {
-		return nil, fmt.Errorf("restore: targetDir vazio")
+		return nil, fmt.Errorf("restore: empty targetDir")
 	}
 	manifest, err := VerifyBackup(backupDir)
 	if err != nil {
@@ -201,7 +201,7 @@ func RestoreBackup(backupDir, targetDir string) (*BackupManifest, error) {
 		}
 		dst := filepath.Join(targetDir, rel)
 		if _, err := os.Stat(dst); err == nil {
-			return nil, fmt.Errorf("restore: arquivo já existe: %s", dst)
+			return nil, fmt.Errorf("restore: file already exists: %s", dst)
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -213,10 +213,10 @@ func RestoreBackup(backupDir, targetDir string) (*BackupManifest, error) {
 		dst := filepath.Join(targetDir, rel)
 		size, sum, err := copyFileWithHash(src, dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 		if err != nil {
-			return nil, fmt.Errorf("restore: copiar %s: %w", file.Path, err)
+			return nil, fmt.Errorf("restore: copy %s: %w", file.Path, err)
 		}
 		if size != file.Size || sum != file.SHA256 {
-			return nil, fmt.Errorf("restore: verificação pós-cópia falhou em %s", file.Path)
+			return nil, fmt.Errorf("restore: post-copy verification failed for %s", file.Path)
 		}
 	}
 	if err := syncDirectory(targetDir); err != nil {
@@ -236,7 +236,7 @@ func (se *StorageEngine) backupSourceFiles() ([]backupSourceFile, error) {
 			return err
 		}
 		if info.IsDir() {
-			return fmt.Errorf("backup: %s aponta para diretório: %s", role, path)
+			return fmt.Errorf("backup: %s points to a directory: %s", role, path)
 		}
 		out = append(out, backupSourceFile{role: role, path: path})
 		return nil
@@ -262,7 +262,7 @@ func (se *StorageEngine) backupSourceFiles() ([]backupSourceFile, error) {
 			}
 			pathed, ok := idx.Tree.(pathProvider)
 			if !ok {
-				return nil, fmt.Errorf("backup: índice %s.%s não expõe Path()", tableName, idx.Name)
+				return nil, fmt.Errorf("backup: index %s.%s does not expose Path()", tableName, idx.Name)
 			}
 			if err := add("index:"+tableName+"."+idx.Name, pathed.Path()); err != nil {
 				return nil, err
@@ -314,14 +314,14 @@ func prepareEmptyBackupDir(path string) error {
 		return err
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("backup: diretório de backup deve estar vazio: %s", path)
+		return fmt.Errorf("backup: backup directory must be empty: %s", path)
 	}
 	return nil
 }
 
 func commonPathRoot(files []backupSourceFile) (string, error) {
 	if len(files) == 0 {
-		return "", fmt.Errorf("backup: lista de arquivos vazia")
+		return "", fmt.Errorf("backup: empty file list")
 	}
 	partsFor := func(path string) ([]string, error) {
 		abs, err := filepath.Abs(path)
@@ -352,7 +352,7 @@ func commonPathRoot(files []backupSourceFile) (string, error) {
 		common = common[:n]
 	}
 	if len(common) == 0 {
-		return "", fmt.Errorf("backup: arquivos em volumes diferentes")
+		return "", fmt.Errorf("backup: files are on different volumes")
 	}
 	volume := common[0]
 	pathParts := common[1:]
@@ -368,7 +368,7 @@ func commonPathRoot(files []backupSourceFile) (string, error) {
 func validateBackupRelPath(rel string) error {
 	clean := filepath.Clean(rel)
 	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || clean == ".." {
-		return fmt.Errorf("backup: caminho inválido no manifest: %s", rel)
+		return fmt.Errorf("backup: invalid path in manifest: %s", rel)
 	}
 	return nil
 }
@@ -385,7 +385,7 @@ func copyFileWithHash(src, dst string, flag int) (int64, string, error) {
 		return 0, "", err
 	}
 	if !info.Mode().IsRegular() {
-		return 0, "", fmt.Errorf("não é arquivo regular")
+		return 0, "", fmt.Errorf("not a regular file")
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 		return 0, "", err
@@ -449,7 +449,7 @@ func hashExistingFile(path string) (int64, string, error) {
 		return 0, "", err
 	}
 	if !info.Mode().IsRegular() {
-		return 0, "", fmt.Errorf("não é arquivo regular")
+		return 0, "", fmt.Errorf("not a regular file")
 	}
 	h := sha256.New()
 	size, err := io.Copy(h, in)

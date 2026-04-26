@@ -7,33 +7,33 @@ import (
 	"sync/atomic"
 )
 
-// ErrBufferPoolFull ocorre quando todas as páginas do pool estão pinadas
-// e não há espaço para trazer uma nova.
-var ErrBufferPoolFull = errors.New("pagestore: buffer pool sem frames livres (todas as páginas pinadas)")
+// ErrBufferPoolFull occurs when all pages in the pool are pinned and
+// there is no room to bring in a new one.
+var ErrBufferPoolFull = errors.New("pagestore: buffer pool has no free frames (all pages are pinned)")
 
-// BufferPool é um cache LRU de páginas em RAM em cima de um PageFile.
+// BufferPool é um cache LRU de pages em RAM em cima de um PageFile.
 //
 // Contratos:
 //   - Fetch/FetchForWrite INCREMENTA pinCount e adquire latch.
 //   - Release DECREMENTA pinCount e libera o latch. Obrigatório chamar
-//     pra cada Fetch, senão a página nunca é evictada.
+//     pra cada Fetch, otherwise a page nunca é evictada.
 //   - MarkDirty avisa o pool que o body foi modificado. No próximo flush
-//     (eviction ou FlushAll) a página vai ao disco.
-//   - Uma página pinada NUNCA é evictada.
+//     (eviction ou FlushAll) a page vai ao disco.
+//   - Uma page pinada NUNCA é evictada.
 //
 // Concorrência:
 //   - pool.mu serializa mudanças estruturais (map + LRU).
-//   - frame.rw protege o conteúdo da página (RW por frame).
+//   - frame.rw protege o content da page (RW por frame).
 //   - Ordem de aquisição: pool.mu → frame.rw (nunca o contrário).
-//   - Fetch solta pool.mu antes de adquirir frame.rw para não serializar
-//     leituras concorrentes em páginas diferentes.
+//   - Fetch solta pool.mu antes de adquirir frame.rw para not serializar
+//     reads concurrent em pages diferentes.
 //
 // Simplificações assumidas (aceitáveis para Fase 2, revisitar depois):
 //   - I/O de disco em Fetch (miss) acontece enquanto pool.mu está
 //     segurada. Trocar por "loading marker" em fase posterior se
 //     o miss rate for alto.
-//   - Eviction é síncrona: se a página evictada está suja, é gravada
-//     antes de Fetch retornar. Pode travar o caminho de leitura em
+//   - Eviction é síncrona: se a page evictada está suja, é gravada
+//     antes de Fetch retornar. Pode travar o caminho de read em
 //     I/O bursty. Flush assíncrono fica pra fase futura.
 type BufferPool struct {
 	pf       *PageFile
@@ -87,7 +87,7 @@ func (bp *BufferPool) Size() int {
 }
 
 // SetBeforeFlushHook registra um callback executado imediatamente antes
-// de cada flush de página suja para o PageFile. O hook pode gravar WAL,
+// de cada flush de page suja para o PageFile. O hook pode gravar WAL,
 // métricas ou outros side-effects e DEVE obedecer WAL-before-data.
 func (bp *BufferPool) SetBeforeFlushHook(hook func(pageID PageID, page *Page) error) {
 	bp.mu.Lock()
@@ -95,7 +95,7 @@ func (bp *BufferPool) SetBeforeFlushHook(hook func(pageID PageID, page *Page) er
 	bp.beforeFlush = hook
 }
 
-// DirtyPages devolve um snapshot das páginas sujas atualmente em cache,
+// DirtyPages devolve um snapshot das pages sujas atualmente em cache,
 // incluindo o pageLSN visto no frame.
 func (bp *BufferPool) DirtyPages() []DirtyPageInfo {
 	bp.mu.Lock()
@@ -123,8 +123,8 @@ func (bp *BufferPool) DirtyPages() []DirtyPageInfo {
 	return dirty
 }
 
-// ReplacePageImage atualiza o frame em cache, se existir, com uma imagem
-// reaplicada pelo recovery. Não cria novo frame nem toca disco.
+// ReplacePageImage atualiza o frame em cache, se exist, com uma imagem
+// reaplicada pelo recovery. Not cria novo frame nem toca disco.
 func (bp *BufferPool) ReplacePageImage(pageID PageID, page *Page) {
 	bp.mu.Lock()
 	f := bp.frames[pageID]
@@ -137,14 +137,14 @@ func (bp *BufferPool) ReplacePageImage(pageID PageID, page *Page) {
 	f.rw.Unlock()
 }
 
-// Fetch traz a página pageID pro pool com latch COMPARTILHADO (leitura).
-// Múltiplos Fetch concorrentes na mesma página podem prosseguir em paralelo.
+// Fetch traz a page pageID pro pool com latch COMPARTILHADO (read).
+// Múltiplos Fetch concurrent na mesma page podem prosseguir em paralelo.
 func (bp *BufferPool) Fetch(pageID PageID) (*PageHandle, error) {
 	return bp.fetch(pageID, false)
 }
 
-// FetchForWrite traz a página pageID pro pool com latch EXCLUSIVO (escrita).
-// Serializa com outros fetches (leitura ou escrita) na mesma página.
+// FetchForWrite traz a page pageID pro pool com latch EXCLUSIVO (write).
+// Serializa com outros fetches (read ou write) na mesma page.
 func (bp *BufferPool) FetchForWrite(pageID PageID) (*PageHandle, error) {
 	return bp.fetch(pageID, true)
 }
@@ -194,8 +194,8 @@ func (bp *BufferPool) acquireLatch(f *frame, write bool) {
 	}
 }
 
-// tryEvictLocked tenta evictar uma página não-pinada, varrendo do tail
-// (LRU) pra frente. Retorna false se todas as páginas estão pinadas.
+// tryEvictLocked tenta evictar uma page not-pinada, varrendo do tail
+// (LRU) pra frente. Retorna false se todas as pages estão pinadas.
 // DEVE ser chamado com pool.mu segurada.
 func (bp *BufferPool) tryEvictLocked() bool {
 	for e := bp.lru.Back(); e != nil; e = e.Prev() {
@@ -218,7 +218,7 @@ func (bp *BufferPool) tryEvictLocked() bool {
 			err := bp.pf.WritePage(f.pageID, &f.page)
 			f.rw.RUnlock()
 			if err != nil {
-				// Não evicta se flush falhou — melhor manter do que perder dados.
+				// Not evicta se flush failed — melhor manter do que perder dados.
 				return false
 			}
 			f.dirty.Store(false)
@@ -231,8 +231,8 @@ func (bp *BufferPool) tryEvictLocked() bool {
 	return false
 }
 
-// NewPage aloca um novo pageID no PageFile, cria um frame vazio no
-// pool, marca como suja (pra forçar escrita inicial) e devolve handle
+// NewPage aloca um novo pageID no PageFile, cria um frame empty no
+// pool, marca como suja (pra forçar write inicial) e devolve handle
 // com latch exclusivo.
 func (bp *BufferPool) NewPage() (*PageHandle, error) {
 	pageID, err := bp.pf.AllocatePage()
@@ -250,7 +250,7 @@ func (bp *BufferPool) NewPage() (*PageHandle, error) {
 
 	f := &frame{pageID: pageID}
 	f.pinCount.Add(1)
-	f.dirty.Store(true) // garante escrita inicial no flush
+	f.dirty.Store(true) // garante write inicial no flush
 	f.lruElem = bp.lru.PushFront(f)
 	bp.frames[pageID] = f
 	bp.mu.Unlock()
@@ -259,8 +259,8 @@ func (bp *BufferPool) NewPage() (*PageHandle, error) {
 	return &PageHandle{bp: bp, frame: f, write: true}, nil
 }
 
-// FlushAll grava todas as páginas sujas no PageFile e chama fsync.
-// Não evicta — as páginas continuam no pool, apenas deixam de estar sujas.
+// FlushAll grava todas as pages sujas no PageFile e chama fsync.
+// Not evicta — as pages continuam no pool, apenas deixam de estar sujas.
 func (bp *BufferPool) FlushAll() error {
 	bp.mu.Lock()
 	dirty := make([]*frame, 0, len(bp.frames))
@@ -289,7 +289,7 @@ func (bp *BufferPool) FlushAll() error {
 	return bp.pf.Sync()
 }
 
-// Close flusha e libera todos os frames. Não fecha o PageFile — isso
+// Close flusha e libera todos os frames. Not fecha o PageFile — isso
 // é responsabilidade do dono do PageFile.
 func (bp *BufferPool) Close() error {
 	if err := bp.FlushAll(); err != nil {
@@ -307,8 +307,8 @@ func (bp *BufferPool) Close() error {
 // ─────────────────────────────────────────────────────────────────────
 
 // PageHandle é o ponteiro efêmero que um chamador recebe pra acessar
-// uma página. Enquanto não for Release-ado, a página fica pinada
-// (não pode ser evictada) e o latch fica segurado.
+// uma page. Enquanto not for Release-ado, a page fica pinada
+// (not pode ser evictada) e o latch fica segurado.
 type PageHandle struct {
 	bp       *BufferPool
 	frame    *frame
@@ -316,20 +316,20 @@ type PageHandle struct {
 	released atomic.Bool
 }
 
-// Page devolve o buffer da página. Modificar exige latch de escrita
+// Page devolve o buffer da page. Modificar exige latch de write
 // (vindo de FetchForWrite ou NewPage).
 func (h *PageHandle) Page() *Page { return &h.frame.page }
 
 // ID devolve o PageID do frame.
 func (h *PageHandle) ID() PageID { return h.frame.pageID }
 
-// MarkDirty sinaliza que o conteúdo foi modificado. Só faz sentido
-// depois de um FetchForWrite ou NewPage — marcar com latch de leitura
-// é um bug no chamador mas não causa corrupção (só flush desnecessário).
+// MarkDirty sinaliza que o content foi modificado. Só faz sentido
+// depois de um FetchForWrite ou NewPage — marcar com latch de read
+// é um bug no chamador mas does not cause corruption (só flush desnecessário).
 func (h *PageHandle) MarkDirty() { h.frame.dirty.Store(true) }
 
 // Release libera o latch e decrementa o pinCount. Idempotente.
-// Em caso de PAGES de escrita sujas, a gravação só acontece em
+// Em caso de PAGES de write sujas, a gravação só acontece em
 // FlushAll ou durante eviction — Release é barato.
 func (h *PageHandle) Release() {
 	if !h.released.CompareAndSwap(false, true) {

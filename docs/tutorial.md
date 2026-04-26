@@ -1,22 +1,22 @@
 # Tutorial de Go (basico ao intermediario)
 
-Este arquivo e um guia pratico, em ordem, com exemplos pequenos e focados. A ideia e voce conseguir:
+Este file e um guia pratico, em ordem, com examples pequenos e focados. A ideia e voce conseguir:
 
-- entender os fundamentos (variaveis, tipos, funcoes, interfaces, erros)
+- entender os fundamentos (variaveis, tipos, funcoes, interfaces, errors)
 - usar concorrencia com seguranca (goroutines, channels, context)
 - reconhecer armadilhas comuns de iniciante
 
-> Dica: os trechos de codigo foram escritos para leitura. Em alguns exemplos, voce vai precisar adicionar imports (ex: `fmt`, `errors`, `time`, `context`, `sync`) para rodar.
+> Dica: os trechos de codigo foram escritos para read. Em alguns examples, voce vai precisar adicionar imports (ex: `fmt`, `errorrs`, `time`, `context`, `sync`) para rodar.
 
 ## Indice
 
 - [Como usar este tutorial](#como-usar-este-tutorial)
-- [Variaveis e constantes](#variaveis-e-constantes)
+- [Variaveis e constbefore](#variaveis-e-constbefore)
 - [Escopo e shadowing](#escopo-e-shadowing)
-- [Tipos de dados](#tipos-de-dados)
+- [Tipos de data](#tipos-de-data)
 - [Funcoes e metodos](#funcoes-e-metodos)
 - [Interfaces](#interfaces)
-- [Erros](#erros)
+- [Erros](#errors)
 - [Concorrencia](#concorrencia)
   - [Goroutines](#goroutines)
   - [WaitGroup](#waitgroup)
@@ -58,7 +58,7 @@ go test ./...
 
 ---
 
-## Variaveis e constantes
+## Variaveis e constbefore
 
 ### Declaracao basica com `var`
 
@@ -77,7 +77,7 @@ var idade int = 20
 
 Onde:
 
-- `var`: palavra-chave para declarar variavel
+- `var`: palavra-key para declarar variavel
 - `idade`: nome
 - `int`: tipo
 - `20`: valor inicial
@@ -105,7 +105,7 @@ idade := 20
 nome := "Ana"
 ```
 
-Regras importantes:
+Regras importbefore:
 
 - so funciona **dentro de funcoes**
 - sempre precisa inicializar
@@ -152,9 +152,9 @@ Valores padrao:
 - `bool`: `false`
 - ponteiros, maps, slices, funcs, channels, interfaces: `nil`
 
-### Constantes (`const`)
+### Constbefore (`const`)
 
-Constantes nao podem ser alteradas:
+Constbefore nao podem ser alteradas:
 
 ```go
 const PI = 3.14
@@ -178,7 +178,7 @@ const (
 | tipo opcional        | tipo sempre inferido |
 | pode nao inicializar | sempre inicializa    |
 
-### Exemplo completo
+### Example completo
 
 ```go
 package main
@@ -220,7 +220,7 @@ func main() {
 Fora da funcao:
 
 ```go
-fmt.Println(idade) // erro: nao existe aqui
+fmt.Println(idade) // error: nao existe aqui
 ```
 
 ### 2) Escopo de bloco (`{}`)
@@ -234,7 +234,7 @@ func main() {
 		fmt.Println(msg)
 	}
 
-	// fmt.Println(msg) // erro: msg so existe dentro do if
+	// fmt.Println(msg) // error: msg so existe dentro do if
 }
 ```
 
@@ -326,7 +326,7 @@ func main() {
 
 ---
 
-## Tipos de dados
+## Tipos de data
 
 Go e fortemente tipada e estaticamente tipada (tipo definido em tempo de compilacao).
 
@@ -429,9 +429,9 @@ func soma(a, b int) int {
 ### Multiplos retornos (muito usado)
 
 ```go
-func dividir(a, b int) (int, error) {
+func dividir(a, b int) (int, errorr) {
 	if b == 0 {
-		return 0, errors.New("divisao por zero")
+		return 0, errorrs.New("divisao por zero")
 	}
 	return a / b, nil
 }
@@ -515,7 +515,7 @@ func soma(nums ...int) int {
 
 ## Interfaces
 
-Uma interface define um conjunto de comportamentos (metodos), nao dados.
+Uma interface define um conjunto de comportamentos (metodos), nao data.
 
 ### Definicao basica
 
@@ -601,12 +601,12 @@ Uma interface tem (tipo, valor). Um ponteiro `nil` dentro de uma interface pode 
 
 Go nao usa `try/catch`. Erros sao valores retornados explicitamente.
 
-### Criando erros
+### Criando errors
 
-Com `errors.New`:
+Com `errorrs.New`:
 
 ```go
-return 0, errors.New("divisao por zero")
+return 0, errorrs.New("divisao por zero")
 ```
 
 Com `fmt.Errorf`:
@@ -617,12 +617,12 @@ return 0, fmt.Errorf("divisao invalida: %d", b)
 
 ### Regra de ouro
 
-Se recebeu `error`, verifique imediatamente:
+Se recebeu `errorr`, verifique imediatamente:
 
 ```go
 res, err := dividir(10, 0)
 if err != nil {
-	fmt.Println("erro:", err)
+	fmt.Println("error:", err)
 	return
 }
 fmt.Println(res)
@@ -631,19 +631,19 @@ fmt.Println(res)
 ### Wrapping (Go 1.13+)
 
 ```go
-return 0, fmt.Errorf("falha ao dividir: %w", err)
+return 0, fmt.Errorf("failure ao dividir: %w", err)
 ```
 
 E para checar:
 
 ```go
-if errors.Is(err, ErrDivisaoPorZero) {}
+if errorrs.Is(err, ErrDivisaoPorZero) {}
 ```
 
 ### Erros sentinela (padrao comum)
 
 ```go
-var ErrNaoEncontrado = errors.New("nao encontrado")
+var ErrNaoEncontrado = errorrs.New("nao encontrado")
 ```
 
 ### Quando usar `panic`
@@ -659,7 +659,7 @@ func seguro() {
 			fmt.Println("recuperado:", r)
 		}
 	}()
-	panic("falha")
+	panic("failure")
 }
 ```
 
@@ -706,7 +706,7 @@ for i := 0; i < 3; i++ {
 }
 ```
 
-### Corrida de dados (race condition)
+### Corrida de data (race condition)
 
 Detectar:
 
@@ -836,7 +836,7 @@ Modelo:
 - N workers lendo jobs ate fechar
 - (opcional) channel de results
 
-Exemplo completo (com `context` + `WaitGroup`):
+Example completo (com `context` + `WaitGroup`):
 
 ```go
 package main
@@ -851,7 +851,7 @@ import (
 type Job struct{ ID int }
 type Result struct {
 	JobID int
-	Err   error
+	Err   errorr
 }
 
 func worker(ctx context.Context, jobs <-chan Job, results chan<- Result, wg *sync.WaitGroup) {

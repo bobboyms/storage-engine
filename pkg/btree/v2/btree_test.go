@@ -45,7 +45,7 @@ func newTree(t testing.TB, cipher crypto.Cipher) *BTreeV2 {
 func TestBTreeV2_NewAndClose(t *testing.T) {
 	tr := newTree(t, nil)
 	if tr == nil {
-		t.Fatal("árvore nil")
+		t.Fatal("tree nil")
 	}
 }
 
@@ -61,10 +61,10 @@ func TestBTreeV2_InsertAndGet_Single(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if !found {
-		t.Fatal("chave 42 deveria existir")
+		t.Fatal("key 42 should exist")
 	}
 	if v != 1000 {
-		t.Fatalf("esperava valor 1000, recebi %d", v)
+		t.Fatalf("expected value 1000, got %d", v)
 	}
 }
 
@@ -86,15 +86,15 @@ func TestBTreeV2_InsertAndGet_Multiple(t *testing.T) {
 	for key, want := range expected {
 		got, found, _ := tr.Get(k(key))
 		if !found {
-			t.Fatalf("chave %d sumiu", key)
+			t.Fatalf("key %d disappeared", key)
 		}
 		if got != want {
-			t.Fatalf("chave %d: esperado valor %d, recebi %d", key, want, got)
+			t.Fatalf("key %d: expected value %d, got %d", key, want, got)
 		}
 	}
 
 	if _, found, _ := tr.Get(k(999)); found {
-		t.Fatal("chave inexistente não deveria ser achada")
+		t.Fatal("key inexistsnte not should be achada")
 	}
 }
 
@@ -106,7 +106,7 @@ func TestBTreeV2_UpdateExistingKey(t *testing.T) {
 
 	v, _, _ := tr.Get(k(1))
 	if v != 200 {
-		t.Fatalf("esperava valor atualizado 200, recebi %d", v)
+		t.Fatalf("expected updated value 200, got %d", v)
 	}
 }
 
@@ -140,10 +140,10 @@ func TestBTreeV2_ReopenPreservesKeys(t *testing.T) {
 	for key, want := range inserted {
 		v, found, _ := tr2.Get(k(key))
 		if !found {
-			t.Fatalf("chave %d sumiu após reopen", key)
+			t.Fatalf("key %d disappeared after reopen", key)
 		}
 		if v != want {
-			t.Fatalf("chave %d: esperado %d, recebi %d (após reopen)", key, want, v)
+			t.Fatalf("key %d: expected %d, got %d (after reopen)", key, want, v)
 		}
 	}
 }
@@ -163,7 +163,7 @@ func TestBTreeV2_InsertForcesInternalSplit_3LevelTree(t *testing.T) {
 	const N = 130_000
 	for i := int64(0); i < N; i++ {
 		if err := tr.Insert(k(i), i*7); err != nil {
-			t.Fatalf("Insert(%d) falhou: %v", i, err)
+			t.Fatalf("Insert(%d) failed: %v", i, err)
 		}
 	}
 
@@ -177,10 +177,10 @@ func TestBTreeV2_InsertForcesInternalSplit_3LevelTree(t *testing.T) {
 			t.Fatalf("Get(%d): %v", key, err)
 		}
 		if !found {
-			t.Fatalf("chave %d sumiu — split recursivo quebrado", key)
+			t.Fatalf("key %d disappeared — split recursivo quebrado", key)
 		}
 		if v != key*7 {
-			t.Fatalf("chave %d corrompida: esperado %d, recebi %d", key, key*7, v)
+			t.Fatalf("key %d corrompida: expected %d, got %d", key, key*7, v)
 		}
 	}
 
@@ -198,7 +198,7 @@ func TestBTreeV2_InsertBeyondSingleLeaf_2LevelTree(t *testing.T) {
 	const N = 1000
 	for i := int64(0); i < N; i++ {
 		if err := tr.Insert(k(i), i*10); err != nil {
-			t.Fatalf("Insert(%d) falhou: %v", i, err)
+			t.Fatalf("Insert(%d) failed: %v", i, err)
 		}
 	}
 
@@ -208,10 +208,10 @@ func TestBTreeV2_InsertBeyondSingleLeaf_2LevelTree(t *testing.T) {
 			t.Fatalf("Get(%d): %v", i, err)
 		}
 		if !found {
-			t.Fatalf("chave %d sumiu após inserts+splits", i)
+			t.Fatalf("key %d disappeared after inserts+splits", i)
 		}
 		if v != i*10 {
-			t.Fatalf("chave %d corrompida: esperado %d, recebi %d", i, i*10, v)
+			t.Fatalf("key %d corrompida: expected %d, got %d", i, i*10, v)
 		}
 	}
 }
@@ -222,10 +222,10 @@ func TestBTreeV2_Upsert_NewKey(t *testing.T) {
 	err := tr.Upsert(k(42), func(old int64, exists bool) (int64, error) {
 		called = true
 		if exists {
-			t.Fatal("exists deveria ser false pra key nova")
+			t.Fatal("exists should be false pra key nova")
 		}
 		if old != 0 {
-			t.Fatalf("old deveria ser 0 pra key nova, recebi %d", old)
+			t.Fatalf("old should be 0 pra key nova, got %d", old)
 		}
 		return 100, nil
 	})
@@ -233,11 +233,11 @@ func TestBTreeV2_Upsert_NewKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !called {
-		t.Fatal("fn não foi chamada")
+		t.Fatal("fn was not chamada")
 	}
 	v, found, _ := tr.Get(k(42))
 	if !found || v != 100 {
-		t.Fatalf("Upsert não persistiu: found=%v v=%d", found, v)
+		t.Fatalf("Upsert not persistiu: found=%v v=%d", found, v)
 	}
 }
 
@@ -247,10 +247,10 @@ func TestBTreeV2_Upsert_ExistingKey(t *testing.T) {
 
 	err := tr.Upsert(k(7), func(old int64, exists bool) (int64, error) {
 		if !exists {
-			t.Fatal("exists deveria ser true")
+			t.Fatal("exists should be true")
 		}
 		if old != 700 {
-			t.Fatalf("old esperado 700, recebi %d", old)
+			t.Fatalf("old expected 700, got %d", old)
 		}
 		return old + 1, nil
 	})
@@ -260,7 +260,7 @@ func TestBTreeV2_Upsert_ExistingKey(t *testing.T) {
 
 	v, _, _ := tr.Get(k(7))
 	if v != 701 {
-		t.Fatalf("Upsert não atualizou: %d", v)
+		t.Fatalf("Upsert not atualizou: %d", v)
 	}
 }
 
@@ -283,7 +283,7 @@ func TestBTreeV2_Remove_MultiLeaf(t *testing.T) {
 			t.Fatalf("Remove(%d): %v", key, err)
 		}
 		if !removed {
-			t.Fatalf("Remove(%d) deveria retornar true", key)
+			t.Fatalf("Remove(%d) should return true", key)
 		}
 	}
 
@@ -300,7 +300,7 @@ func TestBTreeV2_Remove_MultiLeaf(t *testing.T) {
 		_, wasDeleted := deleted[i]
 		if wasDeleted {
 			if found {
-				t.Fatalf("key %d deveria ter sido removida", i)
+				t.Fatalf("key %d should have sido removida", i)
 			}
 			continue
 		}
@@ -316,10 +316,10 @@ func TestBTreeV2_Remove_MultiLeaf(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("ScanAll após deletes: %v", err)
+		t.Fatalf("ScanAll after deletes: %v", err)
 	}
 	if count != total-len(deleted) {
-		t.Fatalf("scan count esperado %d, recebi %d", total-len(deleted), count)
+		t.Fatalf("scan count expected %d, got %d", total-len(deleted), count)
 	}
 }
 
@@ -343,7 +343,7 @@ func TestBTreeV2_Remove_CollapsesRootToLeaf(t *testing.T) {
 			t.Fatalf("Remove(%d): %v", i, err)
 		}
 		if !removed {
-			t.Fatalf("Remove(%d) deveria retornar true", i)
+			t.Fatalf("Remove(%d) should return true", i)
 		}
 	}
 
@@ -358,7 +358,7 @@ func TestBTreeV2_Remove_CollapsesRootToLeaf(t *testing.T) {
 	}
 	if !rootNP.IsLeaf() {
 		rootH.Release()
-		t.Fatal("root deveria colapsar para leaf após deletes")
+		t.Fatal("root should colapsar para leaf after deletes")
 	}
 	rootH.Release()
 
@@ -376,7 +376,7 @@ func TestBTreeV2_Remove_CollapsesRootToLeaf(t *testing.T) {
 		if _, found, err := tr2.Get(k(i)); err != nil {
 			t.Fatalf("Get(%d): %v", i, err)
 		} else if found {
-			t.Fatalf("key %d deveria ter sido removida", i)
+			t.Fatalf("key %d should have sido removida", i)
 		}
 	}
 	for i := int64(total - 5); i < total; i++ {

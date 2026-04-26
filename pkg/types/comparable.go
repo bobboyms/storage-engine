@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Comparable é a interface que todas as chaves devem implementar
+// Comparable é a interface que todas as keys mustm implementar
 type Comparable interface {
 	Compare(other Comparable) int // Retorna -1 se <, 0 se ==, 1 se >
 }

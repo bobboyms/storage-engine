@@ -14,16 +14,16 @@ import (
 // Se assinaturas divergirem, o build quebra imediatamente.
 var _ btree.Tree = (*BTreeV2)(nil)
 
-// metaPageID é a página onde guardamos o header da árvore.
+// metaPageID é a page onde guardamos o header da tree.
 // Reservamos pageID=1 pro meta; a primeira folha aloca a partir de 2.
 const metaPageID pagestore.PageID = 1
 
-// treeMeta é o "catálogo" da árvore persistida. Grava na metaPageID.
+// treeMeta é o "catálogo" da tree persistida. Grava na metaPageID.
 type treeMeta struct {
 	magic       uint32
 	version     uint16
 	rootPageID  pagestore.PageID
-	numKeysHint uint64 // pista (não confiável pós-crash), informativa
+	numKeysHint uint64 // pista (not confiável pós-crash), informativa
 }
 
 const (
@@ -41,11 +41,11 @@ func (m *treeMeta) encode(buf []byte) {
 func (m *treeMeta) decode(buf []byte) error {
 	m.magic = binDecU32(buf[0:4])
 	if m.magic != treeMetaMagic {
-		return fmt.Errorf("btree/v2: meta page com magic inválido %x", m.magic)
+		return fmt.Errorf("btree/v2: meta page has invalid magic %x", m.magic)
 	}
 	m.version = binDecU16(buf[4:6])
 	if m.version != treeMetaVersion {
-		return fmt.Errorf("btree/v2: meta version %d não suportada", m.version)
+		return fmt.Errorf("btree/v2: meta version %d is not supported", m.version)
 	}
 	m.rootPageID = pagestore.PageID(binDecU64(buf[6:14]))
 	m.numKeysHint = binDecU64(buf[14:22])
@@ -55,7 +55,7 @@ func (m *treeMeta) decode(buf []byte) error {
 // BTreeV2 é a B+ tree page-based tipada por um KeyCodec.
 //
 // Concorrência:
-//   - Get/Scan usam latch crabbing de leitura entre páginas (sem mutex
+//   - Get/Scan usam latch crabbing de read entre pages (sem mutex
 //     global por operação).
 //   - Fixed-key writers usam latch crabbing top-down com split
 //     preventivo: seguram parent+child apenas até garantir que o child
@@ -69,7 +69,7 @@ type BTreeV2 struct {
 	bp          *pagestore.BufferPool
 	maxBodySize int
 
-	// Exatamente UM de codec/varCodec é não-nil. `isVariable` disambigua
+	// Exatamente UM de codec/varCodec é not-nil. `isVariable` disambigua
 	// de forma rápida sem type assertion.
 	codec      KeyCodec         // fixed (8-byte keys)
 	varCodec   VariableKeyCodec // variable (byte-slice keys, VarcharKey)
@@ -91,7 +91,7 @@ func NewBTreeV2(path string, bufferPoolCapacity int, cipher crypto.Cipher) (*BTr
 	return NewBTreeV2Typed(path, bufferPoolCapacity, cipher, IntKeyCodec{})
 }
 
-// NewBTreeV2Typed é a forma geral pra chaves de tamanho fixo (IntKey,
+// NewBTreeV2Typed é a forma geral pra keys de tamanho fixo (IntKey,
 // FloatKey, BoolKey, DateKey). Pra VarcharKey use NewBTreeV2Varchar.
 func NewBTreeV2Typed(path string, bufferPoolCapacity int, cipher crypto.Cipher, codec KeyCodec) (*BTreeV2, error) {
 	if codec == nil {
@@ -122,9 +122,9 @@ func NewBTreeV2Typed(path string, bufferPoolCapacity int, cipher crypto.Cipher, 
 // (ou qualquer outra key de tamanho variável). Usa layout de slots
 // com indireção (keyOffset+keyLength) — ver variable_node_page.go.
 //
-// Trade-off: 12 bytes por slot + bytes da chave, em vez dos 16 bytes
-// fixos do formato de 8-byte keys. Com chaves curtas (~8 bytes) é
-// equivalente; chaves muito longas ocupam mais.
+// Trade-off: 12 bytes por slot + bytes da key, em vez dos 16 bytes
+// fixos do formato de 8-byte keys. Com keys curtas (~8 bytes) é
+// equivalente; keys muito longas ocupam mais.
 func NewBTreeV2Varchar(path string, bufferPoolCapacity int, cipher crypto.Cipher, varCodec VariableKeyCodec) (*BTreeV2, error) {
 	if varCodec == nil {
 		return nil, fmt.Errorf("btree/v2: varCodec obrigatório")
@@ -159,7 +159,7 @@ func (tr *BTreeV2) Close() error {
 	return tr.pf.Close()
 }
 
-// Sync flusha páginas sujas sem fechar a árvore.
+// Sync flusha pages sujas sem fechar a tree.
 func (tr *BTreeV2) Sync() error {
 	return tr.bp.FlushAll()
 }
@@ -283,7 +283,7 @@ func (tr *BTreeV2) DeleteWithLSN(key types.Comparable, lsn uint64) (bool, error)
 	return found, err
 }
 
-// loadOrInitMeta lê a meta page. Se a árvore é nova, cria meta + folha raiz.
+// loadOrInitMeta lê a meta page. Se a tree é nova, cria meta + folha raiz.
 func (tr *BTreeV2) loadOrInitMeta() error {
 	if tr.pf.NumPages() <= 1 {
 		return tr.initFreshTree()
@@ -291,7 +291,7 @@ func (tr *BTreeV2) loadOrInitMeta() error {
 
 	metaHandle, err := tr.bp.Fetch(metaPageID)
 	if err != nil {
-		return fmt.Errorf("btree/v2: falha ao ler meta: %w", err)
+		return fmt.Errorf("btree/v2: failed to ler meta: %w", err)
 	}
 	defer metaHandle.Release()
 
@@ -312,7 +312,7 @@ func (tr *BTreeV2) initFreshTree() error {
 	}
 	if metaH.ID() != metaPageID {
 		metaH.Release()
-		return fmt.Errorf("btree/v2: esperava metaPageID=%d, recebi %d", metaPageID, metaH.ID())
+		return fmt.Errorf("btree/v2: expected metaPageID=%d, got %d", metaPageID, metaH.ID())
 	}
 
 	rootH, err := tr.bp.NewPage()
@@ -344,14 +344,14 @@ func (tr *BTreeV2) initFreshTree() error {
 	return tr.bp.FlushAll()
 }
 
-// Insert coloca (key, value) na árvore. Sobrescreve valor se key existe.
+// Insert coloca (key, value) na tree. Sobrescreve value se key exists.
 // Pode causar splits propagando até criar novo root.
 func (tr *BTreeV2) Insert(key types.Comparable, value int64) error {
 	return tr.InsertWithLSN(key, value, 0)
 }
 
-// Upsert é insert + callback. Se key existe, `fn(oldValue, true)`;
-// senão `fn(0, false)`. O valor retornado por fn é gravado.
+// Upsert é insert + callback. Se key exists, `fn(oldValue, true)`;
+// otherwise `fn(0, false)`. O value retornado por fn é gravado.
 // Essencial pro engine MVCC (engine.go usa Upsert pra chain de versões).
 func (tr *BTreeV2) Upsert(key types.Comparable, fn func(oldValue int64, exists bool) (int64, error)) error {
 	return tr.UpsertWithLSN(key, 0, fn)
@@ -362,7 +362,7 @@ func (tr *BTreeV2) Replace(key types.Comparable, value int64) error {
 	return tr.ReplaceWithLSN(key, value, 0)
 }
 
-// Remove apaga fisicamente `key` do índice com rebalance top-down:
+// Remove apaga fisicamente `key` do index com rebalance top-down:
 // trata underflow com borrow/merge e colapsa a raiz quando necessário.
 func (tr *BTreeV2) Remove(key types.Comparable) (bool, error) {
 	return tr.DeleteWithLSN(key, 0)
@@ -692,7 +692,7 @@ func (tr *BTreeV2) updateRootLocked(newRootPageID pagestore.PageID) error {
 	return nil
 }
 
-// ScanAll percorre todas as chaves da árvore em ordem crescente.
+// ScanAll percorre todas as keys da tree em ordem crescente.
 func (tr *BTreeV2) ScanAll(fn func(key types.Comparable, value int64) error) error {
 	if tr.isVariable {
 		return tr.scanLockedVar(nil, nil, fn)
@@ -814,8 +814,8 @@ func (tr *BTreeV2) Get(key types.Comparable) (int64, bool, error) {
 	return tr.getLocked(tr.codec.Encode(key))
 }
 
-// getLocked lê a árvore usando apenas um snapshot rápido do rootPageID
-// + latch crabbing de leitura entre páginas.
+// getLocked lê a tree usando apenas um snapshot rápido do rootPageID
+// + latch crabbing de read entre pages.
 func (tr *BTreeV2) getLocked(encKey uint64) (int64, bool, error) {
 	pageID := tr.rootPage()
 	for {

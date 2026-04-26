@@ -24,7 +24,7 @@ import (
 // Fragmentação: inserts crescem key bytes pra trás; updates in-place
 // no value (sem realocar key). DELETES (quando implementados) criariam
 // holes — precisariam de compaction pro reaproveitamento ser eficiente.
-// Por ora, sem delete na BTreeV2, fragmentação não é problema.
+// Por ora, sem delete na BTreeV2, fragmentação is not problema.
 
 const (
 	// VariableSlotSize: keyOffset(2) + keyLength(2) + value(8)
@@ -41,7 +41,7 @@ const (
 type VariableCompareFn func(a, b []byte) int
 
 // VariableNodePage é a visão "variable-key B+ tree node" de uma pagestore.Page.
-// Paralelo ao NodePage (fixed); ambos coexistem porque o layout é diferente
+// Paralelo ao NodePage (fixed); ambos coexistsm porque o layout é diferente
 // o suficiente pra justificar código separado.
 type VariableNodePage struct {
 	page        *pagestore.Page
@@ -50,7 +50,7 @@ type VariableNodePage struct {
 	cmp         VariableCompareFn
 }
 
-// InitLeafPageVar zera a página e grava header de folha VARIABLE-key.
+// InitLeafPageVar zera a page e grava header de folha VARIABLE-key.
 func InitLeafPageVar(p *pagestore.Page, maxBodySize int, cmp VariableCompareFn) *VariableNodePage {
 	p.Reset()
 	body := p.Body()
@@ -105,7 +105,7 @@ func InitInternalPageVar(p *pagestore.Page, maxBodySize int, leftmost pagestore.
 	return &VariableNodePage{page: p, body: body, maxBodySize: maxBodySize, cmp: cmp}
 }
 
-// OpenVariableNodePage abre uma página já inicializada com formato variável.
+// OpenVariableNodePage abre uma page já inicializada com formato variável.
 func OpenVariableNodePage(p *pagestore.Page, maxBodySize int, cmp VariableCompareFn) (*VariableNodePage, error) {
 	body := p.Body()
 	if maxBodySize > len(body) {
@@ -114,15 +114,15 @@ func OpenVariableNodePage(p *pagestore.Page, maxBodySize int, cmp VariableCompar
 	vp := &VariableNodePage{page: p, body: body, maxBodySize: maxBodySize, cmp: cmp}
 	h := vp.header()
 	if h.nodeType != NodeTypeLeaf && h.nodeType != NodeTypeInternal {
-		return nil, fmt.Errorf("%w: tipo %d", ErrBadNodeType, h.nodeType)
+		return nil, fmt.Errorf("%w: type %d", ErrBadNodeType, h.nodeType)
 	}
 	if body[12] != keyFormatVariable {
-		return nil, fmt.Errorf("btree/v2: página não é formato variable (format=%d)", body[12])
+		return nil, fmt.Errorf("btree/v2: page is not variable format (format=%d)", body[12])
 	}
 	return vp, nil
 }
 
-// IsVariableKeyPage detecta pelo byte 12 do body se a página é variável.
+// IsVariableKeyPage detecta pelo byte 12 do body se a page é variável.
 func IsVariableKeyPage(p *pagestore.Page) bool {
 	return p.Body()[12] == keyFormatVariable
 }
@@ -187,8 +187,8 @@ func (vp *VariableNodePage) isInternal() bool {
 	return vp.header().nodeType == NodeTypeInternal
 }
 
-// slotDirStart é onde o slot_dir começa. Depende se é leaf (após header)
-// ou internal (após header + leftmostChild).
+// slotDirStart é onde o slot_dir começa. Depende se é leaf (after header)
+// ou internal (after header + leftmostChild).
 func (vp *VariableNodePage) slotDirStart() int {
 	if vp.isInternal() {
 		return NodeHeaderSize + LeftmostChildSize
@@ -238,17 +238,17 @@ func (vp *VariableNodePage) CanLeafInsertVar(key []byte) bool {
 	return vp.FreeSpace() >= VariableSlotSize+len(key)
 }
 
-// CanAbsorbSeparatorVar retorna true quando a página internal ainda
+// CanAbsorbSeparatorVar retorna true quando a page internal ainda
 // comporta um novo separador de `keyLen` bytes sem split.
 func (vp *VariableNodePage) CanAbsorbSeparatorVar(keyLen int) bool {
 	return vp.FreeSpace() >= VariableSlotSize+keyLen
 }
 
-// SplitSeparatorLenVar devolve o comprimento exato da chave que esta
-// página promoveria num split do layout atual.
+// SplitSeparatorLenVar devolve o comprimento exato da key que esta
+// page promoveria num split do layout atual.
 //
-// Para folha: é a primeira chave da metade direita (índice n/2).
-// Para internal: é a chave do meio promovida ao parent (índice n/2).
+// Para folha: é a primeira key da metade direita (index n/2).
+// Para internal: é a key do meio promovida ao parent (index n/2).
 func (vp *VariableNodePage) SplitSeparatorLenVar() int {
 	n := vp.NumKeys()
 	if n == 0 {
@@ -261,7 +261,7 @@ func (vp *VariableNodePage) SplitSeparatorLenVar() int {
 }
 
 // binarySearchVar procura key no slot_dir. Se achou, (idx, true).
-// Senão, (idx = posição onde inserir pra manter ordem, false).
+// Otherwise, (idx = posição onde inserir pra manter ordem, false).
 func (vp *VariableNodePage) binarySearchVar(key []byte) (int, bool) {
 	n := vp.NumKeys()
 	lo, hi := 0, n
@@ -282,14 +282,14 @@ func (vp *VariableNodePage) binarySearchVar(key []byte) (int, bool) {
 }
 
 // LeafInsertVar insere (key, value) na folha variable. Se a key já
-// existe, atualiza o value in-place (sem realocar bytes). Senão aloca
+// exists, atualiza o value in-place (sem realocar bytes). Otherwise aloca
 // key bytes + slot novo.
 func (vp *VariableNodePage) LeafInsertVar(key []byte, value int64) error {
 	if !vp.IsLeaf() {
 		return ErrBadNodeType
 	}
 	if len(key) > int(^uint16(0)) {
-		return fmt.Errorf("btree/v2: key de %d bytes excede limite uint16", len(key))
+		return fmt.Errorf("btree/v2: key of %d bytes exceeds uint16 limit", len(key))
 	}
 
 	idx, found := vp.binarySearchVar(key)
@@ -333,7 +333,7 @@ func (vp *VariableNodePage) LeafGetVar(key []byte) (int64, bool) {
 	return v, true
 }
 
-// LeafDeleteVar remove uma key da folha e recompata a página inteira.
+// LeafDeleteVar remove uma key da folha e recompata a page inteira.
 // Isto evita holes no body e reaproveita o espaço imediatamente.
 func (vp *VariableNodePage) LeafDeleteVar(key []byte) (bool, error) {
 	if !vp.IsLeaf() {
@@ -366,7 +366,7 @@ func (vp *VariableNodePage) LeafDeleteVar(key []byte) (bool, error) {
 	vp.setNextLeafPageID(nextLeaf)
 	for _, entry := range entries {
 		if err := vp.LeafInsertVar(entry.key, entry.val); err != nil {
-			return false, fmt.Errorf("btree/v2: compactação pós-delete falhou: %w", err)
+			return false, fmt.Errorf("btree/v2: post-delete compaction failed: %w", err)
 		}
 	}
 
@@ -376,14 +376,14 @@ func (vp *VariableNodePage) LeafDeleteVar(key []byte) (bool, error) {
 // LeafAtVar devolve (keyBytes, value) do slot i.
 func (vp *VariableNodePage) LeafAtVar(i int) ([]byte, int64) {
 	if i < 0 || i >= vp.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: LeafAtVar índice %d fora de [0, %d)", i, vp.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: LeafAtVar index %d fora de [0, %d)", i, vp.NumKeys()))
 	}
 	off, length, v := vp.readSlot(i)
 	return vp.body[off : off+length], v
 }
 
 // internalBinarySearchVar busca o primeiro sep > key.
-// Retorna esse índice (ou numKeys se todos <= key).
+// Retorna esse index (ou numKeys se todos <= key).
 func (vp *VariableNodePage) internalBinarySearchVar(key []byte) int {
 	n := vp.NumKeys()
 	lo, hi := 0, n
@@ -402,7 +402,7 @@ func (vp *VariableNodePage) internalBinarySearchVar(key []byte) int {
 // FindChildVar retorna o child pra `key` num internal variable.
 func (vp *VariableNodePage) FindChildVar(key []byte) pagestore.PageID {
 	if !vp.isInternal() {
-		panic("btree/v2: FindChildVar em não-internal")
+		panic("btree/v2: FindChildVar em not-internal")
 	}
 	firstGT := vp.internalBinarySearchVar(key)
 	if firstGT == 0 {
@@ -418,7 +418,7 @@ func (vp *VariableNodePage) InsertSeparatorVar(sepKey []byte, child pagestore.Pa
 		return ErrBadNodeType
 	}
 	if len(sepKey) > int(^uint16(0)) {
-		return fmt.Errorf("btree/v2: sepKey de %d bytes excede uint16", len(sepKey))
+		return fmt.Errorf("btree/v2: sepKey of %d bytes exceeds uint16", len(sepKey))
 	}
 
 	needed := VariableSlotSize + len(sepKey)
@@ -447,22 +447,22 @@ func (vp *VariableNodePage) InsertSeparatorVar(sepKey []byte, child pagestore.Pa
 // InternalAtVar devolve (keyBytes, childPageID) do slot i.
 func (vp *VariableNodePage) InternalAtVar(i int) ([]byte, pagestore.PageID) {
 	if i < 0 || i >= vp.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: InternalAtVar índice %d fora de [0, %d)", i, vp.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: InternalAtVar index %d fora de [0, %d)", i, vp.NumKeys()))
 	}
 	off, length, v := vp.readSlot(i)
 	return vp.body[off : off+length], pagestore.PageID(v)
 }
 
-// splitLeafIntoVar: move metade das chaves (pela metade superior dos
-// slots) pra `other`. Retorna as bytes da chave separadora (primeira
-// da metade direita) — cópia independente, caller não precisa se
+// splitLeafIntoVar: move metade das keys (pela metade superior dos
+// slots) pra `other`. Retorna as bytes da key separadora (primeira
+// da metade direita) — cópia independente, caller not precisa se
 // preocupar com aliasing no body original.
 func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	if !vp.IsLeaf() || !other.IsLeaf() {
 		panic("btree/v2: splitLeafIntoVar requer leaves variable")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitLeafIntoVar requer other vazio")
+		panic("btree/v2: splitLeafIntoVar requer other empty")
 	}
 
 	n := vp.NumKeys()
@@ -472,11 +472,11 @@ func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	for i := mid; i < n; i++ {
 		keyBytes, value := vp.LeafAtVar(i)
 		if err := other.LeafInsertVar(keyBytes, value); err != nil {
-			panic(fmt.Sprintf("btree/v2: inserção no right pós-split falhou: %v", err))
+			panic(fmt.Sprintf("btree/v2: inserção no right pós-split failed: %v", err))
 		}
 	}
 
-	// Separador = primeira chave do right half. Cópia segura: LeafAtVar
+	// Separador = primeira key do right half. Cópia segura: LeafAtVar
 	// em self ainda funciona pra ler, mas after truncation precisa
 	// retornar cópia.
 	sepSrc, _ := vp.LeafAtVar(mid)
@@ -502,14 +502,14 @@ func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	return sep
 }
 
-// splitInternalIntoVar: promove chave do meio; move slots[mid+1..n) pra other.
+// splitInternalIntoVar: promove key do meio; move slots[mid+1..n) pra other.
 // other.leftmost = slot[mid].child. Retorna a key promovida (cópia).
 func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte {
 	if !vp.isInternal() || !other.isInternal() {
 		panic("btree/v2: splitInternalIntoVar requer internals variable")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitInternalIntoVar requer other vazio")
+		panic("btree/v2: splitInternalIntoVar requer other empty")
 	}
 
 	n := vp.NumKeys()
@@ -527,7 +527,7 @@ func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte
 	for i := mid + 1; i < n; i++ {
 		keyBytes, child := vp.InternalAtVar(i)
 		if err := other.InsertSeparatorVar(keyBytes, child); err != nil {
-			panic(fmt.Sprintf("btree/v2: InsertSeparatorVar no right pós-split falhou: %v", err))
+			panic(fmt.Sprintf("btree/v2: InsertSeparatorVar no right pós-split failed: %v", err))
 		}
 	}
 

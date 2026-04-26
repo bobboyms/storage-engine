@@ -10,7 +10,7 @@ import (
 
 // TestWAL_EntrySpansMultiplePages: o ganho de flexibilidade do formato
 // page-based é que entries podem ser arbitrariamente grandes. Uma entry
-// com payload de 20KB cruza 2-3 páginas; reader deve recompô-la sem
+// com payload de 20KB cruza 2-3 pages; reader must recompô-la sem
 // problemas.
 func TestWAL_EntrySpansMultiplePages(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "wal_span.log")
@@ -20,7 +20,7 @@ func TestWAL_EntrySpansMultiplePages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Payload grande (~20KB): cruza múltiplas páginas de 8KB
+	// Payload grande (~20KB): cruza múltiplas pages de 8KB
 	bigPayload := make([]byte, 20000)
 	if _, err := rand.Read(bigPayload); err != nil {
 		t.Fatal(err)
@@ -72,10 +72,10 @@ func TestWAL_EntrySpansMultiplePages(t *testing.T) {
 		t.Fatalf("ReadEntry 1 (20KB): %v", err)
 	}
 	if !bytes.Equal(got1.Payload, bigPayload) {
-		t.Fatal("payload 20KB divergente após cross-page roundtrip")
+		t.Fatal("payload 20KB divergente after cross-page roundtrip")
 	}
 	if got1.Header.LSN != 1 {
-		t.Fatalf("LSN 1 esperado, recebi %d", got1.Header.LSN)
+		t.Fatalf("LSN 1 expected, got %d", got1.Header.LSN)
 	}
 
 	got2, err := r.ReadEntry()
@@ -88,7 +88,7 @@ func TestWAL_EntrySpansMultiplePages(t *testing.T) {
 
 	// EOF
 	if _, err := r.ReadEntry(); err != io.EOF {
-		t.Fatalf("esperava EOF, recebi %v", err)
+		t.Fatalf("expected EOF, got %v", err)
 	}
 }
 
@@ -129,16 +129,16 @@ func TestWAL_ManyEntriesFillManyPages(t *testing.T) {
 			t.Fatalf("ReadEntry %d: %v", i, err)
 		}
 		if entry.Header.LSN != uint64(i+1) {
-			t.Fatalf("entry %d: LSN esperado %d, recebi %d", i, i+1, entry.Header.LSN)
+			t.Fatalf("entry %d: LSN expected %d, got %d", i, i+1, entry.Header.LSN)
 		}
 	}
 	if _, err := r.ReadEntry(); err != io.EOF {
-		t.Fatalf("esperava EOF após %d entries, recebi %v", N, err)
+		t.Fatalf("expected EOF after %d entries, got %v", N, err)
 	}
 }
 
 // TestWAL_ReopenAndAppend: escreve, fecha, reabre, continua appending.
-// Prova que o writer adota corretamente a última página existente.
+// Prova que o writer adota corretamente a última page existsnte.
 func TestWAL_ReopenAndAppend(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "wal_reopen.log")
 
@@ -175,7 +175,7 @@ func TestWAL_ReopenAndAppend(t *testing.T) {
 	}
 	w2.Close()
 
-	// Lê tudo — deve ter 6 entries em ordem 1..6
+	// Lê tudo — must ter 6 entries em ordem 1..6
 	r, _ := NewWALReader(tmpFile)
 	defer r.Close()
 	for i := 1; i <= 6; i++ {
@@ -184,7 +184,7 @@ func TestWAL_ReopenAndAppend(t *testing.T) {
 			t.Fatalf("ReadEntry %d: %v", i, err)
 		}
 		if entry.Header.LSN != uint64(i) {
-			t.Fatalf("entry %d: LSN esperado %d, recebi %d", i, i, entry.Header.LSN)
+			t.Fatalf("entry %d: LSN expected %d, got %d", i, i, entry.Header.LSN)
 		}
 	}
 }

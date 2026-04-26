@@ -14,8 +14,8 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
-// findLastCheckpointLSN varre o WAL e retorna o beginLSN do registro de
-// checkpoint mais recente. Retorna (0, false) se não houver nenhum registro
+// findLastCheckpointLSN varre o WAL e retorna o beginLSN do record de
+// checkpoint mais recente. Retorna (0, false) se not houver nenhum record
 // de checkpoint — recovery cai no caminho clássico (replay completo).
 func findLastCheckpointLSN(walPath string) (uint64, bool, error) {
 	return findLastCheckpointLSNWithCipher(walPath, nil)
@@ -80,7 +80,7 @@ type recoveryTxnState struct {
 
 type recoveryAnalysis struct {
 	MaxLSN        uint64
-	CheckpointLSN uint64 // beginLSN do último checkpoint; 0 = não encontrado
+	CheckpointLSN uint64 // beginLSN do último checkpoint; 0 = not encontrado
 	DirtyIndexes  map[string]uint64
 	TxTable       map[uint64]recoveryTxnState
 	CommittedTxs  map[uint64]struct{}
@@ -153,7 +153,7 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 			result.MaxLSN = entry.Header.LSN
 		}
 
-		// Atualiza o checkpoint LSN se encontrar registro mais recente.
+		// Atualiza o checkpoint LSN se encontrar record mais recente.
 		if entry.Header.EntryType == wal.EntryCheckpoint && len(entry.Payload) >= 8 {
 			beginLSN := binary.LittleEndian.Uint64(entry.Payload[:8])
 			if beginLSN >= result.CheckpointLSN {

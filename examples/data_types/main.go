@@ -13,14 +13,14 @@ import (
 /*
 EXEMPLO: Tipos de Dados Suportados
 
-Este exemplo demonstra todos os tipos de dados suportados pelo Storage Engine:
+Este example demonstra todos os tipos de data suportados pelo Storage Engine:
 1. TypeInt     - Inteiros (int64)
 2. TypeVarchar - Strings
 3. TypeFloat   - Números de ponto flutuante (float64)
 4. TypeBoolean - Valores booleanos
 5. TypeDate    - Datas/Timestamps
 
-Cada tipo tem sua própria chave comparável:
+Cada tipo tem sua própria key comparável:
 - types.IntKey
 - types.VarcharKey
 - types.FloatKey
@@ -109,7 +109,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== TypeBoolean (Booleanos) ===")
 
-	// Tabela de flags (exemplo: usuários ativos/inativos)
+	// Tabela de flags (example: usuários ativos/inativos)
 	engine.Put("bool_table", "active", types.BoolKey(false), `{"user": "inactive1", "active": false}`)
 	engine.Put("bool_table", "active", types.BoolKey(true), `{"user": "active1", "active": true}`)
 
@@ -178,7 +178,7 @@ func main() {
 	fmt.Printf("\nDateKey(ontem) vs DateKey(amanhã): %d\n",
 		types.DateKey(yesterday).Compare(types.DateKey(tomorrow)))
 
-	fmt.Println("\n✓ Exemplo concluído!")
+	fmt.Println("\n✓ Example concluído!")
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {

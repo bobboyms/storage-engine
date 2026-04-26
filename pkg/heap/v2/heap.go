@@ -10,10 +10,10 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
-// ErrRecordTooLarge é devolvido quando um documento não cabe nem numa
-// página vazia. Bancos reais tratam isso com overflow pages / TOAST;
-// esta implementação de Fase 3 rejeita.
-var ErrRecordTooLarge = errors.New("heap/v2: registro maior que uma página")
+// ErrRecordTooLarge is returned when a document does not fit even in an
+// empty page. Real databases handle this with overflow pages / TOAST;
+// this Phase 3 implementation rejects it.
+var ErrRecordTooLarge = errors.New("heap/v2: record larger than a page")
 
 // Compile-time assertion: *HeapV2 implementa heap.Heap.
 // Se a interface evoluir e v2 divergir, isto quebra o build imediatamente.
@@ -23,7 +23,7 @@ var _ heap.Heap = (*HeapV2)(nil)
 //
 // A API preserva a semântica histórica do heap, mas os offsets
 // retornados por Write/Read/Delete
-// são RecordIDs (PageID|SlotID empacotados em int64), não offsets
+// são RecordIDs (PageID|SlotID empacotados em int64), not offsets
 // de arquivo. O B+ tree guarda esses int64 como dataPtr — a diferença
 // é transparente.
 type HeapV2 struct {
@@ -32,17 +32,17 @@ type HeapV2 struct {
 	maxBodySize int
 
 	// writeMu serializa o caminho de Write (para proteger activePageID
-	// e o ponto de rotação de página). Read/Delete não passam por aqui.
+	// e o ponto de rotação de page). Read/Delete does not go throughm por aqui.
 	writeMu      sync.Mutex
-	activePageID pagestore.PageID // InvalidPageID quando ainda não houve write
+	activePageID pagestore.PageID // InvalidPageID quando ainda not houve write
 
-	// fsm rastreia páginas com espaço livre (hint structure).
+	// fsm rastreia pages com espaço livre (hint structure).
 	// Permite reutilizar espaço liberado por Vacuum sem scan linear.
 	fsm *FreeSpaceMap
 }
 
 // NewHeapV2 abre ou cria um heap page-based em `path`. `bufferPoolCapacity`
-// define quantas páginas ficam em cache RAM simultaneamente. Passe nil
+// define quantas pages ficam em cache RAM simultaneamente. Passe nil
 // para `cipher` para desligar TDE.
 func NewHeapV2(path string, bufferPoolCapacity int, cipher crypto.Cipher) (*HeapV2, error) {
 	pf, err := pagestore.NewPageFile(path, cipher)
@@ -57,9 +57,9 @@ func NewHeapV2(path string, bufferPoolCapacity int, cipher crypto.Cipher) (*Heap
 		fsm:         newFreeSpaceMap(),
 	}
 
-	// Ao reabrir, adota a última página existente como "ativa".
-	// NumPages inclui o slot 0 reservado. Se só existe slot 0, não há
-	// página ativa (próximo Write aloca).
+	// Ao reopen, adota a última page existsnte como "ativa".
+	// NumPages inclui o slot 0 reservado. Se só exists slot 0, there is no
+	// page ativa (próximo Write aloca).
 	if n := pf.NumPages(); n > 1 {
 		h.activePageID = pagestore.PageID(n - 1)
 	}
@@ -103,13 +103,13 @@ func (h *HeapV2) Close() error {
 }
 
 // Write grava um documento. Retorna o RecordID (int64) estável.
-// Semântica idêntica ao v1: o registro NUNCA se move depois de gravado.
+// Semântica idêntica ao v1: o record NUNCA se move depois de gravado.
 func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64, error) {
-	// Valida tamanho: registro precisa caber com folga (slot dir + record header).
+	// Valida tamanho: record precisa caber com folga (slot dir + record header).
 	recordNeeded := SlotSize + RecordHeaderSize + len(doc)
 	maxPayload := h.maxBodySize - SlottedHeaderSize
 	if recordNeeded > maxPayload {
-		return 0, fmt.Errorf("%w: precisa %d bytes, página tem %d", ErrRecordTooLarge, recordNeeded, maxPayload)
+		return 0, fmt.Errorf("%w: needs %d bytes, page has %d", ErrRecordTooLarge, recordNeeded, maxPayload)
 	}
 
 	rh := RecordHeader{
@@ -124,7 +124,7 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 
 	needed := SlotSize + RecordHeaderSize + len(doc)
 
-	// 1. Tenta reutilizar página do FSM (espaço liberado por Vacuum).
+	// 1. Tenta reutilizar page do FSM (espaço liberado por Vacuum).
 	//    O FSM pode estar desatualizado — ErrPageFull é tratado como
 	//    "remover candidata e tentar activePageID".
 	if candidate, ok := h.fsm.FindPage(needed); ok && candidate != h.activePageID {
@@ -133,7 +133,7 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 			return 0, err
 		}
 		if ok {
-			// Atualiza FSM com espaço restante após insert.
+			// Atualiza FSM com espaço restante after insert.
 			h.updateFSMAfterInsert(candidate, needed)
 			return rid, nil
 		}
@@ -141,7 +141,7 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 		h.fsm.Remove(candidate)
 	}
 
-	// 2. Tenta inserir na página ativa (se houver).
+	// 2. Tenta inserir na page ativa (se houver).
 	if h.activePageID != pagestore.InvalidPageID {
 		rid, ok, err := h.tryInsert(h.activePageID, rh, doc)
 		if err != nil {
@@ -155,8 +155,8 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 		h.fsm.Remove(h.activePageID)
 	}
 
-	// 3. Aloca uma nova página via BufferPool.NewPage (que já retorna com
-	// latch exclusivo e marca suja pra forçar escrita inicial).
+	// 3. Aloca uma nova page via BufferPool.NewPage (que já retorna com
+	// latch exclusivo e marca suja pra forçar write inicial).
 	handle, err := h.bp.NewPage()
 	if err != nil {
 		return 0, err
@@ -166,12 +166,12 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 	sp := InitSlottedPage(handle.Page(), h.maxBodySize)
 	slotID, err := sp.Insert(rh, doc)
 	if err != nil {
-		// Não deveria acontecer — o check de ErrRecordTooLarge acima já
-		// garante que cabe em página vazia.
-		return 0, fmt.Errorf("heap/v2: insert em página recém-alocada falhou: %w", err)
+		// Not should acontecer — o check de ErrRecordTooLarge acima já
+		// garante que cabe em page empty.
+		return 0, fmt.Errorf("heap/v2: insert into newly allocated page failed: %w", err)
 	}
 	// Avança pageLSN pra suportar recovery idempotente (infraestrutura
-	// pra futuro redo page-level; hoje não é usado no replay mas grava
+	// pra futuro redo page-level; hoje is not usado no replay mas grava
 	// o LSN correto pra quando for).
 	handle.Page().AdvancePageLSN(createLSN)
 	handle.MarkDirty()
@@ -187,8 +187,8 @@ func (h *HeapV2) Write(doc []byte, createLSN uint64, prevRecordID int64) (int64,
 }
 
 // updateFSMAfterInsert atualiza o FSM subtraindo o espaço consumido pelo insert.
-// Como não re-lemos a página aqui (seria caro), subtrai de forma conservadora:
-// se o FSM não tem entrada para a página, não faz nada (será populado no próximo Vacuum).
+// Como not re-lemos a page aqui (seria caro), subtrai de forma conservadora:
+// se o FSM not tem entrada para a page, not faz nada (será populado no próximo Vacuum).
 func (h *HeapV2) updateFSMAfterInsert(pageID pagestore.PageID, consumedBytes int) {
 	h.fsm.mu.Lock()
 	defer h.fsm.mu.Unlock()
@@ -202,9 +202,9 @@ func (h *HeapV2) updateFSMAfterInsert(pageID pagestore.PageID, consumedBytes int
 	}
 }
 
-// tryInsert tenta inserir rh+doc na página pid. Retorna (rid, ok, err):
+// tryInsert tenta inserir rh+doc na page pid. Retorna (rid, ok, err):
 //   - ok=true: inserido, rid válido
-//   - ok=false, err=nil: página cheia, chamador deve tentar outra
+//   - ok=false, err=nil: page cheia, chamador must tentar outra
 //   - err != nil: erro real de I/O
 func (h *HeapV2) tryInsert(pid pagestore.PageID, rh RecordHeader, doc []byte) (int64, bool, error) {
 	handle, err := h.bp.FetchForWrite(pid)
@@ -228,13 +228,13 @@ func (h *HeapV2) tryInsert(pid pagestore.PageID, rh RecordHeader, doc []byte) (i
 	return EncodeRecordID(pid, slotID), true, nil
 }
 
-// Read devolve o documento e o header do registro identificado por rid.
-// Retorna o header mesmo se o registro está marcado inválido (MVCC) —
+// Read devolve o documento e o header do record identificado por rid.
+// Retorna o header mesmo se o record está marcado invalid (MVCC) —
 // chamadores de visibilidade (transação antiga) precisam ver isso.
 func (h *HeapV2) Read(rid int64) ([]byte, *RecordHeader, error) {
 	pid, slotID := DecodeRecordID(rid)
 	if pid == pagestore.InvalidPageID {
-		return nil, nil, fmt.Errorf("heap/v2: RecordID %d inválido (pageID=0)", rid)
+		return nil, nil, fmt.Errorf("heap/v2: invalid RecordID %d (pageID=0)", rid)
 	}
 
 	handle, err := h.bp.Fetch(pid)
@@ -251,13 +251,13 @@ func (h *HeapV2) Read(rid int64) ([]byte, *RecordHeader, error) {
 	return doc, &rh, nil
 }
 
-// Delete marca o registro como inválido (lazy delete do MVCC).
+// Delete marca o record como invalid (lazy delete do MVCC).
 // Bytes do doc e CreateLSN/PrevRecordID são preservados — transações
 // antigas continuam conseguindo ler a versão.
 func (h *HeapV2) Delete(rid int64, deleteLSN uint64) error {
 	pid, slotID := DecodeRecordID(rid)
 	if pid == pagestore.InvalidPageID {
-		return fmt.Errorf("heap/v2: RecordID %d inválido (pageID=0)", rid)
+		return fmt.Errorf("heap/v2: invalid RecordID %d (pageID=0)", rid)
 	}
 
 	handle, err := h.bp.FetchForWrite(pid)
@@ -278,7 +278,7 @@ func (h *HeapV2) Delete(rid int64, deleteLSN uint64) error {
 func (h *HeapV2) Undelete(rid int64, expectedDeleteLSN uint64, pageLSN uint64) error {
 	pid, slotID := DecodeRecordID(rid)
 	if pid == pagestore.InvalidPageID {
-		return fmt.Errorf("heap/v2: RecordID %d inválido (pageID=0)", rid)
+		return fmt.Errorf("heap/v2: invalid RecordID %d (pageID=0)", rid)
 	}
 
 	handle, err := h.bp.FetchForWrite(pid)
@@ -314,19 +314,19 @@ func (h *HeapV2) Sync() error {
 	return h.bp.FlushAll()
 }
 
-// Vacuum percorre todas as páginas do heap e chama Compact(minLSN) em
+// Vacuum percorre todas as pages do heap e chama Compact(minLSN) em
 // cada uma. Retorna o total de slots vacuumados.
 //
-// `minLSN` é tipicamente o menor LSN entre transações ativas — registros
-// deletados antes disso não são mais visíveis a ninguém e podem ser
-// reclamados com segurança.
+// `minLSN` é tipicamente o menor LSN entre transações ativas — records
+// deleted antes disso are not mais visible a ninguém e podem ser
+// reclaimed com segurança.
 //
-// Concorrência: usa FetchForWrite por página, então Writes em OUTRAS
-// páginas podem prosseguir em paralelo. Writes na mesma página esperam.
+// Concorrência: usa FetchForWrite por page, então Writes em OUTRAS
+// pages podem prosseguir em paralelo. Writes na mesma page esperam.
 func (h *HeapV2) Vacuum(minLSN uint64) (int, error) {
-	// FlushAll antes de iterar: páginas recém-alocadas via NewPage ficam
+	// FlushAll antes de iterar: pages newly allocated via NewPage ficam
 	// no BufferPool com dirty=true mas PageFile.NumPages() só aumenta
-	// quando WritePage é chamado. Sem o flush, páginas novas ficariam
+	// quando WritePage é chamado. Sem o flush, pages novas ficariam
 	// fora do loop abaixo.
 	if err := h.bp.FlushAll(); err != nil {
 		return 0, err

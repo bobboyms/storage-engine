@@ -1,11 +1,11 @@
 // Package crypto fornece primitivas de criptografia em repouso (TDE)
 // para o storage engine. A interface Cipher é o ponto de extensão:
-// qualquer componente que escreve em disco (heap, WAL, índices) recebe
+// qualquer componente que escreve em disco (heap, WAL, indexs) recebe
 // um Cipher opcional e cifra/decifra payloads sem conhecer o algoritmo.
 package crypto
 
 // Cipher é a abstração de cifra autenticada (AEAD).
-// O parâmetro `aad` (Additional Authenticated Data) NÃO é cifrado,
+// O parâmetro `aad` (Additional Authenticated Data) NOT é cifrado,
 // mas é validado na decifragem — usado para amarrar o ciphertext
 // ao seu contexto (LSN, offset, table id) e impedir record-swap attacks.
 type Cipher interface {
@@ -15,7 +15,7 @@ type Cipher interface {
 }
 
 // NoOpCipher é a implementação default quando TDE está desligado.
-// Permite que o código de chamada não tenha branches `if cipher != nil`.
+// Permite que o código de chamada not tenha branches `if cipher != nil`.
 type NoOpCipher struct{}
 
 func (NoOpCipher) Encrypt(p, _ []byte) ([]byte, error) { return p, nil }

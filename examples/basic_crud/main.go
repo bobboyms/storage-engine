@@ -12,16 +12,16 @@ import (
 /*
 EXEMPLO: Operações CRUD Básicas
 
-Este exemplo demonstra as operações fundamentais do Storage Engine:
+Este example demonstra as operações fundamentais do Storage Engine:
 - Put: Inserir ou atualizar documentos
-- Get: Buscar documentos por chave
+- Get: Buscar documentos por key
 - Del: Remover documentos
 
 O Storage Engine usa B+Tree para indexação e Heap para armazenamento.
 */
 
 func main() {
-	// Cleanup de arquivos anteriores
+	// Cleanup de files anteriores
 	cleanup()
 	defer cleanup()
 
@@ -40,8 +40,8 @@ func main() {
 	tableMgr := storage.NewTableMenager()
 
 	// Definir a estrutura da tabela "products"
-	// - "id": chave primária do tipo inteiro
-	// - "name": índice secundário do tipo varchar
+	// - "id": key primária do tipo inteiro
+	// - "name": index secundário do tipo varchar
 	err = tableMgr.NewTable("products", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 		{Name: "name", Primary: false, Type: storage.TypeVarchar},
@@ -84,51 +84,51 @@ func main() {
 	}
 
 	for _, p := range products {
-		// Put no índice primário (id)
+		// Put no index primário (id)
 		err := engine.Put("products", "id", types.IntKey(p.id), p.json)
 		if err != nil {
 			fmt.Printf("Erro ao inserir produto %d: %v\n", p.id, err)
 			continue
 		}
 
-		// ⚠️  IMPORTANTE: Put no índice secundário DUPLICA o documento no heap!
+		// ⚠️  IMPORTANTE: Put no index secundário DUPLICA o documento no heap!
 		// Cada Put() escreve uma cópia completa no heap.
-		// Para 4 produtos com 2 índices = 8 registros no heap (não 4).
-		// Isso é uma limitação do design atual - índices são independentes.
+		// Para 4 produtos com 2 indexs = 8 records no heap (not 4).
+		// Isso é uma limitação do design atual - indexs são independentes.
 		err = engine.Put("products", "name", types.VarcharKey(p.name), p.json)
 		if err != nil {
 			fmt.Printf("Erro ao indexar nome %s: %v\n", p.name, err)
 		}
 	}
-	fmt.Println("✓ 4 produtos inseridos com sucesso!")
-	fmt.Println("  (Nota: 8 registros no heap devido aos 2 índices)")
+	fmt.Println("✓ 4 produtos inseridos com success!")
+	fmt.Println("  (Nota: 8 records no heap devido aos 2 indexs)")
 
 	// ========================================
 	// 3. OPERAÇÃO GET (READ)
 	// ========================================
 	fmt.Println("\n=== GET (Read) ===")
 
-	// Buscar pelo índice primário (id)
+	// Buscar pelo index primário (id)
 	doc, found, err := engine.Get("products", "id", types.IntKey(2))
 	if err != nil {
 		fmt.Printf("Erro ao buscar: %v\n", err)
 	} else if found {
 		fmt.Printf("Produto ID=2: %s\n", doc)
 	} else {
-		fmt.Println("Produto ID=2 não encontrado")
+		fmt.Println("Produto ID=2 not encontrado")
 	}
 
-	// Buscar pelo índice secundário (name)
+	// Buscar pelo index secundário (name)
 	doc, found, err = engine.Get("products", "name", types.VarcharKey("Laptop"))
 	if err != nil {
 		fmt.Printf("Erro ao buscar: %v\n", err)
 	} else if found {
 		fmt.Printf("Produto Name='Laptop': %s\n", doc)
 	} else {
-		fmt.Println("Produto 'Laptop' não encontrado")
+		fmt.Println("Produto 'Laptop' not encontrado")
 	}
 
-	// Buscar chave inexistente
+	// Buscar key inexistente
 	_, found, _ = engine.Get("products", "id", types.IntKey(999))
 	fmt.Printf("Produto ID=999 existe? %v\n", found)
 
@@ -163,11 +163,11 @@ func main() {
 
 	// Tentar buscar item deletado
 	_, found, _ = engine.Get("products", "id", types.IntKey(4))
-	fmt.Printf("Produto ID=4 existe após delete? %v\n", found)
+	fmt.Printf("Produto ID=4 existe after delete? %v\n", found)
 
 	// Tentar deletar item inexistente
 	deleted, _ = engine.Del("products", "id", types.IntKey(999))
-	fmt.Printf("Produto ID=999 deletado (não existia)? %v\n", deleted)
+	fmt.Printf("Produto ID=999 deletado (not existia)? %v\n", deleted)
 
 	// ========================================
 	// RESUMO FINAL

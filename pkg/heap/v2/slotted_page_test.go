@@ -19,23 +19,23 @@ func TestSlottedPage_InitEmpty(t *testing.T) {
 	_, sp := newSlottedPage(t)
 
 	if got := sp.NumSlots(); got != 0 {
-		t.Fatalf("página recém-init deveria ter 0 slots, tem %d", got)
+		t.Fatalf("page freshly initialized should have 0 slots, tem %d", got)
 	}
 	if got := sp.NumValid(); got != 0 {
-		t.Fatalf("página recém-init deveria ter 0 slots válidos, tem %d", got)
+		t.Fatalf("page freshly initialized should have 0 slots válidos, tem %d", got)
 	}
 
-	// Free space = BodySize - SlottedHeaderSize (nenhum slot, nenhum registro)
+	// Free space = BodySize - SlottedHeaderSize (nenhum slot, nenhum record)
 	expected := pagestore.BodySize - SlottedHeaderSize
 	if got := sp.FreeSpace(); got != expected {
-		t.Fatalf("free space: esperado %d, recebi %d", expected, got)
+		t.Fatalf("free space: expected %d, got %d", expected, got)
 	}
 }
 
 func TestSlottedPage_MarkDeleted_PreservesEverythingElse(t *testing.T) {
 	_, sp := newSlottedPage(t)
 
-	doc := []byte(`registro original`)
+	doc := []byte(`record original`)
 	slotID, _ := sp.Insert(RecordHeader{
 		Valid:        true,
 		CreateLSN:    10,
@@ -43,52 +43,52 @@ func TestSlottedPage_MarkDeleted_PreservesEverythingElse(t *testing.T) {
 		PrevRecordID: 42, // simula chain MVCC
 	}, doc)
 
-	// Delete LAZY: marca inválido com DeleteLSN, bytes ficam no lugar
+	// Delete LAZY: marca invalid com DeleteLSN, bytes ficam no lugar
 	if err := sp.MarkDeleted(slotID, 20); err != nil {
 		t.Fatalf("MarkDeleted: %v", err)
 	}
 
 	if sp.NumValid() != 0 {
-		t.Fatalf("NumValid deveria ser 0 após delete, é %d", sp.NumValid())
+		t.Fatalf("NumValid should be 0 after delete, é %d", sp.NumValid())
 	}
 	if sp.NumSlots() != 1 {
-		t.Fatal("slot não pode desaparecer (SlotIDs são estáveis)")
+		t.Fatal("slot cannot desaparecer (SlotIDs são estáveis)")
 	}
 
-	// Read ainda devolve o registro — invariante crítico pro MVCC:
+	// Read ainda devolve o record — invariante crítico pro MVCC:
 	// uma transação antiga (LSN < DeleteLSN) precisa conseguir ver a versão.
 	gotDoc, gotHdr, err := sp.Read(slotID)
 	if err != nil {
-		t.Fatalf("Read pós-delete: %v", err)
+		t.Fatalf("Read after delete: %v", err)
 	}
 	if string(gotDoc) != string(doc) {
 		t.Fatal("doc foi perdido no delete lazy")
 	}
 	if gotHdr.Valid {
-		t.Fatal("Valid deveria ser false após MarkDeleted")
+		t.Fatal("Valid should be false after MarkDeleted")
 	}
 	if gotHdr.DeleteLSN != 20 {
-		t.Fatalf("DeleteLSN esperado 20, recebi %d", gotHdr.DeleteLSN)
+		t.Fatalf("DeleteLSN expected 20, got %d", gotHdr.DeleteLSN)
 	}
 	if gotHdr.CreateLSN != 10 {
-		t.Fatalf("CreateLSN deveria ser preservado (10), recebi %d", gotHdr.CreateLSN)
+		t.Fatalf("CreateLSN should be preservado (10), got %d", gotHdr.CreateLSN)
 	}
 	if gotHdr.PrevRecordID != 42 {
-		t.Fatalf("PrevRecordID deveria ser preservado (42), recebi %d", gotHdr.PrevRecordID)
+		t.Fatalf("PrevRecordID should be preservado (42), got %d", gotHdr.PrevRecordID)
 	}
 }
 
 func TestSlottedPage_MarkDeleted_InvalidSlot(t *testing.T) {
 	_, sp := newSlottedPage(t)
 	if err := sp.MarkDeleted(999, 1); err == nil {
-		t.Fatal("esperava erro em slot inexistente")
+		t.Fatal("expected erro em slot inexistsnte")
 	}
 }
 
 func TestSlottedPage_Iterate_IncludesInvalidSlots(t *testing.T) {
 	// Invariante crítica pro vacuum: iterar TODOS os slots (válidos ou
-	// não) na ordem do SlotID. Vacuum precisa ver tombstones pra poder
-	// decidir se reclama.
+	// not) na ordem do SlotID. Vacuum precisa ver tombstones pra poder
+	// decidir se reclaim.
 	_, sp := newSlottedPage(t)
 
 	_, _ = sp.Insert(RecordHeader{Valid: true, CreateLSN: 1, PrevRecordID: NoRecordID}, []byte("um"))
@@ -116,9 +116,9 @@ func TestSlottedPage_Iterate_IncludesInvalidSlots(t *testing.T) {
 	}
 
 	if len(visited) != 3 {
-		t.Fatalf("esperava 3 slots visitados, recebi %d", len(visited))
+		t.Fatalf("expected 3 slots visitados, got %d", len(visited))
 	}
-	// Ordem e conteúdo
+	// Ordem e content
 	expected := []struct {
 		slotID uint16
 		valid  bool
@@ -130,7 +130,7 @@ func TestSlottedPage_Iterate_IncludesInvalidSlots(t *testing.T) {
 	}
 	for i, e := range expected {
 		if visited[i] != e {
-			t.Fatalf("slot %d: esperado %+v, recebi %+v", i, e, visited[i])
+			t.Fatalf("slot %d: expected %+v, got %+v", i, e, visited[i])
 		}
 	}
 }
@@ -151,17 +151,17 @@ func TestSlottedPage_Iterate_EarlyStop(t *testing.T) {
 		return nil
 	})
 	if err != stop {
-		t.Fatalf("esperava erro 'stop', recebi %v", err)
+		t.Fatalf("expected erro 'stop', got %v", err)
 	}
 	if count != 2 {
-		t.Fatalf("esperava parar na segunda iteração (count=2), recebi %d", count)
+		t.Fatalf("expected parar na segunda iteração (count=2), got %d", count)
 	}
 }
 
 func TestSlottedPage_ErrPageFull(t *testing.T) {
 	_, sp := newSlottedPage(t)
 
-	// Insere registros até esgotar o espaço.
+	// Insere records até esgotar o espaço.
 	big := make([]byte, 1000) // record total: 25 + 1000 + 4 slot = 1029 por insert
 	var inserted int
 	var lastErr error
@@ -174,16 +174,16 @@ func TestSlottedPage_ErrPageFull(t *testing.T) {
 	}
 
 	if !errors.Is(lastErr, ErrPageFull) {
-		t.Fatalf("esperava ErrPageFull, recebi: %v", lastErr)
+		t.Fatalf("expected ErrPageFull, got: %v", lastErr)
 	}
 	if inserted < 5 {
 		t.Fatalf("inseriu muito pouco (%d) — algo está errado no cálculo de espaço", inserted)
 	}
 
-	// Depois de cheio, ainda é possível ler todos os registros inseridos
+	// Depois de cheio, ainda é possível ler todos os records inseridos
 	for i := 0; i < inserted; i++ {
 		if _, _, err := sp.Read(uint16(i)); err != nil {
-			t.Fatalf("Read %d pós-full: %v", i, err)
+			t.Fatalf("Read %d after full: %v", i, err)
 		}
 	}
 }
@@ -203,9 +203,9 @@ func TestSlottedPage_InsertAndRead_Multiple(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Insert %d: %v", i, err)
 		}
-		// SlotIDs devem ser monotônicos e únicos (invariante MVCC)
+		// SlotIDs mustm ser monotônicos e únicos (invariante MVCC)
 		if id != uint16(i) {
-			t.Fatalf("esperava slotID %d, recebi %d", i, id)
+			t.Fatalf("expected slotID %d, got %d", i, id)
 		}
 		slotIDs[i] = id
 	}
@@ -220,12 +220,12 @@ func TestSlottedPage_InsertAndRead_Multiple(t *testing.T) {
 			t.Fatalf("slot %d: doc divergente", i)
 		}
 		if gotHdr.CreateLSN != uint64(i+1) {
-			t.Fatalf("slot %d: CreateLSN esperado %d, recebi %d", i, i+1, gotHdr.CreateLSN)
+			t.Fatalf("slot %d: CreateLSN expected %d, got %d", i, i+1, gotHdr.CreateLSN)
 		}
 	}
 
 	if sp.NumSlots() != 3 || sp.NumValid() != 3 {
-		t.Fatalf("esperado NumSlots=3 NumValid=3, recebi %d/%d", sp.NumSlots(), sp.NumValid())
+		t.Fatalf("expected NumSlots=3 NumValid=3, got %d/%d", sp.NumSlots(), sp.NumValid())
 	}
 }
 
@@ -245,10 +245,10 @@ func TestSlottedPage_InsertAndRead_Single(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 	if slotID != 0 {
-		t.Fatalf("primeiro slotID deveria ser 0, recebi %d", slotID)
+		t.Fatalf("primeiro slotID should be 0, got %d", slotID)
 	}
 	if sp.NumSlots() != 1 || sp.NumValid() != 1 {
-		t.Fatalf("esperado NumSlots=1 NumValid=1, recebi %d/%d", sp.NumSlots(), sp.NumValid())
+		t.Fatalf("expected NumSlots=1 NumValid=1, got %d/%d", sp.NumSlots(), sp.NumValid())
 	}
 
 	gotDoc, gotHdr, err := sp.Read(slotID)
@@ -256,9 +256,9 @@ func TestSlottedPage_InsertAndRead_Single(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	if string(gotDoc) != string(doc) {
-		t.Fatalf("doc divergente: esperado %q, recebi %q", doc, gotDoc)
+		t.Fatalf("doc divergente: expected %q, got %q", doc, gotDoc)
 	}
 	if gotHdr != hdr {
-		t.Fatalf("header divergente: esperado %+v, recebi %+v", hdr, gotHdr)
+		t.Fatalf("header divergente: expected %+v, got %+v", hdr, gotHdr)
 	}
 }

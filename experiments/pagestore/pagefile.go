@@ -12,14 +12,14 @@ import (
 )
 
 var (
-	ErrInvalidMagic     = errors.New("pagestore: magic inválido — arquivo corrompido ou não é page file")
-	ErrChecksumMismatch = errors.New("pagestore: checksum inválido — página corrompida")
-	ErrDecryptFailed    = errors.New("pagestore: falha ao decifrar (chave errada ou tamper)")
+	ErrInvalidMagic     = errors.New("pagestore: magic invalid — file corrompido ou not é page file")
+	ErrChecksumMismatch = errors.New("pagestore: checksum invalid — page corrompida")
+	ErrDecryptFailed    = errors.New("pagestore: failure ao deencryptionr (key errada ou tamper)")
 	ErrPageOutOfRange   = errors.New("pagestore: pageID fora do intervalo alocado")
 )
 
-// UsableBodySize devolve quantos bytes de payload cabem no body após
-// descontar o overhead da cifra (se houver). Chamadores devem consultar
+// UsableBodySize devolve quantos bytes de payload cabem no body after
+// descontar o overhead da encryption (se houver). Chamadores devem consultar
 // esse valor em vez de assumir BodySize.
 func UsableBodySize(cipher crypto.Cipher) int {
 	if cipher == nil {
@@ -28,8 +28,8 @@ func UsableBodySize(cipher crypto.Cipher) int {
 	return BodySize - cipher.Overhead()
 }
 
-// PageFile é a primitiva de I/O de páginas fixas (8KB) com cifra opcional.
-// Nesta fase não há buffer pool — cada Read/Write vai direto ao disco.
+// PageFile é a primitiva de I/O de pages fixas (8KB) com encryption opcional.
+// Nesta fase not há buffer pool — cada Read/Write vai direto ao disco.
 // Medidas de throughput nesta fase refletem o caso SEM cache.
 type PageFile struct {
 	path   string
@@ -41,7 +41,7 @@ type PageFile struct {
 	numPages atomic.Uint64
 }
 
-// OpenPageFile abre ou cria um arquivo de páginas. Passe nil para `cipher`
+// OpenPageFile abre ou cria um file de pages. Passe nil para `cipher`
 // para desligar TDE.
 func OpenPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
@@ -74,17 +74,17 @@ func (pf *PageFile) Allocate() uint64 {
 	return id
 }
 
-// NumPages devolve quantas páginas foram gravadas até agora.
+// NumPages devolve quantas pages foram gravadas até agora.
 func (pf *PageFile) NumPages() uint64 { return pf.numPages.Load() }
 
-// WritePage grava a página `p` no offset correspondente a `pageID`.
-// O header é escrito em claro; o body é cifrado quando cipher != nil.
+// WritePage grava a page `p` no offset correspondente a `pageID`.
+// O header é escrito em plaintext; o body é encrypted quando cipher != nil.
 // O Checksum do header é recalculado sobre o body EM DISCO (ciphertext).
 func (pf *PageFile) WritePage(pageID uint64, p *Page) error {
 	var disk [PageSize]byte
 	copy(disk[:], p[:])
 
-	// Se TDE: cifra o body, mantém o header em claro.
+	// Se TDE: encryption o body, mantém o header em plaintext.
 	if pf.cipher != nil {
 		var aad [8]byte
 		binary.LittleEndian.PutUint64(aad[:], pageID)
@@ -103,7 +103,7 @@ func (pf *PageFile) WritePage(pageID uint64, p *Page) error {
 		copy(disk[HeaderSize:], enc)
 	}
 
-	// Header: preenche campos deriváveis antes de gravar.
+	// Header: preenche campos deriváveis before de gravar.
 	var hdr PageHeader
 	if err := hdr.Decode(p.HeaderBytes()); err != nil {
 		return err
@@ -124,7 +124,7 @@ func (pf *PageFile) WritePage(pageID uint64, p *Page) error {
 		return err
 	}
 
-	// Atualiza contador de páginas (se gravamos além do fim)
+	// Atualiza contador de pages (se gravamos além do fim)
 	for {
 		cur := pf.numPages.Load()
 		want := pageID + 1
@@ -135,8 +135,8 @@ func (pf *PageFile) WritePage(pageID uint64, p *Page) error {
 	return nil
 }
 
-// ReadPage lê a página `pageID` do disco. Valida magic, checksum e decifra
-// (se cipher != nil). Retorna a página com o body EM CLARO.
+// ReadPage lê a page `pageID` do disco. Valida magic, checksum e deencryption
+// (se cipher != nil). Retorna a page com o body EM CLARO.
 func (pf *PageFile) ReadPage(pageID uint64) (*Page, error) {
 	if pageID >= pf.numPages.Load() {
 		return nil, ErrPageOutOfRange
@@ -156,12 +156,12 @@ func (pf *PageFile) ReadPage(pageID uint64) (*Page, error) {
 		return nil, ErrInvalidMagic
 	}
 
-	// 1. Valida checksum ANTES de tentar decifrar — fast fail em corrupção.
+	// 1. Valida checksum ANTES de tentar deencryptionr — fast fail em corrupção.
 	if checksumBytes(page.Body()) != hdr.Checksum {
 		return nil, ErrChecksumMismatch
 	}
 
-	// 2. Decifra se TDE ligado.
+	// 2. Deencryption se TDE ligado.
 	if pf.cipher != nil {
 		var aad [8]byte
 		binary.LittleEndian.PutUint64(aad[:], pageID)
@@ -171,7 +171,7 @@ func (pf *PageFile) ReadPage(pageID uint64) (*Page, error) {
 			return nil, fmt.Errorf("%w (page %d): %v", ErrDecryptFailed, pageID, err)
 		}
 
-		// Coloca o plaintext de volta no body, zerando o tail não usado.
+		// Coloca o plaintext de volta no body, zerando o tail not usado.
 		copy(page.Body(), plaintext)
 		for i := len(plaintext); i < BodySize; i++ {
 			page[HeaderSize+i] = 0
@@ -181,14 +181,14 @@ func (pf *PageFile) ReadPage(pageID uint64) (*Page, error) {
 	return &page, nil
 }
 
-// Sync força fsync no arquivo subjacente.
+// Sync força fsync no file subjacente.
 func (pf *PageFile) Sync() error {
 	pf.mu.Lock()
 	defer pf.mu.Unlock()
 	return pf.file.Sync()
 }
 
-// Close fecha o arquivo.
+// Close fecha o file.
 func (pf *PageFile) Close() error {
 	pf.mu.Lock()
 	defer pf.mu.Unlock()

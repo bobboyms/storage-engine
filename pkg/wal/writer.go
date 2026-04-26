@@ -13,23 +13,23 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
-// Layout de uma página WAL (dentro do body de uma pagestore.Page):
+// Layout de uma page WAL (dentro do body de uma pagestore.Page):
 //
-//	offset 0..1  — bytesUsed (uint16): bytes preenchidos após o header
+//	offset 0..1  — bytesUsed (uint16): bytes preenchidos after o header
 //	offset 2..3  — reservado pra futuro (flags, etc)
-//	offset 4+    — bytes brutos de entries; entries podem cruzar páginas
+//	offset 4+    — bytes brutos de entries; entries podem cruzar pages
 //
-// O que cifra a página, o checksum CRC32 sobre o body, a validação de
+// O que cifra a page, o checksum CRC32 sobre o body, a validação de
 // magic — tudo vem do pagestore.PageFile. O WAL só gerencia o stream
 // lógico de entries dentro do body útil.
 const (
 	walPageHeaderSize = 4
 )
 
-// WALWriter gerencia a escrita no log.
+// WALWriter gerencia a write no log.
 //
 // Backend: pagestore.PageFile (pages de 8KB). Cada WriteEntry pode
-// encher a página atual e alocar outra. O buffer em memória é a página
+// encher a page atual e alocar outra. O buffer em memória é a page
 // atual sendo preenchida — fsyncada quando:
 //   - SyncEveryWrite: a cada WriteEntry
 //   - SyncInterval:   background ticker
@@ -45,9 +45,9 @@ type WALWriter struct {
 	currentPage      pagestore.Page
 	currentPageID    pagestore.PageID
 	currentOffset    uint16
-	currentPageDirty bool // true se há bytes não flushados na currentPage
+	currentPageDirty bool // true se há bytes not flushados na currentPage
 
-	// Limite de bytes úteis por página (depende da cifra do pagestore)
+	// Limite de bytes úteis por page (depende da cifra do pagestore)
 	usableBodySize int
 
 	// Estado pra SyncBatch
@@ -66,7 +66,7 @@ type WALWriter struct {
 func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 	pf, err := pagestore.NewPageFile(path, opts.Cipher)
 	if err != nil {
-		return nil, fmt.Errorf("wal: abrir page file: %w", err)
+		return nil, fmt.Errorf("wal: open page file: %w", err)
 	}
 
 	w := &WALWriter{
@@ -76,16 +76,16 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 		done:           make(chan struct{}),
 	}
 
-	// Detecta se estamos reabrindo arquivo existente ou criando novo.
-	// pf.NumPages() == 1 significa só o slot 0 reservado (arquivo vazio).
+	// Detecta se estamos reabrindo arquivo existsnte ou criando novo.
+	// pf.NumPages() == 1 significa só o slot 0 reservado (arquivo empty).
 	if pf.NumPages() > 1 {
-		// Reabrir: busca última página e continua preenchendo onde parou.
+		// Reabrir: busca última page e continua preenchendo onde parou.
 		if err := w.adoptLastPage(); err != nil {
 			pf.Close()
 			return nil, err
 		}
 	} else {
-		// Novo: aloca primeira página.
+		// Novo: aloca primeira page.
 		if err := w.allocateNewPage(); err != nil {
 			pf.Close()
 			return nil, err
@@ -106,15 +106,15 @@ func (w *WALWriter) Path() string {
 	return w.pf.Path()
 }
 
-// Cipher devolve o cipher usado para cifrar/decifrar as páginas do WAL.
+// Cipher devolve o cipher usado para cifrar/decifrar as pages do WAL.
 // Pode ser nil quando TDE está desligado. Storage/recovery usa isso para
 // abrir WALReader compatível com o writer configurado.
 func (w *WALWriter) Cipher() crypto.Cipher {
 	return w.options.Cipher
 }
 
-// WriteEntry serializa `entry` e escreve na página atual, alocando
-// novas páginas quando necessário. Aplica a política de sync.
+// WriteEntry serializa `entry` e escreve na page atual, alocando
+// novas pages quando necessário. Aplica a política de sync.
 func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -128,7 +128,7 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	entry.Header.Encode(buf[:HeaderSize])
 	copy(buf[HeaderSize:], entry.Payload)
 
-	// Escreve byte-a-byte, cruzando páginas se preciso.
+	// Escreve byte-a-byte, cruzando pages se preciso.
 	if err := w.appendBytes(buf); err != nil {
 		return err
 	}
@@ -154,8 +154,8 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	return w.maybeRotateLocked()
 }
 
-// appendBytes escreve `data` na stream lógica, alocando páginas conforme
-// necessário. Caller deve segurar w.mu.
+// appendBytes escreve `data` na stream lógica, alocando pages conforme
+// necessário. Caller must segurar w.mu.
 func (w *WALWriter) appendBytes(data []byte) error {
 	for len(data) > 0 {
 		spaceInPage := uint16(w.usableBodySize) - w.currentOffset
@@ -178,7 +178,7 @@ func (w *WALWriter) appendBytes(data []byte) error {
 		w.currentOffset += take
 		data = data[take:]
 
-		// Atualiza bytesUsed no header da página
+		// Atualiza bytesUsed no header da page
 		bytesUsed := w.currentOffset - walPageHeaderSize
 		binary.LittleEndian.PutUint16(w.currentPage.Body()[0:2], bytesUsed)
 		w.currentPageDirty = true
@@ -186,12 +186,12 @@ func (w *WALWriter) appendBytes(data []byte) error {
 	return nil
 }
 
-// allocateNewPage aloca uma nova página do pagestore e inicializa o
-// header WAL (bytesUsed = 0). Caller deve segurar w.mu.
+// allocateNewPage aloca uma nova page do pagestore e inicializa o
+// header WAL (bytesUsed = 0). Caller must segurar w.mu.
 func (w *WALWriter) allocateNewPage() error {
 	pid, err := w.pf.AllocatePage()
 	if err != nil {
-		return fmt.Errorf("wal: alocar página: %w", err)
+		return fmt.Errorf("wal: allocate page: %w", err)
 	}
 	w.currentPageID = pid
 	w.currentPage = pagestore.Page{}
@@ -199,18 +199,18 @@ func (w *WALWriter) allocateNewPage() error {
 	// Grava walPageHeader zerado (bytesUsed=0) no body
 	binary.LittleEndian.PutUint16(w.currentPage.Body()[0:2], 0)
 	w.currentOffset = walPageHeaderSize
-	w.currentPageDirty = true // precisa ser escrita ao menos uma vez
+	w.currentPageDirty = true // precisa ser write ao menos uma vez
 	return nil
 }
 
-// adoptLastPage carrega a última página do pf como `currentPage` e
-// posiciona currentOffset após os bytes já escritos. Permite continuar
+// adoptLastPage carrega a última page do pf como `currentPage` e
+// posiciona currentOffset after os bytes já escritos. Permite continuar
 // appending num arquivo reaberto.
 func (w *WALWriter) adoptLastPage() error {
 	lastPageID := pagestore.PageID(w.pf.NumPages() - 1)
 	page, err := w.pf.ReadPage(lastPageID)
 	if err != nil {
-		return fmt.Errorf("wal: ler última página: %w", err)
+		return fmt.Errorf("wal: read last page: %w", err)
 	}
 	w.currentPage = *page
 	w.currentPageID = lastPageID
@@ -224,15 +224,15 @@ func (w *WALWriter) adoptLastPage() error {
 	return nil
 }
 
-// flushCurrentPageLocked escreve a página atual no pagestore (se dirty).
-// NÃO chama fsync — isso é só pra garantir que o pagestore recebeu os
-// bytes. Caller deve segurar w.mu.
+// flushCurrentPageLocked escreve a page atual no pagestore (se dirty).
+// NOT chama fsync — isso é só pra garantir que o pagestore recebeu os
+// bytes. Caller must segurar w.mu.
 func (w *WALWriter) flushCurrentPageLocked() error {
 	if !w.currentPageDirty {
 		return nil
 	}
 	if err := w.pf.WritePage(w.currentPageID, &w.currentPage); err != nil {
-		return fmt.Errorf("wal: escrever página %d: %w", w.currentPageID, err)
+		return fmt.Errorf("wal: write page %d: %w", w.currentPageID, err)
 	}
 	w.currentPageDirty = false
 	return nil
@@ -289,7 +289,7 @@ func (w *WALWriter) rotateActiveLocked() error {
 	return w.allocateNewPage()
 }
 
-// Sync força a persistência em disco: escreve a página atual + fsync.
+// Sync força a persistência em disco: escreve a page atual + fsync.
 func (w *WALWriter) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -321,7 +321,7 @@ func (w *WALWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Flush final (pode falhar se disk full; tentamos fechar mesmo assim)
+	// Flush final (pode fail se disk full; tentamos fechar mesmo assim)
 	syncErr := w.syncLocked()
 	closeErr := w.pf.Close()
 	if syncErr != nil {
@@ -330,9 +330,9 @@ func (w *WALWriter) Close() error {
 	return closeErr
 }
 
-// WriteCheckpointRecord grava um registro de checkpoint fuzzy no WAL.
+// WriteCheckpointRecord grava um record de checkpoint fuzzy no WAL.
 // `beginLSN` é o LSN capturado no início do checkpoint — recovery pode
-// pular entradas com LSN < beginLSN porque as páginas sujas naquele
+// pular entradas com LSN < beginLSN porque as pages sujas naquele
 // momento foram garantidamente flushadas ao disco antes desta chamada.
 func (w *WALWriter) WriteCheckpointRecord(beginLSN uint64) error {
 	payload := make([]byte, 8)
@@ -351,12 +351,12 @@ func (w *WALWriter) WriteCheckpointRecord(beginLSN uint64) error {
 	ReleaseEntry(entry)
 
 	if err != nil {
-		return fmt.Errorf("wal: escrever checkpoint record: %w", err)
+		return fmt.Errorf("wal: write checkpoint record: %w", err)
 	}
 	return w.Sync()
 }
 
-// CheckpointLifecycle rotaciona o WAL após um checkpoint e remove segmentos
+// CheckpointLifecycle rotaciona o WAL after um checkpoint e remove segmentos
 // antigos já cobertos por checkpointLSN, respeitando archive/retention.
 func (w *WALWriter) CheckpointLifecycle(checkpointLSN uint64) error {
 	w.mu.Lock()

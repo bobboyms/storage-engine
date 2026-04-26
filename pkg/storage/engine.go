@@ -21,8 +21,8 @@ import (
 )
 
 // isChainEndErr retorna true se err indica que o slot/record foi
-// reclamado por vacuum — caminhando a chain, devemos tratar como fim
-// (não como erro real de I/O).
+// reclaimdo por vacuum — caminhando a chain, mustmos tratar como fim
+// (not como erro real de I/O).
 func isChainEndErr(err error) bool {
 	return goerrors.Is(err, v2.ErrVacuumed)
 }
@@ -55,10 +55,10 @@ type StorageEngine struct {
 // NewProductionStorageEngine é o construtor recomendado pra uso em produção.
 //
 // Comportamento:
-//  1. Exige walWriter != nil (sem WAL não há durabilidade).
+//  1. Exige walWriter != nil (sem WAL there is no durabilidade).
 //  2. Faz auto-recovery: replay idempotente do WAL sincronizando tree+heap
 //     com o estado commitado antes de devolver o engine. Transações que
-//     o Put retornou como bem-sucedido são visíveis após crash.
+//     o Put retornou como bem-sucedido são visible after crash.
 //  3. Avança lsnTracker pro max LSN do WAL automaticamente.
 //
 // Custo: abrir o engine em produção pode levar O(N) no tamanho do WAL
@@ -67,7 +67,7 @@ type StorageEngine struct {
 // Pra testes/memory-only (WAL=nil), use NewStorageEngine diretamente.
 func NewProductionStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*StorageEngine, error) {
 	if walWriter == nil {
-		return nil, fmt.Errorf("storage: NewProductionStorageEngine exige walWriter não-nil (sem WAL não há durabilidade)")
+		return nil, fmt.Errorf("storage: NewProductionStorageEngine requires a non-nil walWriter (without WAL there is no durability)")
 	}
 
 	se, err := NewStorageEngine(tableMetaData, walWriter)
@@ -75,9 +75,9 @@ func NewProductionStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WAL
 		return nil, err
 	}
 
-	// Replay idempotente. Se o WAL está vazio (setup inicial), é no-op.
+	// Replay idempotente. Se o WAL está empty (setup inicial), é no-op.
 	if err := se.Recover(walWriter.Path()); err != nil {
-		return nil, fmt.Errorf("storage: recovery falhou: %w", err)
+		return nil, fmt.Errorf("storage: recovery failed: %w", err)
 	}
 	return se, nil
 }
@@ -85,8 +85,8 @@ func NewProductionStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WAL
 func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*StorageEngine, error) {
 	// Ao abrir o engine com um WAL já populado (reopen), precisamos
 	// avançar o lsnTracker para o maior LSN registrado. Sem isso,
-	// transações novas começam com SnapshotLSN=0 e não enxergam registros
-	// persistidos (CreateLSN >= 1) — o record path finge que "sumiu".
+	// transações novas começam com SnapshotLSN=0 e not enxergam records
+	// persistidos (CreateLSN >= 1) — o record path finge que "disappeared".
 	//
 	// Só fazemos o SCAN do WAL aqui (leve, O(entries), sem replay).
 	// O rebuild efetivo continua em Recover().
@@ -94,7 +94,7 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*
 	if walWriter != nil {
 		maxLSN, err := scanMaxWALLSN(walWriter.Path(), walWriter.Cipher())
 		if err != nil {
-			return nil, fmt.Errorf("storage: falha ao sincronizar LSN do WAL: %w", err)
+			return nil, fmt.Errorf("storage: failed to synchronize WAL LSN: %w", err)
 		}
 		initialLSN = maxLSN
 	}
@@ -117,8 +117,8 @@ func (se *StorageEngine) nextTxID() uint64 {
 }
 
 // scanMaxWALLSN lê o WAL em `path` procurando o maior LSN. Leve e
-// independente de Recover (que faz replay completo). Arquivo inexistente
-// ou vazio → retorna 0 sem erro.
+// independente de Recover (que faz replay completo). Arquivo inexistsnte
+// ou empty → retorna 0 sem erro.
 func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -140,7 +140,7 @@ func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
 			break
 		}
 		if err != nil {
-			// WAL truncado no fim (crash mid-write) é esperado —
+			// WAL truncado no fim (crash mid-write) é expected —
 			// paramos sem erro, tendo lido até onde foi possível.
 			break
 		}
@@ -156,7 +156,7 @@ func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
 type IsolationLevel int
 
 const (
-	ReadCommitted  IsolationLevel = iota // Cada leitura pega um novo snapshot commitado; permite non-repeatable read e phantom.
+	ReadCommitted  IsolationLevel = iota // Cada read pega um novo snapshot commitado; permite non-repeatable read e phantom.
 	RepeatableRead                       // Snapshot fixo por transação; impede dirty/non-repeatable/phantom read observacional.
 )
 
@@ -193,12 +193,12 @@ func (tx *Transaction) Close() {
 	tx.engine.TxRegistry.Unregister(tx)
 }
 
-// BeginRead inicia uma transação de leitura (Snapshot) com o padrão Repeatable Read
+// BeginRead inicia uma transação de read (Snapshot) com o padrão Repeatable Read
 func (se *StorageEngine) BeginRead() *Transaction {
 	return se.BeginTransaction(RepeatableRead)
 }
 
-// IsVisible verifica se uma versão do registro é visível para esta transação
+// IsVisible verifica se uma versão do record é visible para esta transação
 func (tx *Transaction) IsVisible(createLSN uint64) bool {
 	// Regra básica: Eu vejo tudo que foi commitado ANTES do meu snapshot
 	return createLSN <= tx.SnapshotLSN
@@ -333,10 +333,10 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	// Não precisamos travessar a tabela inteira (Table RLock removido em favor de concurrency granular)
+	// Not precisamos travessar a tabela inteira (Table RLock removido em favor de concurrency granular)
 	// se.TableMetaData já proteje o acesso ao mapa de tabelas.
 
-	// Obtém o índice (já temos o lock da tabela)
+	// Obtém o index (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
 	if err != nil {
 		return err
@@ -372,7 +372,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		} else if ok {
 			docKey := keys[indexName]
 			if !sameComparableKey(docKey, key) {
-				return fmt.Errorf("storage: chave informada %v diverge do campo indexado %s=%v", key, indexName, docKey)
+				return fmt.Errorf("storage: key informada %v diverge do campo indexado %s=%v", key, indexName, docKey)
 			}
 			return se.writeRowLocked(tableName, document, keys, false)
 		}
@@ -428,7 +428,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 			// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
 			// TODO: Otimização futura - Se heap write for lento, refatorar.
-			// Mas como é append-only bufio, deve ser rápido.
+			// Mas como é append-only bufio, must ser rápido.
 			offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
 			if err != nil {
 				return 0, fmt.Errorf("heap write failed: %w", err)
@@ -500,7 +500,7 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 	// Lock-Free Scan: Cursor thread-safe cuida dos locks de folha
 
 	results := []string{}
-	// Obtém o índice (já temos o lock da tabela)
+	// Obtém o index (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
 	if err != nil {
 		return results, err
@@ -537,20 +537,20 @@ func (tx *Transaction) Scan(tableName string, indexName string, condition *query
 		return results, scanErr
 	}
 
-	return results, fmt.Errorf("Scan: índice %s usa tipo não suportado %T", indexName, index.Tree)
+	return results, fmt.Errorf("Scan: index %s uses unsupported type %T", indexName, index.Tree)
 }
 
-// InsertRow insere uma nova linha e atualiza todos os índices da tabela.
-// Chaves primárias duplicadas falham enquanto o lock exclusivo da tabela está
+// InsertRow insere uma nova linha e atualiza todos os indexs da tabela.
+// Chaves primárias duplicadas fail enquanto o lock exclusivo da tabela está
 // mantido, fechando a corrida check-then-write.
 func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
 	return se.writeRow(tableName, doc, keys, true)
 }
 
-// UpsertRow insere ou atualiza uma linha inteira mantendo todos os índices
-// sincronizados. Quando a chave primária já existe, a versão anterior é
-// tombstoned no heap; entradas antigas de índices secundários passam a apontar
-// para uma versão não visível a snapshots novos.
+// UpsertRow insere ou atualiza uma linha inteira mantendo todos os indexs
+// sincronizados. Quando a key primária já exists, a versão anterior é
+// tombstoned no heap; entradas antigas de indexs secundários passam a apontar
+// para uma versão not visible a snapshots novos.
 func (se *StorageEngine) UpsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
 	return se.writeRow(tableName, doc, keys, false)
 }
@@ -583,7 +583,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 
 	// Sem Table Lock. Upsert cuida disso.
 
-	// Obtém o índice (já temos o lock da tabela)
+	// Obtém o index (já temos o lock da tabela)
 	index, err := table.GetIndex(indexName)
 	if err != nil {
 		return false, err
@@ -601,7 +601,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 
 		// 1. Write Ahead Log
 		if se.WAL != nil {
-			// Para delete, apenas precisamos da chave. Documento vazio.
+			// Para delete, apenas precisamos da key. Documento empty.
 			payload, err := SerializeDocumentEntry(tableName, indexName, key, nil)
 			if err != nil {
 				return err
@@ -627,23 +627,23 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 
 		// 2. Modifica Memória e Heap
 		// Usa Upsert para remover logicamente (ou manter apontando para Tombstone)
-		// Precisamos escrever o Tombstone no Heap e atualizar a árvore para apontar para ele.
-		// O Delete atual apenas marca no Heap, e NÃO remove da árvore (conforme comentários comentados abaixo).
-		// Mas precisamos atualizar o ponteiro na árvore para o novo registro no Heap (que diz "Deleted").
+		// Precisamos escrever o Tombstone no Heap e atualizar a tree para apontar para ele.
+		// O Delete atual apenas marca no Heap, e NOT remove da tree (conforme comentários comentados abaixo).
+		// Mas precisamos atualizar o ponteiro na tree para o novo record no Heap (que diz "Deleted").
 		upsert := func(oldOffset int64, exists bool) (int64, error) {
 			if !exists {
 				return 0, nil // Key not found, nothing to delete
 			}
-			// Escreve registro de Delete no Heap (Tombstone)
+			// Escreve record de Delete no Heap (Tombstone)
 			// Delete no Heap requer o offset antigo? O método Heap.Delete atual pede offset.
-			// Wait, Heap.Delete(offset) marca o registro OLD como deletado?
+			// Wait, Heap.Delete(offset) marca o record OLD como deleted?
 			// Engine.go original:
 			// offset := node.DataPtrs[idx]
-			// se.Heap.Delete(offset, currentLSN) -> Modifica in-place o header do registro antigo?
-			// Se Heap.Delete modifica in-place, então não criamos nova versão?
+			// se.Heap.Delete(offset, currentLSN) -> Modifica in-place o header do record antigo?
+			// Se Heap.Delete modifica in-place, então not criamos nova versão?
 			// Isso viola imutabilidade do WAL/AppendOnly.
 			// O comentário dizia: "Para Phase 2 simplificado: Update in-place Head com DeleteLSN."
-			// Se for in-place, não precisamos atualizar a árvore (ela aponta pro mesmo offset).
+			// Se for in-place, not precisamos atualizar a tree (ela aponta pro mesmo offset).
 			// ENTRETANTO,		// Para concurrency correta, precisamos lockar o nó enquanto lemos o offset e chamamos heap.Delete.
 
 			if err := table.Heap.Delete(oldOffset, currentLSN); err != nil {
@@ -654,7 +654,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 			}
 			wasFound = true
 
-			// Retorna o MESMO offset, pois a árvore não muda (aponta pro mesmo lugar, que agora está marcado deletado)
+			// Retorna o MESMO offset, pois a tree not muda (aponta pro mesmo lugar, que agora está marcado deleted)
 			return oldOffset, nil
 		}
 
@@ -691,7 +691,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 }
 
 // CreateCheckpoint agora faz flush durável do estado page-based.
-// O formato `.chk` legado não é mais usado pelo runtime do engine.
+// O formato `.chk` legado is not mais usado pelo runtime do engine.
 func (se *StorageEngine) CreateCheckpoint() error {
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
@@ -745,14 +745,14 @@ func (tx *Transaction) refreshSnapshot() {
 }
 
 // Recover: reconstrói o estado a partir do WAL.
-// NOTA: Deve ser chamado ANTES de qualquer operação concorrente no engine.
+// NOTA: Deve ser chamado ANTES de qualquer operação concurrent no engine.
 // Durante o recovery, assume acesso exclusivo (startup).
 func (se *StorageEngine) Recover(walPath string) error {
 	return se.RecoverWithCipher(walPath, se.walCipher())
 }
 
 // RecoverWithCipher reconstrói o estado a partir de um WAL cifrado ou em claro.
-// Use diretamente apenas quando o WALWriter do engine não está disponível.
+// Use diretamente apenas quando o WALWriter do engine not está disponível.
 func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher) error {
 	var maxLSN uint64
 	loadedLSNs := make(map[string]uint64)
@@ -882,8 +882,8 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 		count++
 	}
 
-	// 2. Undo-lite: loser txs nunca chegaram ao estado visível porque o
-	// write path só aplica heap/tree após COMMIT durável.
+	// 2. Undo-lite: loser txs nunca chegaram ao estado visible porque o
+	// write path só aplica heap/tree after COMMIT durável.
 	if err := se.undoLoserTransactions(walPath, cipher, analysis); err != nil {
 		return err
 	}
@@ -934,7 +934,7 @@ func (se *StorageEngine) Vacuum(tableName string) error {
 
 	// 3. Dispatch para a implementação atual: compactação in-place,
 	// sem reescrever o B+ tree. Slots vacuumados viram length=0;
-	// leituras caem em ErrVacuumed (tratado como fim de chain no
+	// reads caem em ErrVacuumed (tratado como fim de chain no
 	// engine.Get).
 	if heapV2, ok := table.Heap.(*v2.HeapV2); ok {
 		n, err := heapV2.Vacuum(minLSN)
@@ -945,5 +945,5 @@ func (se *StorageEngine) Vacuum(tableName string) error {
 		return nil
 	}
 
-	return fmt.Errorf("Vacuum: heap legado removido; tabela %s deve usar HeapV2", tableName)
+	return fmt.Errorf("Vacuum: legacy heap removed; table %s must use HeapV2", tableName)
 }

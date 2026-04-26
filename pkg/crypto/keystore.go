@@ -8,13 +8,13 @@ import (
 	"os"
 )
 
-// KeyStore implementa a hierarquia de chaves de dois níveis:
+// KeyStore implementa a hierarquia de keys de dois níveis:
 //
-//   Master Key (KEK) — fornecida via env / KMS, NUNCA persistida em disco
-//        ↓ cifra
-//   Data Encryption Keys (DEKs) — uma por recurso (heap, wal, ...)
-//        ↓ cifram
-//   Páginas e registros em disco
+//	Master Key (KEK) — fornecida via env / KMS, NUNCA persistida em disco
+//	     ↓ cifra
+//	Data Encryption Keys (DEKs) — uma por recurso (heap, wal, ...)
+//	     ↓ cifram
+//	Páginas e records em disco
 //
 // As DEKs são persistidas EM DISCO já cifradas (wrapped) com a master key.
 // Ao subir o engine, o operador fornece a master key, que decifra as DEKs
@@ -32,10 +32,10 @@ type keyFile struct {
 }
 
 // NewKeyStore abre (ou cria) o keystore em `path`.
-// `masterKey` deve vir de fora do processo: env var, KMS, HSM, secret manager.
+// `masterKey` must vir de fora do processo: env var, KMS, HSM, secret manager.
 func NewKeyStore(path string, masterKey []byte) (*KeyStore, error) {
 	if len(masterKey) != KeySize {
-		return nil, fmt.Errorf("crypto: master key deve ter %d bytes", KeySize)
+		return nil, fmt.Errorf("crypto: master key must ter %d bytes", KeySize)
 	}
 	ks := &KeyStore{
 		masterKey: masterKey,
@@ -73,7 +73,7 @@ func (ks *KeyStore) save() error {
 }
 
 // GetOrCreateDEK devolve um Cipher pronto pra usar para o recurso `name`.
-// Se a DEK ainda não existe, gera, cifra com a master key e persiste.
+// Se a DEK ainda does not exist, gera, cifra com a master key e persiste.
 func (ks *KeyStore) GetOrCreateDEK(name string) (Cipher, error) {
 	kek, err := NewAESGCM(ks.masterKey)
 	if err != nil {
@@ -83,7 +83,7 @@ func (ks *KeyStore) GetOrCreateDEK(name string) (Cipher, error) {
 	if w, ok := ks.wrapped[name]; ok {
 		dek, err := kek.Decrypt(w, []byte(name))
 		if err != nil {
-			return nil, fmt.Errorf("crypto: falha ao decifrar DEK %q (master key errada?): %w", name, err)
+			return nil, fmt.Errorf("crypto: failed to decrypt DEK %q (wrong master key?): %w", name, err)
 		}
 		return NewAESGCM(dek)
 	}
@@ -104,10 +104,10 @@ func (ks *KeyStore) GetOrCreateDEK(name string) (Cipher, error) {
 }
 
 // RotateMasterKey re-wrappa todas as DEKs com a nova master key.
-// Operação barata: NÃO reescreve os dados cifrados pelas DEKs.
+// Operação barata: NOT reescreve os dados cifrados pelas DEKs.
 func (ks *KeyStore) RotateMasterKey(newMasterKey []byte) error {
 	if len(newMasterKey) != KeySize {
-		return fmt.Errorf("crypto: nova master key deve ter %d bytes", KeySize)
+		return fmt.Errorf("crypto: nova master key must ter %d bytes", KeySize)
 	}
 	oldKEK, err := NewAESGCM(ks.masterKey)
 	if err != nil {
@@ -122,7 +122,7 @@ func (ks *KeyStore) RotateMasterKey(newMasterKey []byte) error {
 	for name, w := range ks.wrapped {
 		dek, err := oldKEK.Decrypt(w, []byte(name))
 		if err != nil {
-			return fmt.Errorf("crypto: falha ao decifrar DEK %q durante rotação: %w", name, err)
+			return fmt.Errorf("crypto: failed to decrypt DEK %q during rotation: %w", name, err)
 		}
 		nw, err := newKEK.Encrypt(dek, []byte(name))
 		if err != nil {

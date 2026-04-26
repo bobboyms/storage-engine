@@ -7,15 +7,15 @@ import (
 )
 
 // FreeSpaceMap é uma estrutura hint em memória que rastreia espaço livre
-// aproximado por página. Não é persistida — é reconstruída pelo Vacuum
-// quando as páginas são compactadas.
+// aproximado por page. Not é persistida — é reconstruída pelo Vacuum
+// quando as pages são compactadas.
 //
-// Objetivo: evitar scan linear de todas as páginas durante inserts.
-// Sem FSM, HeapV2.Write sempre vai para activePageID e aloca nova página
-// quando está cheia. Com FSM, páginas liberadas pelo Vacuum são reutilizadas.
+// Objetivo: evitar scan linear de todas as pages durante inserts.
+// Sem FSM, HeapV2.Write sempre vai para activePageID e aloca nova page
+// quando está cheia. Com FSM, pages liberadas pelo Vacuum são reutilizadas.
 //
-// Contrato de aproximação: o valor em freeBytes pode estar desatualizado
-// (escrita concorrente pode ter consumido espaço). O Write path trata
+// Contrato de aproximação: o value em freeBytes pode estar desatualizado
+// (write concurrent pode ter consumido espaço). O Write path trata
 // ErrPageFull como "remover do FSM e tentar próximo" — seguro.
 type FreeSpaceMap struct {
 	mu    sync.Mutex
@@ -28,8 +28,8 @@ func newFreeSpaceMap() *FreeSpaceMap {
 	}
 }
 
-// Register registra (ou atualiza) o espaço livre de uma página.
-// Se freeBytes <= 0, a página é removida do FSM (sem sentido trackear cheia).
+// Register registra (ou atualiza) o espaço livre de uma page.
+// Se freeBytes <= 0, a page é removida do FSM (sem sentido trackear cheia).
 func (fsm *FreeSpaceMap) Register(pageID pagestore.PageID, freeBytes int) {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
@@ -40,9 +40,9 @@ func (fsm *FreeSpaceMap) Register(pageID pagestore.PageID, freeBytes int) {
 	fsm.pages[pageID] = freeBytes
 }
 
-// FindPage retorna a PageID de uma página com pelo menos neededBytes livres.
+// FindPage retorna a PageID de uma page com pelo menos neededBytes livres.
 // Retorna (InvalidPageID, false) se nenhuma candidata foi encontrada.
-// A busca não tem ordem garantida — retorna a primeira que satisfaz.
+// A busca not tem ordem garantida — retorna a primeira que satisfaz.
 func (fsm *FreeSpaceMap) FindPage(neededBytes int) (pagestore.PageID, bool) {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
@@ -54,14 +54,14 @@ func (fsm *FreeSpaceMap) FindPage(neededBytes int) (pagestore.PageID, bool) {
 	return pagestore.InvalidPageID, false
 }
 
-// Remove elimina uma página do FSM (ex: detectou que está cheia no Write path).
+// Remove elimina uma page do FSM (ex: detectou que está cheia no Write path).
 func (fsm *FreeSpaceMap) Remove(pageID pagestore.PageID) {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
 	delete(fsm.pages, pageID)
 }
 
-// Len retorna o número de páginas rastreadas. Útil para testes.
+// Len retorna o número de pages rastreadas. Útil para testes.
 func (fsm *FreeSpaceMap) Len() int {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()

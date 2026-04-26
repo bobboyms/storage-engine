@@ -25,7 +25,7 @@ func newPoolWithFile(t testing.TB, capacity int) (*BufferPool, *PageFile) {
 	return bp, pf
 }
 
-// allocAndWrite aloca uma página via pool, escreve bytes determinísticos
+// allocAndWrite aloca uma page via pool, escreve bytes determinísticos
 // no body e devolve o pageID. Garante que já está persistida em disco.
 func allocAndWrite(t testing.TB, bp *BufferPool, seed byte) PageID {
 	t.Helper()
@@ -61,7 +61,7 @@ func TestBufferPool_FetchRoundTrip(t *testing.T) {
 		expected[i] = 0x42 + byte(i%251)
 	}
 	if !bytes.Equal(h.Page().Body()[:usable], expected) {
-		t.Fatal("body divergente após fetch")
+		t.Fatal("body divergente after fetch")
 	}
 }
 
@@ -85,18 +85,18 @@ func TestBufferPool_DirtyFlushesOnFlushAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.Body()[0] != 0xFE {
-		t.Fatalf("esperava 0xFE no disco, recebi 0x%02X", p.Body()[0])
+		t.Fatalf("expected 0xFE no disco, got 0x%02X", p.Body()[0])
 	}
 }
 
 func TestBufferPool_DirtyFlushesOnEviction(t *testing.T) {
 	bp, pf := newPoolWithFile(t, 2)
 
-	// Pool com capacity=2. Vamos criar 3 páginas pra forçar eviction.
+	// Pool com capacity=2. Vamos criar 3 pages pra forçar eviction.
 	id1 := allocAndWrite(t, bp, 1)
 	id2 := allocAndWrite(t, bp, 2)
 
-	// Traz id1 e id2 pro pool (hits — eram recém-alocadas mas post-flush
+	// Traz id1 e id2 pro pool (hits — eram newly allocated mas post-flush
 	// ainda estão no pool; vamos forçar reload limpo)
 	bp.Close()
 	bp = NewBufferPool(pf, 2)
@@ -112,8 +112,8 @@ func TestBufferPool_DirtyFlushesOnEviction(t *testing.T) {
 	h2, _ := bp.Fetch(id2)
 	h2.Release()
 
-	// Agora cria uma terceira página — forçará eviction de id1 (LRU + suja).
-	// id1 deve ser gravada antes de sair do pool.
+	// Agora cria uma terceira page — forçará eviction de id1 (LRU + suja).
+	// id1 must ser gravada antes de sair do pool.
 	h3, _ := bp.NewPage()
 	h3.Release()
 
@@ -123,7 +123,7 @@ func TestBufferPool_DirtyFlushesOnEviction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.Body()[5] != 0xAB {
-		t.Fatalf("eviction não flushou página suja: disco tem 0x%02X", p.Body()[5])
+		t.Fatalf("eviction not flushou page suja: disco tem 0x%02X", p.Body()[5])
 	}
 }
 
@@ -135,7 +135,7 @@ func TestBufferPool_LRUEviction_OrderCorrect(t *testing.T) {
 	id3 := allocAndWrite(t, bp, 3)
 	id4 := allocAndWrite(t, bp, 4)
 
-	// Close e reabre o pool (não o pf) pra começar com pool vazio
+	// Close e reabre o pool (not o pf) pra começar com pool empty
 	bp.Close()
 	bp = NewBufferPool(bp.pf, 3)
 	t.Cleanup(func() { bp.Close() })
@@ -152,21 +152,21 @@ func TestBufferPool_LRUEviction_OrderCorrect(t *testing.T) {
 	h1, _ = bp.Fetch(id1)
 	h1.Release()
 
-	// Agora id2 é o mais antigo. Trazer id4 deve evictar id2.
+	// Agora id2 é o mais antigo. Trazer id4 must evictar id2.
 	h4, _ := bp.Fetch(id4)
 	h4.Release()
 
 	if bp.Size() != 3 {
-		t.Fatalf("pool deveria ter 3 frames, tem %d", bp.Size())
+		t.Fatalf("pool should have 3 frames, tem %d", bp.Size())
 	}
 
-	// id2 não deve mais estar no pool — conferir via Size permanece 3
+	// id2 should not mais estar no pool — conferir via Size permanece 3
 	// e via verificação no map interno:
 	bp.mu.Lock()
 	_, id2Present := bp.frames[id2]
 	bp.mu.Unlock()
 	if id2Present {
-		t.Fatal("id2 deveria ter sido evictada (era a LRU)")
+		t.Fatal("id2 should have sido evictada (era a LRU)")
 	}
 }
 
@@ -186,11 +186,11 @@ func TestBufferPool_PinnedPagesNeverEvicted(t *testing.T) {
 	defer h1.Release()
 	defer h2.Release()
 
-	// Tenta alocar uma terceira — todas as existentes estão pinadas,
-	// eviction deve falhar com ErrBufferPoolFull.
+	// Tenta alocar uma terceira — todas as existsntes estão pinadas,
+	// eviction must fail com ErrBufferPoolFull.
 	_, err := bp.NewPage()
 	if !errors.Is(err, ErrBufferPoolFull) {
-		t.Fatalf("esperava ErrBufferPoolFull, recebi: %v", err)
+		t.Fatalf("expected ErrBufferPoolFull, got: %v", err)
 	}
 }
 
@@ -219,7 +219,7 @@ func TestBufferPool_NewPage_PersistsAfterFlush(t *testing.T) {
 	}
 	for i := 0; i < usable; i++ {
 		if p.Body()[i] != byte(i) {
-			t.Fatalf("byte %d: disco tem 0x%02X, esperado 0x%02X", i, p.Body()[i], byte(i))
+			t.Fatalf("byte %d: disco tem 0x%02X, expected 0x%02X", i, p.Body()[i], byte(i))
 		}
 	}
 }
@@ -230,22 +230,22 @@ func TestBufferPool_ReleaseIsIdempotent(t *testing.T) {
 
 	h, _ := bp.Fetch(id)
 	h.Release()
-	h.Release() // não deve panicar nem causar unlock duplo
+	h.Release() // should not panicar nem causar unlock duplo
 
-	// Pin count deve estar em 0, logo evictável
+	// Pin count must estar em 0, logo evictável
 	bp.mu.Lock()
 	f, ok := bp.frames[id]
 	bp.mu.Unlock()
 	if !ok {
-		t.Fatal("frame sumiu")
+		t.Fatal("frame disappeared")
 	}
 	if pc := f.pinCount.Load(); pc != 0 {
-		t.Fatalf("pinCount esperado 0, recebi %d", pc)
+		t.Fatalf("pinCount expected 0, got %d", pc)
 	}
 }
 
 // TestBufferPool_Concurrent valida o critério de pronto da Fase 2:
-// 100 goroutines lendo/escrevendo concorrentemente, -race limpo.
+// 100 goroutines lendo/escrevendo concurrentmente, -race limpo.
 func TestBufferPool_Concurrent(t *testing.T) {
 	const numPages = 50
 	bp, _ := newPoolWithFile(t, numPages)
@@ -294,7 +294,7 @@ func TestBufferPool_Concurrent(t *testing.T) {
 	wg.Wait()
 
 	if errs.Load() != 0 {
-		t.Fatalf("%d erros durante execução concorrente", errs.Load())
+		t.Fatalf("%d erros durante execução concurrent", errs.Load())
 	}
 	if err := bp.FlushAll(); err != nil {
 		t.Fatal(err)
@@ -304,14 +304,14 @@ func TestBufferPool_Concurrent(t *testing.T) {
 func TestBufferPool_CapacityZeroDefaultsToOne(t *testing.T) {
 	pf, _ := newPoolWithFile(t, 0)
 	if pf.Capacity() != 1 {
-		t.Fatalf("esperava capacity=1, recebi %d", pf.Capacity())
+		t.Fatalf("expected capacity=1, got %d", pf.Capacity())
 	}
 }
 
 func TestBufferPool_SizeTracking(t *testing.T) {
 	bp, _ := newPoolWithFile(t, 4)
 	if bp.Size() != 0 {
-		t.Fatalf("pool vazio deveria ter Size 0, tem %d", bp.Size())
+		t.Fatalf("pool empty should have Size 0, tem %d", bp.Size())
 	}
 
 	for i := 0; i < 3; i++ {
@@ -320,32 +320,32 @@ func TestBufferPool_SizeTracking(t *testing.T) {
 	}
 
 	if bp.Size() != 3 {
-		t.Fatalf("pool deveria ter 3 frames, tem %d", bp.Size())
+		t.Fatalf("pool should have 3 frames, tem %d", bp.Size())
 	}
 }
 
-// Sanity: garante que um write num handle de leitura não corrompe,
+// Sanity: garante que um write num handle de read not corrompe,
 // só por documentação — este teste ilustra o contrato.
 func TestBufferPool_DirtyWithoutWriteLatch_DoesNotCorrupt(t *testing.T) {
 	bp, pf := newPoolWithFile(t, 4)
 	id := allocAndWrite(t, bp, 1)
 
-	h, _ := bp.Fetch(id) // latch de leitura
-	h.MarkDirty()        // semanticamente errado, mas não panica
+	h, _ := bp.Fetch(id) // latch de read
+	h.MarkDirty()        // semanticamente errado, mas not panica
 	h.Release()
 
-	// FlushAll vai tentar gravar com RLock. Não deve corromper o arquivo.
+	// FlushAll vai tentar gravar com RLock. Not must corromper o arquivo.
 	if err := bp.FlushAll(); err != nil {
 		t.Fatal(err)
 	}
 
-	// E a página ainda deve ser legível
+	// E a page ainda must ser legível
 	p, err := pf.ReadPage(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Body()[0] != 1 {
-		t.Fatalf("byte 0: esperado 1, recebi %d", p.Body()[0])
+		t.Fatalf("byte 0: expected 1, got %d", p.Body()[0])
 	}
 }
 
@@ -379,7 +379,7 @@ func TestBufferPool_HeavyEviction(t *testing.T) {
 			t.Fatalf("fetch %d: %v", i, err)
 		}
 		if h.Page().Body()[0] != byte(i) {
-			t.Fatalf("page %d corrompida: esperado %d, recebi %d", i, byte(i), h.Page().Body()[0])
+			t.Fatalf("page %d corrompida: expected %d, got %d", i, byte(i), h.Page().Body()[0])
 		}
 		h.Release()
 	}

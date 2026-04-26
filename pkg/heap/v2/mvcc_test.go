@@ -9,14 +9,14 @@ import (
 
 // visibleAt é o filtro MVCC que o engine aplica quando uma transação
 // quer ler num snapshot específico. Caminha a cadeia de versões a
-// partir de `headRID` e devolve a primeira versão visível no LSN dado.
+// partir de `headRID` e devolve a primeira versão visible no LSN dado.
 //
 // Regra de visibilidade:
 //   - CreateLSN <= snapshotLSN (criada antes do snapshot)
-//   - DeleteLSN == 0  OU  DeleteLSN > snapshotLSN (não deletada ainda
+//   - DeleteLSN == 0  OU  DeleteLSN > snapshotLSN (not deleted ainda
 //     no ponto de vista do snapshot)
 //
-// Retorna (doc, hdr, true) se achou versão visível; (nil, nil, false)
+// Retorna (doc, hdr, true) se achou versão visible; (nil, nil, false)
 // se a cadeia terminou sem encontrar. Propaga erros de I/O.
 func visibleAt(t *testing.T, h *HeapV2, headRID int64, snapshotLSN uint64) ([]byte, *RecordHeader, bool) {
 	t.Helper()
@@ -24,7 +24,7 @@ func visibleAt(t *testing.T, h *HeapV2, headRID int64, snapshotLSN uint64) ([]by
 	for rid != NoRecordID {
 		doc, hdr, err := h.Read(rid)
 		if err != nil {
-			t.Fatalf("walk: Read(%d) falhou: %v", rid, err)
+			t.Fatalf("walk: Read(%d) failed: %v", rid, err)
 		}
 		createdBefore := hdr.CreateLSN <= snapshotLSN
 		notDeleted := hdr.DeleteLSN == 0 || hdr.DeleteLSN > snapshotLSN
@@ -62,7 +62,7 @@ func TestHeapV2_MVCC_ConcurrentWalksAndUpdates(t *testing.T) {
 	var wg sync.WaitGroup
 	var errCount atomic.Int64
 
-	// Writers: pegam uma cadeia existente, adicionam nova versão no topo
+	// Writers: pegam uma cadeia existsnte, adicionam nova versão no topo
 	for w := 0; w < writers; w++ {
 		wg.Add(1)
 		go func(g int) {
@@ -88,7 +88,7 @@ func TestHeapV2_MVCC_ConcurrentWalksAndUpdates(t *testing.T) {
 	}
 
 	// Readers: pegam um head aleatório, caminham a cadeia inteira.
-	// Não validam conteúdo — só que não explode sob -race.
+	// Not validam content — só que not explode sob -race.
 	for r := 0; r < readers; r++ {
 		wg.Add(1)
 		go func(g int) {
@@ -122,18 +122,18 @@ func TestHeapV2_MVCC_ConcurrentWalksAndUpdates(t *testing.T) {
 	wg.Wait()
 
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros durante chain walks concorrentes", errCount.Load())
+		t.Fatalf("%d erros durante chain walks concurrent", errCount.Load())
 	}
 }
 
 func TestHeapV2_MVCC_DeleteTimeTravel(t *testing.T) {
-	// Cenário: uma linha é criada, atualizada, depois deletada.
-	// Transações com snapshot ANTES do delete devem continuar vendo.
+	// Cenário: uma linha é criada, atualizada, depois deleted.
+	// Transações com snapshot ANTES do delete mustm continuar vendo.
 	//
 	// Timeline:
 	//   LSN 10: v1 criado
 	//   LSN 20: v2 criado (update, prev=v1)
-	//   LSN 30: v2 deletado in-place (Valid=false, DeleteLSN=30)
+	//   LSN 30: v2 deleted in-place (Valid=false, DeleteLSN=30)
 	h := newHeap(t, nil)
 
 	v1, _ := h.Write([]byte("antes"), 10, NoRecordID)
@@ -144,43 +144,43 @@ func TestHeapV2_MVCC_DeleteTimeTravel(t *testing.T) {
 
 	// Snapshot antes do delete vê v2 (HEAD vivo)
 	if doc, hdr, ok := visibleAt(t, h, v2, 25); !ok {
-		t.Fatal("snapshot LSN=25 deveria ver v2")
+		t.Fatal("snapshot LSN=25 should ver v2")
 	} else if string(doc) != "depois" || hdr.CreateLSN != 20 {
-		t.Fatalf("LSN=25: esperava 'depois'/LSN=20, recebi %q/LSN=%d", doc, hdr.CreateLSN)
+		t.Fatalf("LSN=25: expected 'depois'/LSN=20, got %q/LSN=%d", doc, hdr.CreateLSN)
 	}
 
 	// Snapshot em LSN=10 vê v1 (v2 nem existia ainda)
 	if doc, hdr, ok := visibleAt(t, h, v2, 10); !ok {
-		t.Fatal("snapshot LSN=10 deveria ver v1")
+		t.Fatal("snapshot LSN=10 should ver v1")
 	} else if string(doc) != "antes" || hdr.CreateLSN != 10 {
-		t.Fatalf("LSN=10: esperava 'antes'/LSN=10, recebi %q/LSN=%d", doc, hdr.CreateLSN)
+		t.Fatalf("LSN=10: expected 'antes'/LSN=10, got %q/LSN=%d", doc, hdr.CreateLSN)
 	}
 
-	// Snapshot em LSN=30 (no momento do delete) — v2.DeleteLSN=30 não é
-	// > 30, então v2 NÃO é visível. Cadeia cai pra v1, que está vivo.
-	// Esse é o invariante "delete é visível no próprio LSN do delete".
+	// Snapshot em LSN=30 (no momento do delete) — v2.DeleteLSN=30 is not
+	// > 30, então v2 NOT é visible. Cadeia cai pra v1, que está vivo.
+	// Esse é o invariante "delete é visible no próprio LSN do delete".
 	if doc, hdr, ok := visibleAt(t, h, v2, 30); !ok {
-		t.Fatal("snapshot LSN=30 deveria cair em v1")
+		t.Fatal("snapshot LSN=30 should cair em v1")
 	} else if string(doc) != "antes" || hdr.CreateLSN != 10 {
-		t.Fatalf("LSN=30: esperava fallback pra v1 ('antes'/LSN=10), recebi %q/LSN=%d", doc, hdr.CreateLSN)
+		t.Fatalf("LSN=30: expected fallback pra v1 ('antes'/LSN=10), got %q/LSN=%d", doc, hdr.CreateLSN)
 	}
 
-	// Snapshot em LSN=40 (após delete) — v2 já deletado.
-	// Cadeia cai em v1 (v1.DeleteLSN=0, visível sempre).
-	// Em um sistema real, v1 também teria sido marcada inválida por
-	// "superseded" — mas a semântica do v1 atual NÃO faz isso (v1 fica
-	// com Valid=true mesmo após update). Então v1 fica visível.
+	// Snapshot em LSN=40 (after delete) — v2 já deleted.
+	// Cadeia cai em v1 (v1.DeleteLSN=0, visible sempre).
+	// Em um sistema real, v1 também teria sido marcada invalid por
+	// "superseded" — mas a semântica do v1 atual NOT faz isso (v1 fica
+	// com Valid=true mesmo after update). Então v1 fica visible.
 	if doc, hdr, ok := visibleAt(t, h, v2, 40); !ok {
-		t.Fatal("snapshot LSN=40 deveria ver v1 (chain fallback)")
+		t.Fatal("snapshot LSN=40 should ver v1 (chain fallback)")
 	} else if string(doc) != "antes" || hdr.CreateLSN != 10 {
-		t.Fatalf("LSN=40: esperava fallback pra v1, recebi %q/LSN=%d", doc, hdr.CreateLSN)
+		t.Fatalf("LSN=40: expected fallback pra v1, got %q/LSN=%d", doc, hdr.CreateLSN)
 	}
 }
 
 func TestHeapV2_MVCC_VisibilityFilter(t *testing.T) {
 	// Simula transações com snapshots em LSNs diferentes. Cada snapshot
-	// deve ver a versão "visível naquele momento": nem futura nem já
-	// deletada-pra-ela.
+	// must ver a versão "visible naquele momento": nem futura nem já
+	// deleted-pra-ela.
 	//
 	// Timeline de versões:
 	//   LSN 10: v1 criado
@@ -212,35 +212,35 @@ func TestHeapV2_MVCC_VisibilityFilter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			doc, hdr, ok := visibleAt(t, h, v3, tc.snapshotLSN)
 			if ok != tc.shouldBeSeen {
-				t.Fatalf("visibilidade esperada %v, recebi %v", tc.shouldBeSeen, ok)
+				t.Fatalf("visibilidade esperada %v, got %v", tc.shouldBeSeen, ok)
 			}
 			if !ok {
 				return
 			}
 			if string(doc) != tc.expectedDoc {
-				t.Fatalf("esperado doc %q, recebi %q", tc.expectedDoc, doc)
+				t.Fatalf("expected doc %q, got %q", tc.expectedDoc, doc)
 			}
 			if hdr.CreateLSN != tc.expectedLSN {
-				t.Fatalf("esperado CreateLSN %d, recebi %d", tc.expectedLSN, hdr.CreateLSN)
+				t.Fatalf("expected CreateLSN %d, got %d", tc.expectedLSN, hdr.CreateLSN)
 			}
 		})
 	}
 }
 
 func TestHeapV2_ChainWalk_CrossPage(t *testing.T) {
-	// Força v1 numa página e v2 em outra. O BufferPool precisa alternar
-	// as páginas durante o walk. Valida que o chain segue corretamente
-	// mesmo cruzando fronteiras de página.
+	// Força v1 numa page e v2 em outra. O BufferPool precisa alternar
+	// as pages durante o walk. Valida que o chain segue corretamente
+	// mesmo cruzando fronteiras de page.
 	h := newHeap(t, nil)
 
-	// v1 — pequeno, entra na página ativa inicial
+	// v1 — pequeno, entra na page ativa inicial
 	v1, err := h.Write([]byte("versão-antiga"), 10, NoRecordID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	v1Page, _ := DecodeRecordID(v1)
 
-	// Enche a página com registros dummy pra forçar rotação
+	// Enche a page com records dummy pra forçar rotação
 	filler := make([]byte, 2000)
 	for i := 0; i < 6; i++ {
 		if _, err := h.Write(filler, uint64(100+i), NoRecordID); err != nil {
@@ -248,7 +248,7 @@ func TestHeapV2_ChainWalk_CrossPage(t *testing.T) {
 		}
 	}
 
-	// v2 deve cair numa página nova, apontando pra v1 na página antiga
+	// v2 must cair numa page nova, apontando pra v1 na page antiga
 	v2, err := h.Write([]byte("versão-nova"), 50, v1)
 	if err != nil {
 		t.Fatal(err)
@@ -256,30 +256,30 @@ func TestHeapV2_ChainWalk_CrossPage(t *testing.T) {
 	v2Page, _ := DecodeRecordID(v2)
 
 	if v1Page == v2Page {
-		t.Fatalf("teste inválido: v1 e v2 deveriam estar em páginas diferentes (ambos em %d)", v1Page)
+		t.Fatalf("teste invalid: v1 e v2 shouldm estar em pages diferentes (ambos em %d)", v1Page)
 	}
 
-	// Caminha: v2 → v1 (cruza página)
+	// Caminha: v2 → v1 (cruza page)
 	doc, hdr, err := h.Read(v2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(doc, []byte("versão-nova")) {
-		t.Fatalf("HEAD: doc %q inesperado", doc)
+		t.Fatalf("HEAD: doc %q inexpected", doc)
 	}
 	if hdr.PrevRecordID != v1 {
-		t.Fatalf("HEAD.prev deveria apontar pra v1 (%d), aponta pra %d", v1, hdr.PrevRecordID)
+		t.Fatalf("HEAD.prev should apontar pra v1 (%d), aponta pra %d", v1, hdr.PrevRecordID)
 	}
 
 	doc, hdr, err = h.Read(hdr.PrevRecordID)
 	if err != nil {
-		t.Fatalf("cross-page Read falhou: %v", err)
+		t.Fatalf("cross-page Read failed: %v", err)
 	}
 	if !bytes.Equal(doc, []byte("versão-antiga")) {
-		t.Fatalf("v1: doc %q inesperado", doc)
+		t.Fatalf("v1: doc %q inexpected", doc)
 	}
 	if hdr.PrevRecordID != NoRecordID {
-		t.Fatalf("v1 deveria ser inicial, prev=%d", hdr.PrevRecordID)
+		t.Fatalf("v1 should be inicial, prev=%d", hdr.PrevRecordID)
 	}
 }
 
@@ -327,6 +327,6 @@ func TestHeapV2_ChainWalk_ThreeVersions_SamePage(t *testing.T) {
 
 	// Terminou na sentinela
 	if rid != NoRecordID {
-		t.Fatalf("cadeia deveria terminar em NoRecordID, terminou em %d", rid)
+		t.Fatalf("cadeia should haveminar em NoRecordID, terminou em %d", rid)
 	}
 }

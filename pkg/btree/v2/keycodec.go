@@ -10,7 +10,7 @@ import (
 
 // VariableKeyCodec é a interface paralela pra keys de tamanho variável
 // (hoje só VarcharKey). Usa representação byte-slice em vez de uint64.
-// BTreeV2 detecta via type switch qual layout de página usar.
+// BTreeV2 detecta via type switch qual layout de page usar.
 type VariableKeyCodec interface {
 	// Encode serializa k em bytes. Tamanho varia.
 	Encode(k types.Comparable) []byte
@@ -42,11 +42,11 @@ func (VarcharKeyCodec) Compare(a, b []byte) int {
 //
 // Todas as keys são armazenadas em 8 bytes no page (uint64). O codec é
 // responsável pela conversão types.Comparable ↔ uint64 e pela comparação
-// semântica — NÃO podemos confiar em comparação uint64 direta porque:
+// semântica — NOT podemos confiar em comparação uint64 direta porque:
 //   - IntKey negativo (bits com sign-bit 1) compararia maior que positivo
-//   - FloatKey bits não seguem ordem numérica (negativos em sign-magnitude)
+//   - FloatKey bits not seguem ordem numérica (negativos em sign-magnitude)
 //
-// Types de chave de tamanho variável (VarcharKey) NÃO são suportados
+// Types de key de tamanho variável (VarcharKey) NOT são suportados
 // nesta versão — requerem layout de slot diferente (indirection ou
 // overflow pages). Fica pra sub-etapa futura.
 type KeyCodec interface {

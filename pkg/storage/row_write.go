@@ -138,7 +138,7 @@ func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.
 				return nil, nil, &errors.IndexNotFoundError{Name: name}
 			}
 			if !sameComparableKey(derived, provided) {
-				return nil, nil, fmt.Errorf("storage: chave informada %s=%v diverge do documento (%v)", name, provided, derived)
+				return nil, nil, fmt.Errorf("storage: key informada %s=%v diverge do documento (%v)", name, provided, derived)
 			}
 		}
 		bsonData, err := MarshalBson(bsonDoc)
@@ -161,7 +161,7 @@ func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.
 	}
 	for _, idx := range table.GetIndices() {
 		if _, ok := keys[idx.Name]; !ok {
-			return nil, nil, fmt.Errorf("storage: chave obrigatoria para indice %s ausente", idx.Name)
+			return nil, nil, fmt.Errorf("storage: key obrigatoria para indice %s ausente", idx.Name)
 		}
 	}
 	return []byte(doc), keys, nil
@@ -209,11 +209,11 @@ func primaryIndexAndKey(table *Table, keys map[string]types.Comparable) (*Index,
 		}
 		key, ok := keys[idx.Name]
 		if !ok {
-			return nil, nil, fmt.Errorf("storage: chave primaria %s ausente", idx.Name)
+			return nil, nil, fmt.Errorf("storage: key primaria %s ausente", idx.Name)
 		}
 		return idx, key, nil
 	}
-	return nil, nil, fmt.Errorf("storage: tabela %s sem chave primaria", table.Name)
+	return nil, nil, fmt.Errorf("storage: tabela %s sem key primaria", table.Name)
 }
 
 func applyIndexPointers(table *Table, keys map[string]types.Comparable, offset int64) error {

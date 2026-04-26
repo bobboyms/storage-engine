@@ -110,7 +110,7 @@ func TestDefaultOptions(t *testing.T) {
 func TestPerformanceOptions(t *testing.T) {
 	opts := PerformanceOptions()
 	if opts.SyncPolicy != SyncInterval {
-		t.Error("PerformanceOptions deve usar SyncInterval")
+		t.Error("PerformanceOptions must usar SyncInterval")
 	}
 	if opts.SyncIntervalDuration <= 0 {
 		t.Error("Expected positive SyncIntervalDuration")

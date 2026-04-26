@@ -1,12 +1,12 @@
 # Production Guide
 
-Este documento descreve, de forma objetiva, quais recursos o storage engine implementa hoje, quais estao parcialmente implementados e quais ainda nao existem. Ele deve ser lido antes de usar o projeto com dados reais.
+Este documento descreve, de forma objetiva, quais recursos o storage engine implementa hoje, quais estao parcialmente implementados e quais ainda nao existem. Ele deve ser lido before de usar o projeto com data reais.
 
 ## Status Geral
 
-O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, lock manager transacional para writes, deadlock detection com waits-for graph, TDE opcional e testes de durabilidade/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
+O projeto implementa um storage engine em Go com heap page-based, B+ tree page-based, WAL, recovery em duas camadas (redo fisico por pagina + redo logico idempotente), MVCC basico, snapshots, lock manager transacional para writes, deadlock detection com waits-for graph, TDE opcional e testes de durability/concorrencia. A arquitetura atual e adequada para estudo, prototipos e cargas internas controladas.
 
-Ainda nao e um banco de dados completo de producao geral. Faltam ARIES completo com dirty page table persistida, undo fisico por pagina, locks de range para `Serializable`, anti-starvation formal, metricas internas, compressao e replicacao.
+Ainda nao e um banco de data completo de producao geral. Faltam ARIES completo com dirty page table persistida, undo fisico por pagina, locks de range para `Serializable`, anti-starvation formal, metricas internas, compressao e replicacao.
 
 ## Como Usar em Modo Mais Seguro
 
@@ -29,29 +29,29 @@ defer se.Close()
 Regras:
 
 - Use `NewProductionStorageEngine`, pois ele exige WAL e executa recovery automatico.
-- Use `wal.DefaultOptions()` para durabilidade estrita. Ele usa `SyncEveryWrite`.
+- Use `wal.DefaultOptions()` para durability estrita. Ele usa `SyncEveryWrite`.
 - Use `HeapFormatV2` e `BTreeFormatV2`; o runtime atual assume heap e indices page-based.
 - Para TDE completo, configure cipher separado para heap, indices e WAL.
-- Sempre trate erro de `Put`, `Commit`, `Close`, `Recover` e `NewProductionStorageEngine` como erro critico.
+- Sempre trate error de `Put`, `Commit`, `Close`, `Recover` e `NewProductionStorageEngine` como error critico.
 
 ## Resumo de Features
 
 | Area | Feature | Status |
 |---|---|---|
-| Consistencia e durabilidade | WAL / redo log | Implementado |
-| Consistencia e durabilidade | fsync nos momentos corretos | Implementado no caminho duravel |
-| Consistencia e durabilidade | checksums em paginas/blocos | Implementado |
-| Consistencia e durabilidade | recovery deterministico | Implementado em modo ARIES-lite com CLRs |
-| Consistencia e durabilidade | testes de crash/falhas simuladas | Implementado |
-| Integridade dos dados | checksums | Implementado |
-| Integridade dos dados | magic bytes | Implementado |
-| Integridade dos dados | versao do formato | Parcial |
-| Integridade dos dados | validacao de headers | Parcial |
-| Integridade dos dados | limites de tamanho | Implementado |
-| Integridade dos dados | protecao contra partial writes | Implementado com redo fisico por pagina |
-| Integridade dos dados | testes com arquivos truncados/corrompidos | Parcial |
+| Consistencia e durability | WAL / redo log | Implementado |
+| Consistencia e durability | fsync nos momentos corretos | Implementado no caminho duravel |
+| Consistencia e durability | checksums em paginas/blocos | Implementado |
+| Consistencia e durability | recovery deterministico | Implementado em modo ARIES-lite com CLRs |
+| Consistencia e durability | testes de crash/failures simuladas | Implementado |
+| Integridade dos data | checksums | Implementado |
+| Integridade dos data | magic bytes | Implementado |
+| Integridade dos data | versao do formato | Parcial |
+| Integridade dos data | validacao de headers | Parcial |
+| Integridade dos data | limites de tamanho | Implementado |
+| Integridade dos data | protecao contra partial writes | Implementado com redo fisico por pagina |
+| Integridade dos data | testes com files truncados/corrompidos | Parcial |
 | Modelo de armazenamento | paginas/blocos fixos | Implementado |
-| Modelo de armazenamento | registros variaveis dentro de paginas | Implementado com limite |
+| Modelo de armazenamento | records variaveis dentro de paginas | Implementado com limite |
 | Modelo de armazenamento | row-store | Implementado |
 | Modelo de armazenamento | column-store | Nao implementado |
 | Modelo de armazenamento | key-value puro | Parcial |
@@ -90,8 +90,8 @@ Regras:
 | Testes agressivos | crash/recovery | Implementado |
 | Testes agressivos | concorrencia pesada | Implementado |
 | Testes agressivos | fault injection | Parcial |
-| Testes agressivos | arquivos corrompidos | Implementado |
-| Testes agressivos | benchmark com dados grandes | Parcial |
+| Testes agressivos | files corrompidos | Implementado |
+| Testes agressivos | benchmark com data grandes | Parcial |
 | Testes agressivos | comparacao contra referencia | Parcial |
 | Observabilidade | numero de reads/writes | Nao implementado |
 | Observabilidade | cache hit rate | Nao implementado |
@@ -112,15 +112,15 @@ Regras:
 
 **WAL / redo log**
 
-O engine escreve no WAL antes de aplicar mudancas no heap e na B+ tree. `Put` e `Del` criam entradas WAL com LSN, tipo, payload e CRC. Quando uma pagina suja vai para disco, o runtime tambem grava um after-image fisico dessa pagina no WAL antes do flush efetivo. O recovery primeiro reaplica essas paginas fisicas por `pageLSN` e depois roda o replay logico idempotente de operacoes autocommit ou transacoes commitadas.
+O engine escreve no WAL before de aplicar mudancas no heap e na B+ tree. `Put` e `Del` criam entradas WAL com LSN, tipo, payload e CRC. Quando uma pagina suja vai para disco, o runtime tambem grava um after-image fisico dessa pagina no WAL before do flush efetivo. O recovery primeiro reaplica essas paginas fisicas por `pageLSN` e after roda o replay logico idempotente de operacoes autocommit ou transacoes commitadas.
 
 **fsync**
 
-`wal.DefaultOptions()` usa `SyncEveryWrite`, fazendo cada `WriteEntry` sincronizar o WAL antes de retornar. `PageFile.Sync` chama fsync no arquivo, e a criacao/rotacao de arquivos tambem sincroniza diretorios quando necessario.
+`wal.DefaultOptions()` usa `SyncEveryWrite`, fazendo cada `WriteEntry` sincronizar o WAL before de retornar. `PageFile.Sync` chama fsync no file, e a criacao/rotacao de files tambem sincroniza diretorios quando necessario.
 
 **Checksums**
 
-O `pagestore` usa paginas de 8KB com header em claro e checksum CRC32-Castagnoli sobre o body em disco. O WAL tambem valida CRC32 do payload logico. Corrupcao em heap, B+ tree e WAL e detectada como erro.
+O `pagestore` usa paginas de 8KB com header em plaintext e checksum CRC32-Castagnoli sobre o body em disco. O WAL tambem valida CRC32 do payload logico. Corrupcao em heap, B+ tree e WAL e detectada como error.
 
 **Crash/fault tests**
 
@@ -130,7 +130,7 @@ Existem testes de:
 - reopen repetido com fuzzy checkpoint.
 - corrupcao de WAL, heap e B+ tree.
 - ENOSPC em filesystem pequeno.
-- falha de fsync por injecao.
+- failure de fsync por injecao.
 - stress e race detector.
 
 ### Parcial
@@ -142,7 +142,7 @@ O recovery atual segue um modelo ARIES-lite com fases claras:
 - analysis: varre o WAL, monta tabela de transacoes, identifica winners/losers e calcula o ponto de redo a partir do checkpoint;
 - redo fisico: reaplica after-images de paginas quando `record.LSN > page.pageLSN` ou quando a pagina on-disk esta ilegivel/corrompida;
 - redo logico: reaplica apenas operacoes winners/autocommit que ainda nao estao refletidas no estado atual;
-- undo logico: CLRs sao reaplicadas no redo e losers pendentes sao desfeitas ao fim do recovery com escrita de novos CLRs e `ABORT`.
+- undo logico: CLRs sao reaplicadas no redo e losers pendentes sao desfeitas ao fim do recovery com write de novos CLRs e `ABORT`.
 
 Cada pagina persiste `pageLSN` no header e esse valor e obedecido no redo fisico. Isso torna o replay idempotente e permite reparar pagina rasgada de heap ou indice quando o WAL contem o after-image correspondente.
 
@@ -151,13 +151,13 @@ Limites atuais:
 - Nao ha ARIES completo.
 - Nao ha dirty page table persistida no checkpoint; o checkpoint atual calcula o menor `pageLSN` sujo em memoria no momento do flush.
 - O undo pos-crash atual e logico e orientado por LSN/chains de versao, nao undo fisico por pagina.
-- A atomicidade runtime continua parcial quando a aplicacao em memoria falha depois do `COMMIT`.
+- A atomicidade runtime continua parcial quando a aplicacao em memoria failure after do `COMMIT`.
 
 ### Nao implementado
 
 - Teste fisico real de queda de energia.
 - ARIES completo com analysis/redo/undo fisico.
-- Replicacao para tolerancia a falha de maquina.
+- Replicacao para tolerancia a failure de maquina.
 - Verificacao end-to-end tipo Jepsen.
 
 ## Integridade dos Dados
@@ -166,16 +166,16 @@ Limites atuais:
 
 **Checksums**
 
-O `pagestore` calcula CRC32-Castagnoli sobre o body on-disk de cada pagina. Quando TDE esta ligado, o checksum cobre o ciphertext, permitindo detectar corrupcao antes de tentar decifrar.
+O `pagestore` calcula CRC32-Castagnoli sobre o body on-disk de cada pagina. Quando TDE esta ligado, o checksum cobre o ciphertext, permitindo detectar corrupcao before de tentar deencryptionr.
 
-O WAL tambem usa CRC32-Castagnoli por entry logica. `WALReader.ReadEntry` valida o checksum do payload antes de devolver a entrada ao recovery.
+O WAL tambem usa CRC32-Castagnoli por entry logica. `WALReader.ReadEntry` valida o checksum do payload before de devolver a entrada ao recovery.
 
 Efeito pratico:
 
 - bit flip no heap e detectado como `pagestore.ErrChecksumMismatch`;
 - bit flip na B+ tree e detectado ao abrir, recuperar ou ler;
 - bit flip no WAL e propagado como `wal.ErrChecksumMismatch`;
-- tamper em paginas cifradas pode falhar por checksum ou por `ErrDecryptFailed`.
+- tamper em paginas encryptiondas pode failurer por checksum ou por `ErrDecryptFailed`.
 
 **Magic bytes**
 
@@ -191,10 +191,10 @@ O `PageFile.ReadPage` rejeita pagina com magic invalido. O `WALReader` rejeita e
 
 O projeto valida varios limites:
 
-- `PageFile` rejeita arquivo cujo tamanho nao e multiplo de `PageSize`;
+- `PageFile` rejeita file cujo tamanho nao e multiplo de `PageSize`;
 - `ReadPage` rejeita `InvalidPageID` e pageID fora de `NumPages`;
-- heap v2 rejeita registro que nao cabe em uma pagina;
-- slotted page rejeita registro cujo tamanho excede `uint16`;
+- heap v2 rejeita record que nao cabe em uma pagina;
+- slotted page rejeita record cujo tamanho excede `uint16`;
 - slotted page retorna `ErrBadRecord` quando um slot tem tamanho menor que o header minimo;
 - WAL rejeita `PayloadLen` maior que 1GB;
 - WAL valida `bytesUsed` dentro da pagina WAL contra o body util;
@@ -206,14 +206,14 @@ Existem testes para:
 
 - corrupcao de body de pagina com checksum mismatch;
 - magic invalido em page file;
-- arquivo de page store com tamanho invalido;
-- chave errada/TDE com `ErrDecryptFailed`;
+- file de page store com tamanho invalido;
+- key errada/TDE com `ErrDecryptFailed`;
 - AAD amarrado ao `PageID`;
 - corrupcao de pagina WAL;
 - corrupcao de heap recuperavel via WAL quando existe after-image fisico valido;
 - corrupcao de B+ tree detectada em open/recovery/read;
 - payload WAL corrompido em recovery;
-- stress/chaos validando que dados commitados nao voltam corrompidos apos recovery.
+- stress/chaos validando que data commitados nao voltam corrompidos apos recovery.
 
 ### Parcial
 
@@ -232,7 +232,7 @@ A validacao, porem, nao e uniforme:
 - backup valida versao do manifest;
 - recovery usa a versao do WAL para distinguir payload transacional novo;
 - `PageFile.ReadPage` decodifica `PageHeader.Version`, mas nao rejeita explicitamente versao diferente de `VersionV1`;
-- `WALReader.ReadEntry` valida magic, payload length e checksum, mas nao rejeita explicitamente `header.Version` desconhecida antes de entregar a entrada.
+- `WALReader.ReadEntry` valida magic, payload length e checksum, mas nao rejeita explicitamente `header.Version` desconhecida before de entregar a entrada.
 
 Portanto, versionamento existe, mas ainda nao e uma barreira completa de compatibilidade para todos os formatos on-disk.
 
@@ -254,16 +254,16 @@ Ainda faltam validacoes mais rigorosas:
 - validar `PageHeader.Type` esperado pelo chamador;
 - validar `Reserved`/flags quando necessario;
 - validar `WALHeader.Version` e `EntryType` contra conjunto suportado no leitor;
-- validar invariantes completas de slotted page antes de confiar em `numSlots`, offsets e `freeSpaceStart/freeSpaceEnd`;
+- validar invaribefore completas de slotted page before de confiar em `numSlots`, offsets e `freeSpaceStart/freeSpaceEnd`;
 - ferramenta offline de verificacao completa de heap, indices e WAL.
 
 **Protecao contra partial writes**
 
 Partial/torn writes sao detectados e, no caso de heap/B+ tree com WAL integro, podem ser reparados:
 
-- se o arquivo fica com tamanho nao multiplo de 8192 bytes, `NewPageFile` falha;
-- se uma pagina parcialmente escrita fica com body inconsistente, o checksum falha;
-- se header/magic e corrompido, a leitura falha;
+- se o file fica com tamanho nao multiplo de 8192 bytes, `NewPageFile` failure;
+- se uma pagina parcialmente write fica com body inconsistente, o checksum failure;
+- se header/magic e corrompido, a read failure;
 - se o WAL termina no meio de uma entry, o recovery trata `io.ErrUnexpectedEOF` no fim como tail esperado de crash mid-write e para no ultimo entry valido.
 
 Mas isto ainda e protecao parcial:
@@ -275,9 +275,9 @@ Mas isto ainda e protecao parcial:
 - o reparo depende de o WAL ainda conter o after-image fisico da pagina;
 - nao ha garantias equivalentes a full_page_writes + backup para corrupcao arbitraria fora da janela coberta pelo WAL.
 
-**Testes com arquivos truncados/corrompidos**
+**Testes com files truncados/corrompidos**
 
-Os testes de corrupcao sao bons para page body, magic, WAL, heap e B+ tree. Ha tambem teste para arquivo com tamanho nao multiplo de `PageSize`.
+Os testes de corrupcao sao bons para page body, magic, WAL, heap e B+ tree. Ha tambem teste para file com tamanho nao multiplo de `PageSize`.
 
 Ainda falta ampliar a matriz:
 
@@ -287,13 +287,13 @@ Ainda falta ampliar a matriz:
 - corrupcao de `PageHeader.Version`;
 - corrupcao de `PageHeader.PageID`;
 - corrupcao de slotted header/slot directory;
-- fuzz tests de arquivos on-disk.
+- fuzz tests de files on-disk.
 
 ### Nao implementado
 
 - Validador offline completo tipo `fsck` para o storage.
-- Checksums por registro individual dentro da pagina.
-- Merkle tree/hash end-to-end por tabela ou arquivo.
+- Checksums por record individual dentro da pagina.
+- Merkle tree/hash end-to-end por tabela ou file.
 - Double-write buffer para protecao forte contra torn pages.
 - Validacao rigorosa de versao em todos os leitores de formato.
 
@@ -313,14 +313,14 @@ O mesmo formato de pagina suporta heap, B+ tree, meta pages e WAL paginado.
 
 **Registros variaveis dentro da pagina**
 
-O heap v2 usa slotted pages. Slots crescem para cima e registros crescem para baixo. Cada registro tem header MVCC com:
+O heap v2 usa slotted pages. Slots crescem para cima e records crescem para baixo. Cada record tem header MVCC com:
 
 - `Valid`
 - `CreateLSN`
 - `DeleteLSN`
 - `PrevRecordID`
 
-Limite: um registro precisa caber em uma pagina. Overflow pages/TOAST nao existem.
+Limite: um record precisa caber em uma pagina. Overflow pages/TOAST nao existem.
 
 **Row-store**
 
@@ -335,8 +335,8 @@ O modelo principal e row/document store:
 
 Indices usam B+ tree v2 page-based. Ha suporte a:
 
-- chaves fixas: int, float, bool, date;
-- chaves variaveis: varchar;
+- keys fixas: int, float, bool, date;
+- keys variaveis: varchar;
 - leaf/internal pages;
 - split;
 - scan;
@@ -357,7 +357,7 @@ O projeto tem varios pontos de versionamento/formato:
 
 **Key-value**
 
-A API exposta permite `Put`, `Get`, `Del` e `Scan` por chave de indice, entao ela tem comportamento key-value em cima de uma tabela/index. Internamente, porem, o modelo e tabela + heap + indices, nao um KV store puro.
+A API exposta permite `Put`, `Get`, `Del` e `Scan` por key de indice, entao ela tem comportamento key-value em cima de uma tabela/index. Internamente, porem, o modelo e tabela + heap + indices, nao um KV store puro.
 
 ### Nao implementado
 
@@ -365,7 +365,7 @@ A API exposta permite `Put`, `Get`, `Del` e `Scan` por chave de indice, entao el
 - LSM-tree.
 - Hash index.
 - Overflow pages para documentos maiores que uma pagina.
-- Compressao de paginas, registros, WAL ou backups.
+- Compressao de paginas, records, WAL ou backups.
 - Particionamento/sharding.
 - Free space map persistente completo; o heap tem FSM em memoria como estrutura auxiliar, mas nao uma estrategia persistida robusta para larga escala.
 
@@ -384,29 +384,29 @@ O projeto usa:
 - latches por frame no BufferPool;
 - pin count para evitar eviction de pagina em uso;
 - lock no WAL writer;
-- lock de escrita no heap para coordenar pagina ativa;
+- lock de write no heap para coordenar pagina ativa;
 - latch crabbing na B+ tree.
 
 **MVCC**
 
-O engine usa MVCC por LSN. Cada transacao de leitura captura um `SnapshotLSN`. A leitura percorre a cadeia de versoes e aplica regras de visibilidade:
+O engine usa MVCC por LSN. Cada transacao de read captura um `SnapshotLSN`. A read percorre a cadeia de versoes e aplica regras de visibilidade:
 
-- versao criada antes ou no snapshot e candidata;
-- versao deletada depois do snapshot continua visivel para aquela transacao;
-- versao criada depois do snapshot e ignorada, seguindo `PrevRecordID`.
+- versao criada before ou no snapshot e candidata;
+- versao deletada after do snapshot continua visivel para aquela transacao;
+- versao criada after do snapshot e ignorada, seguindo `PrevRecordID`.
 
 **Controle de snapshots**
 
 O `TransactionRegistry` rastreia transacoes ativas e calcula o menor `SnapshotLSN`. Isso e usado para vacuum/GC decidir quando tombstones podem ser reclamados.
 
-**Transacoes de escrita**
+**Transacoes de write**
 
 Existe `WriteTransaction` com:
 
 - buffer de operacoes;
 - strict 2PL para writes via lock exclusivo por item logico;
 - markers WAL `BEGIN`, `COMMIT` e `ABORT`;
-- commit que escreve WAL antes de aplicar mudancas;
+- commit que escreve WAL before de aplicar mudancas;
 - rollback que descarta o write set e grava abort marker quando ha WAL.
 
 **Modelo de lock transacional**
@@ -441,7 +441,7 @@ O engine agora mantem um waits-for graph implicito para requests bloqueadas. Qua
 - escolhe como vitima a transacao mais jovem no ciclo (maior `txID`);
 - marca a vitima como abortada;
 - libera imediatamente todos os locks dela;
-- devolve erro ao chamador via `ErrDeadlockVictim`;
+- devolve error ao chamador via `ErrDeadlockVictim`;
 - permite que o sobrevivente prossiga sem ficar bloqueado indefinidamente.
 
 Tambem existe timeout de espera de lock (5s por padrao) como cerca adicional para requests que nao formam ciclo, mas ficam contenciosas por tempo demais.
@@ -452,7 +452,7 @@ Tambem existe timeout de espera de lock (5s por padrao) como cerca adicional par
 
 Existem dois niveis:
 
-- `ReadCommitted`: cada leitura usa um snapshot novo do estado commitado no momento da operacao.
+- `ReadCommitted`: cada read usa um snapshot novo do estado commitado no momento da operacao.
 - `RepeatableRead`: usa snapshot fixo por transacao, com semantica de snapshot isolation.
 
 Garantias formais no runtime atual:
@@ -461,14 +461,14 @@ Garantias formais no runtime atual:
 - `ReadCommitted` permite non-repeatable read e phantom read;
 - `RepeatableRead` impede dirty read, non-repeatable read e phantom read observacional dentro da mesma transacao;
 - `RepeatableRead` ainda permite write skew porque nao ha predicate/range locking;
-- `WriteTransaction` detecta conflito de escrita baseado em leitura obsoleta no mesmo item e aborta com `ErrSerializationConflict`, evitando lost update classico por read-modify-write;
+- `WriteTransaction` detecta conflito de write baseado em read obsoleta no mesmo item e aborta com `ErrSerializationConflict`, evitando lost update classico por read-modify-write;
 - conflitos write-write no mesmo item continuam serializados pelo lock manager.
 
 Ainda nao ha isolamento `Serializable`, predicate locking nem validacao serializavel completa entre predicados/ranges.
 
 ### Nao implementado
 
-- Lock-free real. Algumas leituras evitam lock global de tabela, mas usam latches/RWMutex internamente.
+- Lock-free real. Algumas reads evitam lock global de tabela, mas usam latches/RWMutex internamente.
 - Politica formal contra starvation.
 - Fairness/priority/aging para writers e readers.
 - Serializable isolation.
@@ -478,21 +478,21 @@ Ainda nao ha isolamento `Serializable`, predicate locking nem validacao serializ
 
 ### Implementado
 
-**Transacoes explicitas de escrita**
+**Transacoes explicitas de write**
 
-O projeto tem `WriteTransaction`, criada por `BeginWriteTransaction`. Ela acumula operacoes em memoria antes de qualquer mudanca visivel:
+O projeto tem `WriteTransaction`, criada por `BeginWriteTransaction`. Ela acumula operacoes em memoria before de qualquer mudanca visivel:
 
 - `Put` adiciona insert/update ao write set;
 - `Del` adiciona delete ao write set;
 - `Get` enxerga os writes pendentes da propria transacao;
-- validacao basica de tabela, indice e tipo de chave acontece antes do commit;
+- validacao basica de tabela, indice e tipo de key acontece before do commit;
 - lock exclusivo por item logico e adquirido no `Put`/`Del` e mantido ate o fim da transacao;
 - deadlocks entre writers sao detectados e a vitima e abortada automaticamente;
-- lost update classico por leitura obsoleta no mesmo item e rejeitado com `ErrSerializationConflict`;
-- dados nao ficam visiveis antes de `Commit`;
-- depois de `Commit` ou `Rollback`, novas operacoes na mesma transacao sao rejeitadas.
+- lost update classico por read obsoleta no mesmo item e rejeitado com `ErrSerializationConflict`;
+- data nao ficam visiveis before de `Commit`;
+- after de `Commit` ou `Rollback`, novas operacoes na mesma transacao sao rejeitadas.
 
-Existem testes cobrindo commit, rollback, delete, double commit, erro de WAL, tipos de chave e rollback com marker no WAL.
+Existem testes cobrindo commit, rollback, delete, double commit, error de WAL, tipos de key e rollback com marker no WAL.
 
 **Commit protocol**
 
@@ -503,14 +503,14 @@ O protocolo de commit atual e WAL-first:
 3. Escreve cada operacao com `WALHeader.Version = txAwareWALVersion`.
 4. Prefixa o payload com `txID`.
 5. Escreve marker `COMMIT` no WAL.
-6. Somente depois aplica as mudancas em heap e indices.
+6. Somente after aplica as mudancas em heap e indices.
 7. Marca LSNs aplicados em `appliedLSN`.
 
-Com `wal.DefaultOptions()`, cada `WriteEntry` usa `SyncEveryWrite`, entao o `COMMIT` fica duravel antes das mudancas ficarem visiveis em memoria.
+Com `wal.DefaultOptions()`, cada `WriteEntry` usa `SyncEveryWrite`, entao o `COMMIT` fica duravel before das mudancas ficarem visiveis em memoria.
 
-**Rollback antes de aplicar**
+**Rollback before de aplicar**
 
-`Rollback` descarta o write set e, quando ha WAL, escreve `BEGIN` se necessario e depois `ABORT`. Como o write set normal ainda nao foi aplicado em heap/indices, o rollback em processo vivo continua barato; se o recovery encontrar paginas de loser persistidas, ele executa undo logico e grava CLRs/`ABORT`.
+`Rollback` descarta o write set e, quando ha WAL, escreve `BEGIN` se necessario e after `ABORT`. Como o write set normal ainda nao foi aplicado em heap/indices, o rollback em processo vivo continua barato; se o recovery encontrar paginas de loser persistidas, ele executa undo logico e grava CLRs/`ABORT`.
 
 **Recovery de winners e losers**
 
@@ -524,14 +524,14 @@ O recovery faz uma fase de analise do WAL:
 
 Os testes cobrem winners/losers, losers multi-operacao em varias paginas, restauracao de heap+indices e recovery de recovery apos crash no meio do undo.
 
-**Isolamento de leitura e leitura propria**
+**Isolamento de read e read propria**
 
 Leituras usam `Transaction` ou o read-view interno de `WriteTransaction`, com dois niveis:
 
 - `RepeatableRead`: snapshot fixo no LSN de inicio;
-- `ReadCommitted`: atualiza snapshot antes de cada operacao.
+- `ReadCommitted`: atualiza snapshot before de cada operacao.
 
-O MVCC percorre cadeias de versoes e usa `CreateLSN`, `DeleteLSN` e `PrevRecordID` para decidir visibilidade. Em `WriteTransaction`, `Get` consulta primeiro o write set pendente e depois cai para esse read-view MVCC.
+O MVCC percorre cadeias de versoes e usa `CreateLSN`, `DeleteLSN` e `PrevRecordID` para decidir visibilidade. Em `WriteTransaction`, `Get` consulta primeiro o write set pendente e after cai para esse read-view MVCC.
 
 ### Parcial
 
@@ -542,23 +542,23 @@ A atomicidade e forte tanto no recovery quanto no runtime para `WriteTransaction
 O protocolo atual de `Commit` explicito e:
 
 1. escreve `BEGIN`, operacoes e `COMMIT` no WAL;
-2. so depois do `COMMIT` duravel entra na fase de aplicacao local;
-3. segura `opMu` em modo exclusivo durante toda a fase de aplicacao, bloqueando novas leituras/escritas publicas ate a convergencia;
-4. para `INSERT`/`UPDATE`, grava primeiro a nova versao no heap e so depois instala o ponteiro do indice;
-5. para `DELETE`, marca o registro no heap primeiro e mantem o indice apontando para o mesmo head tombstoned;
-6. se qualquer etapa falhar, o engine entra em modo `degraded` e passa a devolver `ErrEngineDegraded` nas APIs publicas ate `Recover` ou reopen.
+2. so after do `COMMIT` duravel entra na fase de aplicacao local;
+3. segura `opMu` em modo exclusivo during toda a fase de aplicacao, bloqueando novas reads/writes publicas ate a convergencia;
+4. para `INSERT`/`UPDATE`, grava primeiro a nova versao no heap e so after instala o ponteiro do indice;
+5. para `DELETE`, marca o record no heap primeiro e mantem o indice apontando para o mesmo head tombstoned;
+6. se qualquer etapa failurer, o engine entra em modo `degraded` e passa a devolver `ErrEngineDegraded` nas APIs publicas ate `Recover` ou reopen.
 
-Isso define a ordem formal heap/index e evita visibilidade parcial em processo vivo: enquanto a fase pos-commit esta em andamento, nenhuma API publica observa o prefixo aplicado; se a aplicacao falha, a janela e fechada com erro explicito em vez de deixar o processo continuar em cima de estado intermediario.
+Isso define a ordem formal heap/index e evita visibilidade parcial em processo vivo: enquanto a fase pos-commit esta em andamento, nenhuma API publica observa o prefixo aplicado; se a aplicacao failure, a janela e fechada com error explicito em vez de deixar o processo continuar em cima de estado intermediario.
 
 Consequencia:
 
-- crash depois do `COMMIT` continua sendo corrigido pelo recovery;
-- erro em processo vivo depois do `COMMIT` nao expoe estado parcial; o engine exige recovery antes de voltar a aceitar trafego;
+- crash after do `COMMIT` continua sendo corrigido pelo recovery;
+- error em processo vivo after do `COMMIT` nao expoe estado parcial; o engine exige recovery before de voltar a aceitar trafego;
 - reopen/recovery reaplica deterministicamente a transacao winner e converge heap+indices ao mesmo estado final.
 
 **Rollback**
 
-Rollback funciona bem antes da aplicacao, porque as operacoes estao apenas no write set. No recovery, rollback pos-crash de losers persistidas agora grava CLRs e leva heap/indices ao mesmo estado final mesmo se houver crash no meio do undo.
+Rollback funciona bem before da aplicacao, porque as operacoes estao apenas no write set. No recovery, rollback pos-crash de losers persistidas agora grava CLRs e leva heap/indices ao mesmo estado final mesmo se houver crash no meio do undo.
 
 Nao ha:
 
@@ -570,7 +570,7 @@ Nao ha:
 
 **Isolamento**
 
-O isolamento de leitura e baseado em snapshot por LSN, e `WriteTransaction` tambem ganhou leitura propria e deteccao de conflito por leitura obsoleta no mesmo item.
+O isolamento de read e baseado em snapshot por LSN, e `WriteTransaction` tambem ganhou read propria e deteccao de conflito por read obsoleta no mesmo item.
 
 Matriz resumida de anomalias:
 
@@ -586,7 +586,7 @@ Ainda nao ha:
 
 **Recovery apos crash**
 
-O recovery transacional e fisico e suficiente para o desenho atual, em que transacoes explicitas escrevem WAL completo e so aplicam mudancas depois do `COMMIT`.
+O recovery transacional e fisico e suficiente para o desenho atual, em que transacoes explicitas escrevem WAL completo e so aplicam mudancas after do `COMMIT`.
 
 Ainda e parcial como garantia de banco maduro porque:
 
@@ -599,12 +599,12 @@ Ainda e parcial como garantia de banco maduro porque:
 
 Para `WriteTransaction`, o comportamento agora e:
 
-- antes do `COMMIT`: operacoes ficam no write set e nao sao visiveis;
-- depois do `COMMIT` duravel: operacoes sao aplicadas sob barreira exclusiva de runtime;
-- em crash durante a aplicacao: recovery reaplica a transacao commitada;
-- em erro retornado durante a aplicacao sem crash: o engine marca `degraded`, bloqueia observacao do estado parcial e exige recovery.
+- before do `COMMIT`: operacoes ficam no write set e nao sao visiveis;
+- after do `COMMIT` duravel: operacoes sao aplicadas sob barreira exclusiva de runtime;
+- em crash during a aplicacao: recovery reaplica a transacao commitada;
+- em error retornado during a aplicacao sem crash: o engine marca `degraded`, bloqueia observacao do estado parcial e exige recovery.
 
-Esse mecanismo foi validado com fault injection no meio da aplicacao pos-commit, incluindo falha entre mutacao de heap e instalacao do indice.
+Esse mecanismo foi validado com fault injection no meio da aplicacao pos-commit, incluindo failure entre mutacao de heap e instalacao do indice.
 
 ### Nao implementado
 
@@ -637,23 +637,23 @@ Isso evita que deletes antigos fiquem para sempre ocupando espaco dentro das pag
 
 Deletes no heap v2 sao lazy deletes. `MarkDeleted` marca o slot como invalido e grava `DeleteLSN`, preservando os bytes e a cadeia MVCC enquanto ainda podem existir transacoes antigas lendo aquela versao.
 
-Durante o vacuum, `SlottedPage.Compact(minLSN)` so remove registros deletados quando `DeleteLSN <= minLSN`. Assim, o GC respeita snapshots ativos e evita remover versoes que ainda podem ser visiveis.
+Durante o vacuum, `SlottedPage.Compact(minLSN)` so remove records deletados quando `DeleteLSN <= minLSN`. Assim, o GC respeita snapshots ativos e evita remover versoes que ainda podem ser visiveis.
 
 **Compaction dentro da pagina**
 
-`SlottedPage.Compact` reescreve os registros sobreviventes em um buffer temporario, empacota os bytes no final da pagina, atualiza offsets dos slots e recalcula `freeSpaceEnd`. Slots removidos ficam com tamanho zero e leituras futuras retornam `ErrVacuumed`, preservando a estabilidade do `RecordID`.
+`SlottedPage.Compact` reescreve os records sobreviventes em um buffer temporario, empacota os bytes no final da pagina, atualiza offsets dos slots e recalcula `freeSpaceEnd`. Slots removidos ficam com tamanho zero e reads futuras retornam `ErrVacuumed`, preservando a estabilidade do `RecordID`.
 
-A B+ tree de chaves variaveis tambem recompata a folha no delete (`LeafDeleteVar`), evitando holes no corpo da pagina de chaves variaveis.
+A B+ tree de keys variaveis tambem recompata a folha no delete (`LeafDeleteVar`), evitando holes no corpo da pagina de keys variaveis.
 
 **Reaproveitamento de espaco no heap**
 
-O heap v2 possui `FreeSpaceMap` em memoria. Writes consultam a FSM para encontrar pagina existente com espaco suficiente antes de alocar nova pagina. Depois do vacuum, paginas com espaco recuperado voltam a ser candidatas para inserts.
+O heap v2 possui `FreeSpaceMap` em memoria. Writes consultam a FSM para encontrar pagina existente com espaco suficiente before de alocar nova pagina. Depois do vacuum, paginas com espaco recuperado voltam a ser candidatas para inserts.
 
 Existem testes especificos para:
 
 - compactacao de slotted page;
 - respeito ao `minLSN`;
-- leitura de slot vacuumed como `ErrVacuumed`;
+- read de slot vacuumed como `ErrVacuumed`;
 - populacao da FSM pelo vacuum;
 - reuse de espaco vacuumed;
 - vacuum no nivel de storage engine;
@@ -668,16 +668,16 @@ Nao existe uma free list persistente de paginas livres. A estrutura mais proxima
 - em memoria;
 - aproximada;
 - usada como hint;
-- voltada a espaco livre dentro de paginas existentes, nao a desalocacao persistente de paginas do arquivo.
+- voltada a espaco livre dentro de paginas existentes, nao a desalocacao persistente de paginas do file.
 
 **Compaction**
 
-A compaction existe em paginas especificas, principalmente heap v2 e folhas B+ tree de chaves variaveis. Ela nao e uma compaction global do arquivo.
+A compaction existe em paginas especificas, principalmente heap v2 e folhas B+ tree de keys variaveis. Ela nao e uma compaction global do file.
 
 Ainda nao ha:
 
-- movimentacao de registros entre paginas para consolidar espaco;
-- merge/rewrite global de arquivos;
+- movimentacao de records entre paginas para consolidar espaco;
+- merge/rewrite global de files;
 - shrink/truncate fisico apos vacuum;
 - compactacao offline completa.
 
@@ -693,20 +693,20 @@ Mas o `PageFile` ainda aloca novas paginas de forma monotonicamente crescente e 
 
 - marcar paginas inteiras como livres;
 - reutilizar paginas fisicamente desalocadas;
-- truncar o arquivo;
+- truncar o file;
 - devolver espaco ao sistema operacional.
 
 **Tratamento de fragmentacao**
 
 Fragmentacao interna da pagina e tratada parcialmente pela compactacao do heap e por deletes em folhas variaveis da B+ tree.
 
-Fragmentacao em nivel de arquivo ainda nao e tratada. Arquivos podem continuar grandes mesmo depois de muitos deletes, porque o vacuum recupera espaco logico dentro das paginas, mas nao reduz fisicamente o tamanho dos arquivos.
+Fragmentacao em nivel de file ainda nao e tratada. Arquivos podem continuar grandes mesmo after de muitos deletes, porque o vacuum recupera espaco logico dentro das paginas, mas nao reduz fisicamente o tamanho dos files.
 
 ### Nao implementado
 
 - Free list persistente de paginas.
 - Free page allocator no `PageFile`.
-- Truncate/shrink fisico de arquivos apos vacuum.
+- Truncate/shrink fisico de files apos vacuum.
 - Autovacuum/background vacuum.
 - Politicas configuraveis de vacuum por threshold de bloat.
 - Compactacao global/offline de tabela.
@@ -748,8 +748,8 @@ A politica implementada e LRU:
 - eviction varre do final da lista, escolhendo a pagina menos recentemente usada;
 - paginas pinadas nunca sao evictadas;
 - se todas as paginas estao pinadas, retorna `ErrBufferPoolFull`;
-- se a vitima esta suja, o flush e sincrono antes da eviction;
-- se o flush falha, a pagina nao e evictada.
+- se a vitima esta suja, o flush e sincrono before da eviction;
+- se o flush failure, a pagina nao e evictada.
 
 Existem testes para ordem LRU, paginas pinadas, flush em eviction, concorrencia e carga com muitas evictions.
 
@@ -763,11 +763,11 @@ Cada frame tem flag atomica `dirty`. `PageHandle.MarkDirty()` marca a pagina com
 - checkpoint;
 - `Close`.
 
-O WAL tambem rastreia `currentPageDirty` para saber quando a pagina WAL atual precisa ser escrita antes do fsync.
+O WAL tambem rastreia `currentPageDirty` para saber quando a pagina WAL atual precisa ser write before do fsync.
 
 **Flush duravel**
 
-`BufferPool.FlushAll` coleta frames sujos, escreve cada pagina no `PageFile` e chama `PageFile.Sync`. `CreateCheckpoint` e `FuzzyCheckpoint` sincronizam WAL antes de flushar paginas sujas de heaps e indices.
+`BufferPool.FlushAll` coleta frames sujos, escreve cada pagina no `PageFile` e chama `PageFile.Sync`. `CreateCheckpoint` e `FuzzyCheckpoint` sincronizam WAL before de flushar paginas sujas de heaps e indices.
 
 ### Parcial
 
@@ -779,7 +779,7 @@ O WAL suporta politicas de sync:
 - `SyncInterval`: fsync periodico em background;
 - `SyncBatch`: fsync ao atingir volume acumulado de bytes.
 
-Isto e batch de durabilidade no WAL, nao um sistema completo de batch write para paginas de dados.
+Isto e batch de durability no WAL, nao um sistema completo de batch write para paginas de data.
 
 No BufferPool, `FlushAll` escreve varias paginas sujas em uma chamada, mas ainda faz writes pagina-a-pagina e termina com um fsync. Nao ha:
 
@@ -792,7 +792,7 @@ No BufferPool, `FlushAll` escreve varias paginas sujas em uma chamada, mas ainda
 
 **Alinhamento com o tamanho de pagina do sistema**
 
-O formato usa pagina fixa de 8192 bytes. O `PageFile` valida que o arquivo tem tamanho multiplo de `PageSize`, e a ADR do formato justifica 8KB como escolha pratica para SSDs e page cache.
+O formato usa pagina fixa de 8192 bytes. O `PageFile` valida que o file tem tamanho multiplo de `PageSize`, e a ADR do formato justifica 8KB como escolha pratica para SSDs e page cache.
 
 Isso e parcialmente alinhado com sistemas comuns, porque 8KB e multiplo de 4KB. Porem, o engine nao consulta o tamanho real de pagina/bloco do sistema operacional, nao ajusta `PageSize` por plataforma e nao usa `O_DIRECT`, entao nao ha garantia formal de alinhamento otimo para todos os ambientes.
 
@@ -833,16 +833,16 @@ Nao ha read-ahead/prefetch explicito no BufferPool, heap scan, B+ tree scan ou P
 
 O projeto tem testes dedicados com build tag `chaos`:
 
-- `TestChaosKill9CommittedWritesRecover` executa um processo filho, grava dados com WAL duravel, registra um oracle em arquivo fsyncado, mata o processo com `kill -9` e reabre o engine para validar todos os commits registrados no oracle.
-- `TestChaosRepeatedReopenRecovery` faz 100 ciclos de reopen, writes e checkpoints, depois valida que todos os documentos esperados continuam presentes e intactos.
+- `TestChaosKill9CommittedWritesRecover` executa um processo filho, grava data com WAL duravel, registra um oracle em file fsyncado, mata o processo com `kill -9` e reabre o engine para validar todos os commits registrados no oracle.
+- `TestChaosRepeatedReopenRecovery` faz 100 ciclos de reopen, writes e checkpoints, after valida que todos os documentos esperados continuam presentes e intactos.
 
 Tambem existem testes de recovery no pacote `pkg/storage`, incluindo:
 
-- crash simulado depois de WAL fsyncado e antes de flush de heap/tree;
+- crash simulado after de WAL fsyncado e before de flush de heap/tree;
 - recovery fisico de heap com pagina rasgada;
 - recovery fisico de indice com pagina rasgada;
 - recovery repetido sem duplicar versoes;
-- recovery durante checkpoint em andamento;
+- recovery during checkpoint em andamento;
 - auto-recovery via `NewProductionStorageEngine`;
 - recovery de transacoes winners/losers;
 - undo pos-crash com CLRs, incluindo crash no meio do undo;
@@ -854,7 +854,7 @@ Tambem existem testes de recovery no pacote `pkg/storage`, incluindo:
 Ha cobertura de concorrencia em varios niveis:
 
 - `go test ./pkg/... -race` no Makefile e CI;
-- `pkg/pagestore` testa leituras/escritas concorrentes e heavy eviction;
+- `pkg/pagestore` testa reads/writes concorrentes e heavy eviction;
 - `pkg/btree/v2` tem testes de concorrencia;
 - `pkg/storage/concurrency_test.go` cobre writes, reads, deletes e checkpoint concorrentes;
 - `tests/stress` roda writes, reads, deletes, scans, fuzzy checkpoint e vacuum em paralelo.
@@ -863,13 +863,13 @@ O alvo `make test-stress-race` executa stress com race detector.
 
 **Arquivos corrompidos**
 
-Os testes com build tag `faults` corrompem arquivos fisicos e validam falha controlada ou reparo via WAL, conforme o caso:
+Os testes com build tag `faults` corrompem files fisicos e validam failure controlada ou reparo via WAL, conforme o caso:
 
-- WAL corrompido deve falhar startup/recovery;
+- WAL corrompido deve failurer startup/recovery;
 - heap corrompido deve ser reparado quando o WAL contem after-image valido;
-- B+ tree corrompida deve falhar no open/recovery/read.
+- B+ tree corrompida deve failurer no open/recovery/read.
 
-Tambem ha testes unitarios de page store para checksum mismatch, magic invalido, arquivo com tamanho invalido, chave TDE errada e AAD amarrado ao `PageID`.
+Tambem ha testes unitarios de page store para checksum mismatch, magic invalido, file com tamanho invalido, key TDE errada e AAD amarrado ao `PageID`.
 
 **CI**
 
@@ -883,41 +883,41 @@ O workflow `.github/workflows/ci.yml` executa:
 - stress tests com race detector;
 - corruption fault tests;
 - ENOSPC em tmpfs pequeno;
-- fsync failure test com marcador de falha.
+- fsync failure test com marcador de failure.
 
 ### Parcial
 
 **Fault injection**
 
-Existe fault injection para cenarios importantes:
+Existe fault injection para cenarios importbefore:
 
 - corrupcao por bit flip em WAL, heap e B+ tree;
 - ENOSPC usando filesystem pequeno configurado por `STORAGE_ENGINE_ENOSPC_DIR`;
-- falha de fsync usando build tag `faults` e marcador `.fail_fsync_now`.
+- failure de fsync usando build tag `faults` e marcador `.fail_fsync_now`.
 
-Ainda e parcial porque nao ha uma camada generica de injecao de falhas para:
+Ainda e parcial porque nao ha uma camada generica de injecao de failures para:
 
 - short reads/writes;
-- falha aleatoria de `ReadAt`/`WriteAt`;
-- falha no meio de `BufferPool.FlushAll`;
-- falha no meio de rename/copy de backup;
+- failure aleatoria de `ReadAt`/`WriteAt`;
+- failure no meio de `BufferPool.FlushAll`;
+- failure no meio de rename/copy de backup;
 - clock/scheduler adversarial.
 
-**Benchmark com dados grandes**
+**Benchmark com data grandes**
 
 Ha benchmarks em `experiments/pagestore/benchmark_test.go` para:
 
-- write de paginas sem cifra;
+- write de paginas sem encryption;
 - write de paginas com AES-GCM;
 - read sequencial;
 - custo puro de encrypt/decrypt.
 
-Esses benchmarks alimentam a ADR do formato de pagina, mas ainda nao sao benchmarks de engine completo com dados grandes.
+Esses benchmarks alimentam a ADR do formato de pagina, mas ainda nao sao benchmarks de engine completo com data grandes.
 
 Faltam benchmarks de:
 
-- milhoes de registros;
-- B+ tree com chaves variaveis e distribuicao realista;
+- milhoes de records;
+- B+ tree com keys variaveis e distribuicao realista;
 - scans grandes;
 - updates/deletes/vacuum sob carga;
 - recovery com WAL grande;
@@ -940,8 +940,8 @@ Isso e uma comparacao contra referencia parcial. Nao existe ainda uma suite dife
 - Fuzzing de WAL/page files/heap/B+ tree com corpus persistente.
 - Differential testing contra SQLite, PostgreSQL, Pebble ou um modelo KV simples.
 - Long-running soak tests de horas/dias em CI separado.
-- Benchmarks integrados de engine completo com dados grandes.
-- Testes de falha aleatoria em cada ponto de I/O.
+- Benchmarks integrados de engine completo com data grandes.
+- Testes de failure aleatoria em cada ponto de I/O.
 - Simulador deterministico de crash em cada passo de commit/recovery.
 
 ## Observabilidade
@@ -953,10 +953,10 @@ Nao ha um subsistema de observabilidade estruturada implementado. O projeto nao 
 O que existe hoje sao sinais pontuais:
 
 - `StorageEngine.Recover` imprime no stdout quantas entries foram aplicadas, quantas foram puladas, checkpoint LSN e LSN atual;
-- `StorageEngine.Vacuum` imprime inicio/fim do vacuum, tabela, `minLSN` e quantidade de registros reclamados;
+- `StorageEngine.Vacuum` imprime inicio/fim do vacuum, tabela, `minLSN` e quantidade de records reclamados;
 - `BufferPool` expoe `Capacity()` e `Size()`;
 - `PageFile` expoe `NumPages()` e `Path()`;
-- testes usam `t.Logf` para alguns eventos, como ENOSPC observado e tamanho de WAL em teste de durabilidade.
+- testes usam `t.Logf` para alguns eventos, como ENOSPC observado e tamanho de WAL em teste de durability.
 
 Esses sinais ajudam em debug manual, mas nao formam observabilidade de producao.
 
@@ -964,13 +964,13 @@ Esses sinais ajudam em debug manual, mas nao formam observabilidade de producao.
 
 **Paginas sujas**
 
-O BufferPool rastreia paginas sujas internamente com `frame.dirty`. `FlushAll` coleta frames sujos antes de escrever no `PageFile`, e eviction tambem detecta se a vitima esta suja.
+O BufferPool rastreia paginas sujas internamente com `frame.dirty`. `FlushAll` coleta frames sujos before de escrever no `PageFile`, e eviction tambem detecta se a vitima esta suja.
 
 Limitacao: nao existe API publica para consultar quantidade de dirty pages, idade de dirty pages, taxa de flush ou thresholds de pressao.
 
 **Tamanho dos logs**
 
-O WAL tem arquivo/segmentos fisicos e politica de rotacao por `MaxSegmentBytes`. O tamanho pode ser obtido externamente via filesystem, e alguns testes fazem `os.Stat` para validar tamanho.
+O WAL tem file/segmentos fisicos e politica de rotacao por `MaxSegmentBytes`. O tamanho pode ser obtido externamente via filesystem, e alguns testes fazem `os.Stat` para validar tamanho.
 
 Limitacao: o engine nao expoe metrica interna de:
 
@@ -985,7 +985,7 @@ Limitacao: o engine nao expoe metrica interna de:
 
 Recovery imprime contadores de entries aplicadas/puladas e checkpoint LSN. Isso e util para diagnostico manual.
 
-Limitacao: nao mede tempo de recovery, throughput de replay, quantidade de bytes lidos, tempo por fase de analysis/redo/undo, nem exporta esses dados como metricas.
+Limitacao: nao mede tempo de recovery, throughput de replay, quantidade de bytes lidos, tempo por fase de analysis/redo/undo, nem exporta esses data como metricas.
 
 ### Nao implementado
 
@@ -1006,7 +1006,7 @@ O BufferPool sabe se um `Fetch` foi hit ou miss no momento da chamada, mas nao i
 
 **Latencia de fsync**
 
-`PageFile.Sync`, `WALWriter.Sync`, checkpoints, close e backup chamam fsync, mas nenhum mede duracao. Nao ha histograma p50/p95/p99, contador de erros por tipo, nem separacao entre fsync de arquivo e fsync de diretorio.
+`PageFile.Sync`, `WALWriter.Sync`, checkpoints, close e backup chamam fsync, mas nenhum mede duracao. Nao ha histograma p50/p95/p99, contador de errors por tipo, nem separacao entre fsync de file e fsync de diretorio.
 
 **Compaction time**
 
@@ -1047,7 +1047,7 @@ O projeto tem backup/restore online:
 - copia heap, indices e WAL;
 - grava `manifest.json`;
 - registra tamanho e SHA-256;
-- possui verificacao e restore para diretorio vazio.
+- possui verificacao e restore para diretorio empty.
 
 Tambem ha ciclo de vida do WAL:
 
@@ -1073,7 +1073,7 @@ Tambem ha ciclo de vida do WAL:
 O projeto implementa TDE opcional:
 
 - AES-GCM por body de pagina;
-- header de pagina em claro para diagnostico/recovery;
+- header de pagina em plaintext para diagnostico/recovery;
 - AAD amarrado ao `PageID`;
 - keystore para DEKs;
 - suporte a cipher separado para heap, B+ tree e WAL.
@@ -1082,12 +1082,12 @@ O projeto implementa TDE opcional:
 
 - Nao ha sistema de autenticacao/autorizacao.
 - Nao ha controle de acesso por tabela/usuario.
-- Nao ha rotacao automatica operacional de chaves em runtime.
+- Nao ha rotacao automatica operacional de keys em runtime.
 - TDE protege armazenamento local, mas nao substitui controles de sistema operacional, backup encryption e gestao segura da master key.
 
-## Testes Existentes Relevantes
+## Testes Existentes Relevbefore
 
-Use estes comandos antes de confiar em uma mudanca:
+Use estes comandos before de confiar em uma mudanca:
 
 ```bash
 go test ./...
@@ -1113,9 +1113,9 @@ make test-safety
 
 ## Quando Nao Usar
 
-Nao use este engine como armazenamento primario de dados criticos se voce precisa de:
+Nao use este engine como armazenamento primario de data criticos se voce precisa de:
 
-- garantia formal de banco de dados completo sob todos os cenarios de crash;
+- garantia formal de banco de data completo sob todos os cenarios de crash;
 - ARIES completo;
 - isolamento serializable;
 - atomicidade runtime forte para transacoes multi-operacao apos `COMMIT`;
@@ -1128,20 +1128,20 @@ Nao use este engine como armazenamento primario de dados criticos se voce precis
 - reparo automatico de paginas rasgadas/partial writes;
 - validador offline completo de integridade;
 - recuperacao automatica de espaco sem operacao manual de vacuum;
-- reducao fisica do tamanho dos arquivos apos muitos deletes;
+- reducao fisica do tamanho dos files apos muitos deletes;
 - free list persistente para reaproveitar paginas inteiras;
 - read-ahead/prefetch controlado pelo engine;
 - background writer ou controle fino de dirty pages;
 - eliminacao de double buffering entre page cache do SO e cache proprio;
 - fuzzing/property tests e differential testing contra referencia externa;
-- benchmarks de engine completo com dados grandes;
+- benchmarks de engine completo com data grandes;
 - metricas estruturadas de reads/writes, cache, fsync, recovery, locks e WAL;
 - column-store;
 - LSM-tree;
 - hash indexes;
 - documentos maiores que uma pagina;
-- workloads muito grandes, por exemplo acima de dezenas ou centenas de GB;
-- operacao multi-tenant com dados sensiveis de terceiros sem camada adicional robusta.
+- workloads muito grandes, por example acima de dezenas ou centenas de GB;
+- operacao multi-tenant com data sensiveis de terceiros sem camada adicional robusta.
 
 ## Roadmap Recomendado
 
@@ -1154,12 +1154,12 @@ Prioridade alta:
 5. Persistir dirty page table/checkpoint state de forma mais completa.
 6. Validar explicitamente versoes desconhecidas em PageFile e WALReader.
 7. Estender a mesma cerca de atomicidade/degraded state para outros caminhos multi-recurso que ainda nao usam `WriteTransaction`.
-8. Criar metricas internas para WAL, BufferPool, recovery, vacuum e erros de corrupcao.
+8. Criar metricas internas para WAL, BufferPool, recovery, vacuum e errors de corrupcao.
 
 Prioridade media:
 
-1. Overflow pages para registros grandes.
-2. Compressao configuravel por pagina ou por registro.
+1. Overflow pages para records grandes.
+2. Compressao configuravel por pagina ou por record.
 3. Autovacuum com thresholds de bloat e limites de impacto em latencia.
 4. Compactacao offline ou rewrite de tabela com truncate fisico.
 5. Adicionar metricas de BufferPool: hit rate, miss rate, evictions, dirty pages e flush latency.
@@ -1168,11 +1168,11 @@ Prioridade media:
 8. Implementar background writer com thresholds de dirty pages.
 9. Implementar read-ahead para scans sequenciais.
 10. Criar validador offline de integridade para heap, B+ tree e WAL.
-11. Ampliar testes de truncamento e fuzz de arquivos on-disk.
+11. Ampliar testes de truncamento e fuzz de files on-disk.
 12. Adicionar fuzzing nativo para WAL, page file, slotted page e B+ tree.
 13. Criar differential tests contra uma implementacao de referencia.
 14. Testes de longa duracao com race/stress/chaos.
-15. Benchmarks de engine completo com dados grandes e latencia p95/p99.
+15. Benchmarks de engine completo com data grandes e latencia p95/p99.
 16. Hardening do latch crabbing para workloads adversariais.
 
 Prioridade baixa ou futura:
@@ -1185,6 +1185,6 @@ Prioridade baixa ou futura:
 
 ## Veredito
 
-O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, lock manager com deadlock handling para writes, latches, TDE, testes de falha, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
+O projeto ja possui uma base tecnica relevante: page store, BufferPool, heap v2, B+ tree v2, WAL, checksums, magic bytes, recovery fisico+logico por `pageLSN`, MVCC, snapshots, lock manager com deadlock handling para writes, latches, TDE, testes de failure, chaos tests e stress tests. Ele e forte para aprendizado, validacao de arquitetura e uso controlado.
 
-Para producao critica, o ponto de corte e claro: ainda faltam mecanismos que bancos maduros usam para suportar falhas, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo fisico por pagina, atomicidade runtime forte pos-commit, starvation handling, range locking para `Serializable`, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.
+Para producao critica, o ponto de corte e plaintext: ainda faltam mecanismos que bancos maduros usam para suportar failures, transacoes, concorrencia adversarial e crescimento operacional em larga escala, especialmente ARIES completo, dirty page table persistida, undo fisico por pagina, atomicidade runtime forte pos-commit, starvation handling, range locking para `Serializable`, validacao completa de formato, double-write/full-page strategy mais ampla, free lists persistentes, autovacuum, observabilidade estruturada, read-ahead, background writer, fuzzing, differential testing, benchmarks grandes e compressao.

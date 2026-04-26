@@ -1,8 +1,8 @@
 // Package pagestore implementa a primitiva de I/O page-based (Fase 1
 // do plano em docs/page_based_migration_plan.md).
 //
-// Unidade fundamental: página de 8KB com header em claro + body
-// (opcionalmente cifrado). Não há buffer pool nesta camada — isso é
+// Unidade fundamental: page de 8KB com header em claro + body
+// (opcionalmente cifrado). Not há buffer pool nesta camada — isso é
 // responsabilidade da Fase 2 (pkg/pagestore/bufferpool.go).
 //
 // Decisões de formato estão em docs/adr/001-page-format.md.
@@ -24,14 +24,14 @@ const (
 	VersionV1 = 1
 )
 
-// PageID identifica uma página dentro de um PageFile.
-// 0 é inválido (reservado para facilitar "zero value = não alocado").
+// PageID identifica uma page dentro de um PageFile.
+// 0 é invalid (reservado para facilitar "zero value = not alocado").
 type PageID uint64
 
 const InvalidPageID PageID = 0
 
-// PageType classifica o conteúdo, permitindo que o mesmo PageFile
-// hospede páginas heterogêneas (heap, índice, meta).
+// PageType classifica o content, permitindo que o mesmo PageFile
+// hospede pages heterogêneas (heap, index, meta).
 type PageType uint8
 
 const (
@@ -43,7 +43,7 @@ const (
 )
 
 // PageHeader ocupa os primeiros 32 bytes. Sempre em claro — recovery
-// e diagnóstico precisam ler PageID/LSN/Type sem a chave de TDE.
+// e diagnóstico precisam ler PageID/LSN/Type sem a key de TDE.
 type PageHeader struct {
 	Magic    uint32   // 4
 	Version  uint16   // 2
@@ -69,7 +69,7 @@ func (h *PageHeader) Encode(buf []byte) {
 
 func (h *PageHeader) Decode(buf []byte) error {
 	if len(buf) < HeaderSize {
-		return fmt.Errorf("pagestore: buffer de %d bytes < HeaderSize %d", len(buf), HeaderSize)
+		return fmt.Errorf("pagestore: buffer of %d bytes < HeaderSize %d", len(buf), HeaderSize)
 	}
 	h.Magic = binary.LittleEndian.Uint32(buf[0:4])
 	h.Version = binary.LittleEndian.Uint16(buf[4:6])
@@ -82,13 +82,13 @@ func (h *PageHeader) Decode(buf []byte) error {
 	return nil
 }
 
-// Page é o buffer em memória de uma página (8KB fixos).
+// Page é o buffer em memória de uma page (8KB fixos).
 type Page [PageSize]byte
 
 func (p *Page) HeaderBytes() []byte { return p[:HeaderSize] }
 func (p *Page) Body() []byte        { return p[HeaderSize:] }
 
-// Reset zera a página inteira (útil quando um buffer do pool é reaproveitado).
+// Reset zera a page inteira (útil quando um buffer do pool é reaproveitado).
 func (p *Page) Reset() {
 	for i := range p {
 		p[i] = 0
@@ -96,12 +96,12 @@ func (p *Page) Reset() {
 }
 
 // AdvancePageLSN atualiza o campo PageLSN do header — apenas se `lsn` for
-// MAIOR que o valor atual (LSN é monotonicamente crescente).
+// MAIOR que o value atual (LSN é monotonicamente crescente).
 //
 // Crítico pra recovery/ARIES: recovery usa pageLSN pra saber se uma mudança
-// já foi aplicada à página (skip se pageLSN >= entry.LSN).
+// já foi aplicada à page (skip se pageLSN >= entry.LSN).
 //
-// Chamadores típicos: heap.v2 e btree.v2 ao modificar uma página.
+// Chamadores típicos: heap.v2 e btree.v2 ao modificar uma page.
 func (p *Page) AdvancePageLSN(lsn uint64) {
 	hdr, err := p.GetHeader()
 	if err != nil {
@@ -113,7 +113,7 @@ func (p *Page) AdvancePageLSN(lsn uint64) {
 	}
 }
 
-// SetHeader preenche os campos do header e grava. NÃO calcula checksum —
+// SetHeader preenche os campos do header e grava. NOT calcula checksum —
 // isso é responsabilidade do PageFile quando vai escrever em disco.
 func (p *Page) SetHeader(h PageHeader) {
 	h.Encode(p.HeaderBytes())

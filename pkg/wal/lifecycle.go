@@ -227,7 +227,7 @@ func archiveSegment(path, archiveDir string) error {
 }
 
 // RestoreArchivedSegments copia segmentos do archiveDir de volta para o
-// diretório ativo do WAL. Arquivos existentes não são sobrescritos.
+// diretório ativo do WAL. Arquivos existsntes are not sobrescritos.
 func RestoreArchivedSegments(base, archiveDir string) error {
 	if archiveDir == "" {
 		return nil

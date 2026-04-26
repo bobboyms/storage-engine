@@ -28,7 +28,7 @@ func SerializeDocumentEntry(tableName, indexName string, key types.Comparable, d
 	return proto.Marshal(entry)
 }
 
-// SerializeMultiIndexEntry serializa uma entrada com múltiplos índices para WAL
+// SerializeMultiIndexEntry serializa uma entrada com múltiplos indexs para WAL
 func SerializeMultiIndexEntry(tableName string, keys map[string]types.Comparable, document []byte) ([]byte, error) {
 	protoKeys := make(map[string]*Key)
 	for name, k := range keys {
@@ -63,7 +63,7 @@ func DeserializeDocumentEntry(data []byte) (tableName, indexName string, key typ
 	return
 }
 
-// DeserializeMultiIndexEntry desserializa uma entrada com múltiplos índices do WAL
+// DeserializeMultiIndexEntry desserializa uma entrada com múltiplos indexs do WAL
 func DeserializeMultiIndexEntry(data []byte) (tableName string, keys map[string]types.Comparable, document []byte, err error) {
 	entry := &MultiIndexEntry{}
 	if err = proto.Unmarshal(data, entry); err != nil {

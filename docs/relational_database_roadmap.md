@@ -18,7 +18,7 @@ Seu storage engine atual possui:
 
 ### 1. **SQL Parser & Lexer**
 
-**O que faz**: Transforma SQL em árvore sintática (AST)
+**O que faz**: Transforma SQL em tree sintática (AST)
 
 ```sql
 SELECT name, price 
@@ -70,7 +70,7 @@ NestedLoopJoin
 Plano Otimizado (O(n log n)):
 HashJoin
   ├── SeqScan(customers WHERE country='BR')  -- Filtra primeiro!
-  └── IndexScan(orders, idx_customer_id)     -- Usa índice!
+  └── IndexScan(orders, idx_customer_id)     -- Usa index!
 ```
 
 **Componentes**:
@@ -98,7 +98,7 @@ pkg/planner/
 #### a) **Scan Operators**
 - `SeqScan`: Varredura sequencial da tabela
 - `IndexScan`: Busca via B+Tree (você já tem!)
-- `BitmapScan`: Combina múltiplos índices
+- `BitmapScan`: Combina múltiplos indexs
 
 #### b) **Join Operators**
 - `NestedLoopJoin`: Loop sobre tabelas (simples, O(n²))
@@ -125,12 +125,12 @@ pkg/executor/
   └── projection.go     # SELECT columns
 ```
 
-**Exemplo de Executor**:
+**Example de Executor**:
 ```go
 type Executor interface {
-    Open() error
-    Next() (Row, error)  // Iterator pattern
-    Close() error
+    Open() errorr
+    Next() (Row, errorr)  // Iterator pattern
+    Close() errorr
 }
 
 type HashJoinExecutor struct {
@@ -139,7 +139,7 @@ type HashJoinExecutor struct {
     condition   JoinCondition
 }
 
-func (hj *HashJoinExecutor) Next() (Row, error) {
+func (hj *HashJoinExecutor) Next() (Row, errorr) {
     // Build phase: hash da tabela menor
     // Probe phase: busca na hash table
 }
@@ -162,7 +162,7 @@ CREATE TABLE users (
 ```
 
 **Componentes**:
-- **Catalog/System Tables**: Metadados persistidos
+- **Catalog/System Tables**: Metadata persistidos
   - `pg_tables`: Lista de tabelas
   - `pg_columns`: Colunas e tipos
   - `pg_indexes`: Índices
@@ -183,7 +183,7 @@ pkg/catalog/
   └── types.go         # Data types
 ```
 
-**Exemplo**:
+**Example**:
 ```go
 type TableSchema struct {
     Name        string
@@ -276,7 +276,7 @@ pkg/server/
   └── auth.go         # Authentication
 ```
 
-**Exemplo**:
+**Example**:
 ```go
 type Server struct {
     listener net.Listener
@@ -463,14 +463,14 @@ Para um **MVP funcional**, implemente:
 4. ✅ No Aggregations
 5. ✅ TCP Server básico
 
-**Exemplo de query suportada**:
+**Example de query suportada**:
 ```sql
 CREATE TABLE users (id INT, name VARCHAR);
 INSERT INTO users VALUES (1, 'Alice');
 SELECT * FROM users WHERE id = 1;
 ```
 
-Isso já seria um **banco de dados relacional funcional**!
+Isso já seria um **banco de data relacional funcional**!
 
 ---
 

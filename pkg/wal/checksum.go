@@ -10,7 +10,7 @@ func CalculateCRC32(data []byte) uint32 {
 	return crc32.Checksum(data, castagnoliTable)
 }
 
-// ValidateCRC32 verifica se os dados correspondem ao checksum esperado
+// ValidateCRC32 verifica se os dados correspondem ao checksum expected
 func ValidateCRC32(data []byte, expected uint32) bool {
 	return CalculateCRC32(data) == expected
 }

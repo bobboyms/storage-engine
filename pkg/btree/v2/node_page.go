@@ -3,8 +3,8 @@
 // Escopo desta primeira entrega (sub-etapas 5.1–5.3):
 //   - NodePage layout (folha apenas — sem internals)
 //   - Key encoding (IntKey fixo 8 bytes, extensível)
-//   - BTreeV2 com Insert/Get em uma única página
-//   - SEM split, SEM concorrência, SEM sibling traversal
+//   - BTreeV2 com Insert/Get em uma única page
+//   - SEM split, SEM concurrency, SEM sibling traversal
 //
 // Essas limitações são conscientes — queremos validar a fundação antes
 // de subir a complexidade (split + latch crabbing são as partes difíceis
@@ -19,7 +19,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
-// Layout do body de uma página de B+ tree (em bytes):
+// Layout do body de uma page de B+ tree (em bytes):
 //
 //	0..15  NodeHeader (16 bytes)
 //	  byte 0:    NodeType (leaf | internal)
@@ -28,14 +28,14 @@ import (
 //	  byte 4-11: NextLeafPageID (uint64 — only leaves; 0 = none)
 //	  byte 12-15: Reserved
 //
-//	16..fim   vetor de slots (chave + valor), tamanho fixo por slot
+//	16..fim   vetor de slots (key + value), tamanho fixo por slot
 //
 // Slots têm tamanho fixo (= KeySize + ValueSize). Isto simplifica:
 //   - Binary search O(log n)
 //   - Cálculo de capacidade sem percorrer
 //   - Split balanceado (metade do vetor)
 //
-// Trade-off: chaves de tamanho variável (VarcharKey) vão precisar de
+// Trade-off: keys de tamanho variável (VarcharKey) vão precisar de
 // indireção (slot aponta pra offset no body). Por ora, suportamos só
 // IntKey (8 bytes). Extensão em sub-etapa 5.7.
 const (
@@ -48,13 +48,13 @@ const (
 
 // KeySize (8) + ValueSize (8) = 16 bytes por slot. ValueSize é:
 //   - Em leaf: RecordID (int64, aponta pro heap)
-//   - Em internal: PageID filho (uint64, aponta pra próxima página)
+//   - Em internal: PageID filho (uint64, aponta pra próxima page)
 const (
 	IntKeySize   = 8
 	ValueSize    = 8
 	LeafSlotSize = IntKeySize + ValueSize // 16 bytes por par (key, recordID)
 
-	// Internal: os primeiros 8 bytes do body após o header são o
+	// Internal: os primeiros 8 bytes do body after o header são o
 	// "leftmost child" (pointer pra filho esquerdo do primeiro separador).
 	// Depois vêm N slots de (separator, childPageID), 16 bytes cada.
 	LeftmostChildSize = 8
@@ -62,10 +62,10 @@ const (
 )
 
 var (
-	ErrLeafFull     = errors.New("btree/v2: folha sem espaço pra nova chave")
-	ErrInternalFull = errors.New("btree/v2: internal sem espaço pra novo separador")
-	ErrKeyNotFound  = errors.New("btree/v2: chave não encontrada")
-	ErrBadNodeType  = errors.New("btree/v2: tipo de nó inválido")
+	ErrLeafFull     = errors.New("btree/v2: leaf has no space for a new key")
+	ErrInternalFull = errors.New("btree/v2: internal node has no space for a new separator")
+	ErrKeyNotFound  = errors.New("btree/v2: key not found")
+	ErrBadNodeType  = errors.New("btree/v2: invalid node type")
 )
 
 // nodeHeader é a visão decodificada do cabeçalho.
@@ -73,7 +73,7 @@ type nodeHeader struct {
 	nodeType       uint8
 	flags          uint8
 	numKeys        uint16
-	nextLeafPageID pagestore.PageID // 0/Invalid quando não há sibling (último leaf)
+	nextLeafPageID pagestore.PageID // 0/Invalid quando there is no sibling (último leaf)
 }
 
 func (h *nodeHeader) encode(buf []byte) {
@@ -107,7 +107,7 @@ type NodePage struct {
 }
 
 // defaultCompareFn usa comparação int64 (semântica IntKey). Usado como
-// fallback quando testes de NodePage não se importam com semântica de
+// fallback quando testes de NodePage not se importam com semântica de
 // codec (só querem testar mecânica do data structure).
 func defaultCompareFn(a, b uint64) int {
 	ai, bi := int64(a), int64(b)
@@ -120,8 +120,8 @@ func defaultCompareFn(a, b uint64) int {
 	return 0
 }
 
-// InitLeafPage zera a página e grava um header de folha vazia.
-// `maxBodySize` deve ser `pagestore.PageFile.UsableBodySize()` quando
+// InitLeafPage zera a page e grava um header de folha empty.
+// `maxBodySize` must ser `pagestore.PageFile.UsableBodySize()` quando
 // o PageFile tem cifra, ou `pagestore.BodySize` caso contrário.
 // `cmp` define a ordem dos keys — BTreeV2 passa KeyCodec.Compare.
 // Se nil, usa comparação int64 padrão.
@@ -148,7 +148,7 @@ func InitLeafPage(p *pagestore.Page, maxBodySize int, cmp CompareFn) *NodePage {
 	return &NodePage{page: p, body: body, maxBodySize: maxBodySize, cmp: cmp}
 }
 
-// OpenNodePage conecta-se a uma página já inicializada (ex: lida do disco).
+// OpenNodePage conecta-se a uma page já inicializada (ex: lida do disco).
 func OpenNodePage(p *pagestore.Page, maxBodySize int, cmp CompareFn) (*NodePage, error) {
 	body := p.Body()
 	if maxBodySize > len(body) {
@@ -160,7 +160,7 @@ func OpenNodePage(p *pagestore.Page, maxBodySize int, cmp CompareFn) (*NodePage,
 	np := &NodePage{page: p, body: body, maxBodySize: maxBodySize, cmp: cmp}
 	h := np.header()
 	if h.nodeType != NodeTypeLeaf && h.nodeType != NodeTypeInternal {
-		return nil, fmt.Errorf("%w: tipo %d", ErrBadNodeType, h.nodeType)
+		return nil, fmt.Errorf("%w: type %d", ErrBadNodeType, h.nodeType)
 	}
 	return np, nil
 }
@@ -178,7 +178,7 @@ func (np *NodePage) writeHeader(h nodeHeader) {
 // IsLeaf indica se é um nó folha.
 func (np *NodePage) IsLeaf() bool { return np.header().nodeType == NodeTypeLeaf }
 
-// NumKeys devolve quantas chaves estão na página.
+// NumKeys devolve quantas keys estão na page.
 func (np *NodePage) NumKeys() int { return int(np.header().numKeys) }
 
 // NextLeafPageID aponta pro próximo leaf na lista ligada (sibling).
@@ -214,10 +214,10 @@ func (np *NodePage) writeLeafSlot(i int, key uint64, value int64) {
 	binary.LittleEndian.PutUint64(np.body[base+IntKeySize:base+LeafSlotSize], uint64(value))
 }
 
-// binarySearch devolve (índice, achou). Usa np.cmp pra respeitar
+// binarySearch devolve (index, achou). Usa np.cmp pra respeitar
 // a semântica do KeyCodec (ex: IntKey negativo, FloatKey).
-//   - achou=true:  slot[índice].key == key (per cmp)
-//   - achou=false: índice é onde `key` seria inserido pra manter ordem
+//   - achou=true:  slot[index].key == key (per cmp)
+//   - achou=false: index é onde `key` seria inserido pra manter ordem
 func (np *NodePage) binarySearch(key uint64) (int, bool) {
 	n := np.NumKeys()
 	lo, hi := 0, n
@@ -238,7 +238,7 @@ func (np *NodePage) binarySearch(key uint64) (int, bool) {
 }
 
 // LeafInsert insere (key, value) numa folha, mantendo a ordem.
-// Se `key` já existe, atualiza o valor in-place (sem nova alocação de slot).
+// Se `key` já exists, atualiza o value in-place (sem nova alocação de slot).
 // Se `key` é nova e a folha está cheia, retorna ErrLeafFull.
 func (np *NodePage) LeafInsert(key uint64, value int64) error {
 	if !np.IsLeaf() {
@@ -260,7 +260,7 @@ func (np *NodePage) LeafInsert(key uint64, value int64) error {
 	}
 
 	// Shift dos slots >= idx uma posição à direita
-	// (copia de trás pra frente pra evitar sobrescrita)
+	// (copia de trás pra frente pra evitar sobrwrite)
 	for i := int(h.numKeys) - 1; i >= idx; i-- {
 		k, v := np.readLeafSlot(i)
 		np.writeLeafSlot(i+1, k, v)
@@ -272,8 +272,8 @@ func (np *NodePage) LeafInsert(key uint64, value int64) error {
 	return nil
 }
 
-// LeafGet busca `key` na folha. Retorna (valor, true) se achou;
-// (0, false) se a chave não existe.
+// LeafGet busca `key` na folha. Retorna (value, true) se achou;
+// (0, false) se a key does not exist.
 func (np *NodePage) LeafGet(key uint64) (int64, bool) {
 	idx, found := np.binarySearch(key)
 	if !found {
@@ -284,7 +284,7 @@ func (np *NodePage) LeafGet(key uint64) (int64, bool) {
 }
 
 // LeafDelete remove `key` da folha mantendo a ordem dos slots.
-// Retorna false quando a chave não existe.
+// Retorna false quando a key does not exist.
 func (np *NodePage) LeafDelete(key uint64) (bool, error) {
 	if !np.IsLeaf() {
 		return false, ErrBadNodeType
@@ -316,7 +316,7 @@ func (np *NodePage) LeafDelete(key uint64) (bool, error) {
 // Key é uint64 (encoded via KeyCodec); value é int64.
 func (np *NodePage) LeafAt(i int) (uint64, int64) {
 	if i < 0 || i >= np.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: LeafAt índice %d fora de [0, %d)", i, np.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: LeafAt index %d fora de [0, %d)", i, np.NumKeys()))
 	}
 	return np.readLeafSlot(i)
 }
@@ -325,13 +325,13 @@ func (np *NodePage) LeafAt(i int) (uint64, int64) {
 //   - self (left) fica com a metade inferior: slots[0..mid)
 //   - other (right) recebe a metade superior: slots[mid..n)
 //
-// `other` deve ser uma folha vazia (recém-criada via InitLeafPage).
-// Retorna a chave separadora = primeira chave da metade direita.
+// `other` must ser uma folha empty (recém-criada via InitLeafPage).
+// Retorna a key separadora = primeira key da metade direita.
 //
 // O caller é responsável por:
-//   - Alocar a página do `other` via BufferPool
-//   - Atualizar self.nextLeafPageID = other.pageID (esta função NÃO faz)
-//   - Persistir ambas as páginas (MarkDirty)
+//   - Alocar a page do `other` via BufferPool
+//   - Atualizar self.nextLeafPageID = other.pageID (esta função NOT faz)
+//   - Persistir ambas as pages (MarkDirty)
 //
 // Esta função atualiza:
 //   - numKeys em ambas
@@ -341,7 +341,7 @@ func (np *NodePage) splitLeafInto(other *NodePage) uint64 {
 		panic("btree/v2: splitLeafInto requer dois leaf nodes")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitLeafInto requer other vazio")
+		panic("btree/v2: splitLeafInto requer other empty")
 	}
 
 	n := np.NumKeys()
@@ -366,13 +366,13 @@ func (np *NodePage) splitLeafInto(other *NodePage) uint64 {
 	// conhecer o pageID do `other`.
 	np.writeHeader(selfHdr)
 
-	// Separador = primeira chave da metade direita
+	// Separador = primeira key da metade direita
 	sep, _ := other.readLeafSlot(0)
 	return sep
 }
 
 // setNextLeafPageID atualiza o sibling pointer. Chamado pelo BTreeV2
-// após split (quando já conhece o pageID do novo leaf).
+// after split (quando já conhece o pageID do novo leaf).
 func (np *NodePage) setNextLeafPageID(pid pagestore.PageID) {
 	h := np.header()
 	h.nextLeafPageID = pid
@@ -394,7 +394,7 @@ func (np *NodePage) setNextLeafPageID(pid pagestore.PageID) {
 //
 // N separadores → N+1 filhos.
 
-// InitInternalPage zera a página e grava um header de internal node.
+// InitInternalPage zera a page e grava um header de internal node.
 // `leftmost` é o PageID do filho mais à esquerda (c_0).
 // `cmp` define a ordem das keys (BTreeV2 passa KeyCodec.Compare).
 // Se cmp é nil, usa comparação int64 padrão.
@@ -459,7 +459,7 @@ func (np *NodePage) MaxInternalSlots() int {
 }
 
 // internalBinarySearch busca pelo primeiro separador > key (per cmp).
-// Retorna esse índice. Se todos são <= key, retorna numKeys.
+// Retorna esse index. Se todos são <= key, retorna numKeys.
 func (np *NodePage) internalBinarySearch(key uint64) int {
 	n := np.NumKeys()
 	lo, hi := 0, n
@@ -475,10 +475,10 @@ func (np *NodePage) internalBinarySearch(key uint64) int {
 	return lo
 }
 
-// FindChild devolve o PageID do filho cuja sub-árvore contém `key`.
+// FindChild devolve o PageID do filho cuja sub-tree contém `key`.
 func (np *NodePage) FindChild(key uint64) pagestore.PageID {
 	if !np.isInternal() {
-		panic("btree/v2: FindChild chamado em não-internal")
+		panic("btree/v2: FindChild chamado em not-internal")
 	}
 	firstGT := np.internalBinarySearch(key)
 	if firstGT == 0 {
@@ -488,19 +488,19 @@ func (np *NodePage) FindChild(key uint64) pagestore.PageID {
 	return child
 }
 
-// isInternal é helper interno (IsLeaf pública já existe).
+// isInternal é helper interno (IsLeaf pública já exists).
 func (np *NodePage) isInternal() bool {
 	return np.header().nodeType == NodeTypeInternal
 }
 
 // InsertSeparator insere (key, childPageID) numa posição ordenada.
-// Retorna ErrInternalFull se não houver espaço.
+// Retorna ErrInternalFull se not houver espaço.
 //
-// Contrato: o chamador garante que `key` não existe ainda entre os
-// separadores (B+ tree não tem duplicatas em internals). Se existir,
-// este método NÃO detecta — e produz estrutura inválida. Em uso real,
-// isso nunca acontece porque separadores vêm de chaves de leaves que
-// ainda não eram separadores.
+// Contrato: o chamador garante que `key` does not exist ainda entre os
+// separadores (B+ tree not tem duplicatas em internals). Se exist,
+// este método NOT detecta — e produz estrutura invalid. Em uso real,
+// isso nunca acontece porque separadores vêm de keys de leaves que
+// ainda not eram separadores.
 func (np *NodePage) InsertSeparator(key uint64, child pagestore.PageID) error {
 	if !np.isInternal() {
 		return ErrBadNodeType
@@ -510,7 +510,7 @@ func (np *NodePage) InsertSeparator(key uint64, child pagestore.PageID) error {
 		return ErrInternalFull
 	}
 
-	// Posição de inserção: primeiro índice onde sep > key
+	// Posição de inserção: primeiro index onde sep > key
 	idx := np.internalBinarySearch(key)
 
 	// Shift dos slots [idx..n) uma posição à direita
@@ -528,16 +528,16 @@ func (np *NodePage) InsertSeparator(key uint64, child pagestore.PageID) error {
 // e pra split. Pânico fora do intervalo.
 func (np *NodePage) InternalAt(i int) (uint64, pagestore.PageID) {
 	if i < 0 || i >= np.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: InternalAt índice %d fora de [0, %d)", i, np.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: InternalAt index %d fora de [0, %d)", i, np.NumKeys()))
 	}
 	return np.readInternalSlot(i)
 }
 
-// splitInternalInto divide este internal em dois, promovendo a chave
+// splitInternalInto divide este internal em dois, promovendo a key
 // do meio pro parent. Diferente do leaf split:
 //
 //	Leaf:     k_mid vai PRO RIGHT (separador duplicado)
-//	Internal: k_mid é PROMOVIDA — não fica em left nem em right
+//	Internal: k_mid é PROMOVIDA — not fica em left nem em right
 //
 // Layout antes (n separadores, n+1 filhos):
 //
@@ -551,7 +551,7 @@ func (np *NodePage) InternalAt(i int) (uint64, pagestore.PageID) {
 //	  → n-mid-1 separadores, n-mid filhos
 //	promoted: k_mid
 //
-// Retorna a chave promovida. O caller é responsável por:
+// Retorna a key promovida. O caller é responsável por:
 //   - Alocar o `other` via BufferPool
 //   - Inserir `promoted` no parent (com pointer pra `other`)
 //   - MarkDirty em ambos
@@ -560,13 +560,13 @@ func (np *NodePage) splitInternalInto(other *NodePage) uint64 {
 		panic("btree/v2: splitInternalInto requer dois internal nodes")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitInternalInto requer other vazio")
+		panic("btree/v2: splitInternalInto requer other empty")
 	}
 
 	n := np.NumKeys()
 	mid := n / 2
 
-	// k_mid é a chave promovida; seu child c_{mid+1} (= slot[mid].child)
+	// k_mid é a key promovida; seu child c_{mid+1} (= slot[mid].child)
 	// vira o leftmost de other.
 	promoted, rightLeftmost := np.readInternalSlot(mid)
 	other.setLeftmostChild(rightLeftmost)

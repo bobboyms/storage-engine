@@ -15,21 +15,21 @@ import (
 var osStat = os.Stat
 
 var (
-	ErrInvalidMagic      = errors.New("arquivo WAL inválido: magic number incorreto")
-	ErrChecksumMismatch  = errors.New("corrupção de dados: checksum CRC32 inválido")
-	ErrInvalidPayloadLen = errors.New("tamanho de payload inválido ou excessivo")
-	ErrDecryptFailed     = errors.New("falha ao decifrar payload do WAL (chave inválida ou dado adulterado)")
+	ErrInvalidMagic      = errors.New("invalid WAL file: incorrect magic number")
+	ErrChecksumMismatch  = errors.New("data corruption: invalid CRC32 checksum")
+	ErrInvalidPayloadLen = errors.New("invalid or excessive payload length")
+	ErrDecryptFailed     = errors.New("failed to decrypt WAL payload (invalid key or tampered data)")
 )
 
 // WALReader lê entradas sequenciais do log. Backend: pagestore.PageFile.
-// Acumula bytes das páginas num buffer interno e parseia entries conforme
-// aparecem completos; entries que cruzam páginas são remontados sem problema.
+// Acumula bytes das pages num buffer interno e parseia entries conforme
+// aparecem completos; entries que cruzam pages são remontados sem problema.
 type WALReader struct {
 	pf             *pagestore.PageFile
-	nextPageID     pagestore.PageID // próxima página a carregar no buffer
-	buffer         []byte           // bytes carregados mas ainda não consumidos
+	nextPageID     pagestore.PageID // próxima page a carregar no buffer
+	buffer         []byte           // bytes carregados mas ainda not consumidos
 	usableBodySize int
-	exhausted      bool // true quando já lemos todas as páginas de todos os segmentos
+	exhausted      bool // true quando já lemos todas as pages de todos os segmentos
 	paths          []string
 	pathIndex      int
 	cipher         crypto.Cipher
@@ -40,11 +40,11 @@ func NewWALReader(path string) (*WALReader, error) {
 	return NewWALReaderWithCipher(path, nil)
 }
 
-// NewWALReaderWithCipher cria um leitor que decifra páginas via pagestore.
+// NewWALReaderWithCipher cria um leitor que decifra pages via pagestore.
 // Passe nil para `cipher` pra ler logs em claro.
 //
-// Falha com erro se o arquivo não existe (ao contrário do writer, que
-// cria). Semântica esperada: leitor só trabalha com WAL existente.
+// Falha com erro se o arquivo does not exist (ao contrário do writer, que
+// cria). Semântica esperada: leitor só trabalha com WAL existsnte.
 func NewWALReaderWithCipher(path string, cipher crypto.Cipher) (*WALReader, error) {
 	paths, err := SegmentPaths(path)
 	if err != nil {
@@ -72,7 +72,7 @@ func newWALReaderForPaths(paths []string, cipher crypto.Cipher) (*WALReader, err
 	}
 	pf, err := pagestore.NewPageFile(paths[0], cipher)
 	if err != nil {
-		return nil, fmt.Errorf("wal: abrir page file: %w", err)
+		return nil, fmt.Errorf("wal: open page file: %w", err)
 	}
 
 	return &WALReader{
@@ -93,7 +93,7 @@ func (r *WALReader) ReadEntry() (*WALEntry, error) {
 			return nil, err
 		}
 		if !loaded {
-			// Sem mais páginas
+			// Sem mais pages
 			if len(r.buffer) == 0 {
 				return nil, io.EOF
 			}
@@ -138,7 +138,7 @@ func (r *WALReader) ReadEntry() (*WALEntry, error) {
 		return nil, ErrChecksumMismatch
 	}
 
-	// 5. Constrói entry (copia payload pra não compartilhar buffer interno)
+	// 5. Constrói entry (copia payload pra not compartilhar buffer interno)
 	entry := AcquireEntry()
 	entry.Header = header
 	if uint32(cap(entry.Payload)) < header.PayloadLen {
@@ -153,14 +153,14 @@ func (r *WALReader) ReadEntry() (*WALEntry, error) {
 	return entry, nil
 }
 
-// loadNextPage carrega a próxima página no buffer. Retorna (true, nil)
-// se carregou; (false, nil) se não há mais páginas; (false, err) em erro.
+// loadNextPage carrega a próxima page no buffer. Retorna (true, nil)
+// se carregou; (false, nil) se there is no mais pages; (false, err) em erro.
 //
 // Semântica de erros:
 //   - PageOutOfRange (i.e., passamos do fim) → EOF limpo, sem erro
 //   - Checksum mismatch → ErrChecksumMismatch (possível tamper/bit-flip)
-//   - Decrypt failed → ErrDecryptFailed (chave errada ou tamper autenticado)
-//   - Magic inválido → ErrInvalidMagic (não é um WAL ou corrompido cedo)
+//   - Decrypt failed → ErrDecryptFailed (key errada ou tamper autenticado)
+//   - Magic invalid → ErrInvalidMagic (not é um WAL ou corrupted cedo)
 func (r *WALReader) loadNextPage() (bool, error) {
 	if r.exhausted {
 		return false, nil
@@ -199,7 +199,7 @@ func (r *WALReader) loadNextPage() (bool, error) {
 	bytesUsed := binary.LittleEndian.Uint16(page.Body()[0:2])
 	if int(bytesUsed) > r.usableBodySize-walPageHeaderSize {
 		r.exhausted = true
-		return false, fmt.Errorf("wal: bytesUsed %d na página %d excede limite", bytesUsed, r.nextPageID)
+		return false, fmt.Errorf("wal: bytesUsed %d on page %d exceeds limit", bytesUsed, r.nextPageID)
 	}
 
 	if bytesUsed > 0 {

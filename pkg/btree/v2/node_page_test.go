@@ -10,7 +10,7 @@ import (
 // errorsIs é wrapper pra encurtar chamadas de errors.Is nos testes.
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
 
-// Helper: cria um NodePage vazio (folha). Usa cmp default (int64 ordering).
+// Helper: cria um NodePage empty (folha). Usa cmp default (int64 ordering).
 func newLeafPage(t *testing.T) (*pagestore.Page, *NodePage) {
 	t.Helper()
 	var p pagestore.Page
@@ -32,7 +32,7 @@ func TestNodePage_LeafInsertAndGet(t *testing.T) {
 	}
 
 	if np.NumKeys() != 3 {
-		t.Fatalf("esperava 3 chaves, recebi %d", np.NumKeys())
+		t.Fatalf("expected 3 keys, got %d", np.NumKeys())
 	}
 
 	type kv struct {
@@ -43,15 +43,15 @@ func TestNodePage_LeafInsertAndGet(t *testing.T) {
 	for i, w := range want {
 		k, v := np.LeafAt(i)
 		if k != w.k || v != w.v {
-			t.Fatalf("slot %d: esperado (%d,%d), recebi (%d,%d)", i, w.k, w.v, k, v)
+			t.Fatalf("slot %d: expected (%d,%d), got (%d,%d)", i, w.k, w.v, k, v)
 		}
 	}
 
 	if v, ok := np.LeafGet(20); !ok || v != 2000 {
-		t.Fatalf("Get(20): esperado (2000,true), recebi (%d,%v)", v, ok)
+		t.Fatalf("Get(20): expected (2000,true), got (%d,%v)", v, ok)
 	}
 	if _, ok := np.LeafGet(99); ok {
-		t.Fatal("Get(99) em chave inexistente deveria retornar ok=false")
+		t.Fatal("Get(99) em key inexistsnte should return ok=false")
 	}
 }
 
@@ -62,10 +62,10 @@ func TestNodePage_LeafDuplicateKey_Updates(t *testing.T) {
 	_ = np.LeafInsert(42, 999)
 
 	if np.NumKeys() != 1 {
-		t.Fatalf("inserção duplicada não deveria criar slot novo; NumKeys=%d", np.NumKeys())
+		t.Fatalf("inserção duplicada not should criar slot novo; NumKeys=%d", np.NumKeys())
 	}
 	if v, _ := np.LeafGet(42); v != 999 {
-		t.Fatalf("valor não foi atualizado: %d", v)
+		t.Fatalf("value was not atualizado: %d", v)
 	}
 }
 
@@ -88,11 +88,11 @@ func TestNodePage_LeafDelete(t *testing.T) {
 		t.Fatalf("LeafDelete: %v", err)
 	}
 	if !removed {
-		t.Fatal("LeafDelete deveria remover chave existente")
+		t.Fatal("LeafDelete should remover key existsnte")
 	}
 
 	if np.NumKeys() != 3 {
-		t.Fatalf("esperava 3 chaves após delete, recebi %d", np.NumKeys())
+		t.Fatalf("expected 3 keys after delete, got %d", np.NumKeys())
 	}
 
 	want := []struct {
@@ -104,15 +104,15 @@ func TestNodePage_LeafDelete(t *testing.T) {
 	for i, w := range want {
 		k, v := np.LeafAt(i)
 		if k != w.key || v != w.val {
-			t.Fatalf("slot %d: esperado (%d,%d), recebi (%d,%d)", i, w.key, w.val, k, v)
+			t.Fatalf("slot %d: expected (%d,%d), got (%d,%d)", i, w.key, w.val, k, v)
 		}
 	}
 
 	if _, found := np.LeafGet(20); found {
-		t.Fatal("chave deletada não deveria existir")
+		t.Fatal("key deleted not should exist")
 	}
 	if removed, err := np.LeafDelete(999); err != nil || removed {
-		t.Fatalf("delete de chave ausente: removed=%v err=%v", removed, err)
+		t.Fatalf("delete de key ausente: removed=%v err=%v", removed, err)
 	}
 }
 
@@ -127,14 +127,14 @@ func TestNodePage_LeafFull(t *testing.T) {
 	}
 
 	if err := np.LeafInsert(uint64(max), 999); !errorsIs(err, ErrLeafFull) {
-		t.Fatalf("esperava ErrLeafFull, recebi: %v", err)
+		t.Fatalf("expected ErrLeafFull, got: %v", err)
 	}
 
 	if err := np.LeafInsert(0, 7777); err != nil {
-		t.Fatalf("update de chave existente em leaf cheia deveria funcionar: %v", err)
+		t.Fatalf("update de key existsnte em leaf cheia should funcionar: %v", err)
 	}
 	if v, _ := np.LeafGet(0); v != 7777 {
-		t.Fatal("update in-place falhou")
+		t.Fatal("update in-place failed")
 	}
 }
 
@@ -142,12 +142,12 @@ func TestNodePage_InitLeaf_Empty(t *testing.T) {
 	_, np := newLeafPage(t)
 
 	if !np.IsLeaf() {
-		t.Fatal("página recém-init como leaf deveria reportar IsLeaf=true")
+		t.Fatal("page freshly initialized como leaf should reportar IsLeaf=true")
 	}
 	if np.NumKeys() != 0 {
-		t.Fatalf("leaf recém-init deveria ter 0 chaves, tem %d", np.NumKeys())
+		t.Fatalf("leaf freshly initialized should have 0 keys, tem %d", np.NumKeys())
 	}
 	if np.NextLeafPageID() != pagestore.InvalidPageID {
-		t.Fatal("NextLeaf deveria ser Invalid (sem sibling)")
+		t.Fatal("NextLeaf should be Invalid (sem sibling)")
 	}
 }

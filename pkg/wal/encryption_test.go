@@ -71,7 +71,7 @@ func TestWAL_Encryption_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Confirma que o arquivo NÃO contém o plaintext em claro
+	// Confirma que o arquivo NOT contém o plaintext em claro
 	raw, _ := os.ReadFile(path)
 	for i, p := range payloads {
 		if bytes.Contains(raw, p) {
@@ -79,7 +79,7 @@ func TestWAL_Encryption_RoundTrip(t *testing.T) {
 		}
 	}
 
-	// Lê de volta usando a mesma chave — deve recuperar o plaintext
+	// Lê de volta usando a mesma key — must recuperar o plaintext
 	r, err := NewWALReaderWithCipher(path, cipher)
 	if err != nil {
 		t.Fatal(err)
@@ -92,10 +92,10 @@ func TestWAL_Encryption_RoundTrip(t *testing.T) {
 			t.Fatalf("ReadEntry %d: %v", i, err)
 		}
 		if !bytes.Equal(entry.Payload, expected) {
-			t.Fatalf("payload %d: esperava %q, recebi %q", i, expected, entry.Payload)
+			t.Fatalf("payload %d: expected %q, got %q", i, expected, entry.Payload)
 		}
 		if entry.Header.LSN != uint64(i+1) {
-			t.Fatalf("entry %d: LSN esperado %d, recebi %d", i, i+1, entry.Header.LSN)
+			t.Fatalf("entry %d: LSN expected %d, got %d", i, i+1, entry.Header.LSN)
 		}
 	}
 }
@@ -116,20 +116,20 @@ func TestWAL_Encryption_WrongKey(t *testing.T) {
 	_ = w.WriteEntry(entry)
 	w.Close()
 
-	// Lê com uma chave DIFERENTE — decifragem deve falhar
+	// Lê com uma key DIFERENTE — decifragem must fail
 	r, _ := NewWALReaderWithCipher(path, newCipher(t))
 	defer r.Close()
 
 	_, err := r.ReadEntry()
 	if !errors.Is(err, ErrDecryptFailed) {
-		t.Fatalf("esperava ErrDecryptFailed, recebi: %v", err)
+		t.Fatalf("expected ErrDecryptFailed, got: %v", err)
 	}
 }
 
 func TestWAL_Encryption_TamperDetected(t *testing.T) {
-	// Novo layout: WAL usa pagestore (páginas 8KB). PageHeader ocupa bytes
+	// Novo layout: WAL usa pagestore (pages 8KB). PageHeader ocupa bytes
 	// 0..31 do arquivo; ciphertext do body ocupa 32..8191. Tamperar byte
-	// dentro do ciphertext quebra o CRC da página OU a auth tag do AES-GCM.
+	// dentro do ciphertext quebra o CRC da page OU a auth tag do AES-GCM.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal.log")
 	cipher := newCipher(t)
@@ -147,8 +147,8 @@ func TestWAL_Encryption_TamperDetected(t *testing.T) {
 	w.Close()
 
 	// Pagestore reserva pageID 0 (offset 0..8191 em zeros). Páginas
-	// escritas começam no pageID 1 (offset 8192). Byte 8192+100 cai
-	// dentro do body cifrado da primeira página gravada.
+	// writes começam no pageID 1 (offset 8192). Byte 8192+100 cai
+	// dentro do body cifrado da primeira page gravada.
 	raw, _ := os.ReadFile(path)
 	raw[8192+100] ^= 0x01
 	os.WriteFile(path, raw, 0644)
@@ -160,13 +160,13 @@ func TestWAL_Encryption_TamperDetected(t *testing.T) {
 	// dispara checksum OU decrypt dependendo de onde o tamper caiu.
 	_, err := r.ReadEntry()
 	if !errors.Is(err, ErrChecksumMismatch) && !errors.Is(err, ErrDecryptFailed) {
-		t.Fatalf("esperava ChecksumMismatch ou DecryptFailed, recebi: %v", err)
+		t.Fatalf("expected ChecksumMismatch ou DecryptFailed, got: %v", err)
 	}
 }
 
 func TestWAL_Encryption_AADBoundToPageID(t *testing.T) {
-	// Semântica nova: AAD da cifra é o PageID (via pagestore), NÃO o LSN
-	// da entry. Prova: copiar bytes da página 2 pro lugar da página 1
+	// Semântica nova: AAD da cifra é o PageID (via pagestore), NOT o LSN
+	// da entry. Prova: copiar bytes da page 2 pro lugar da page 1
 	// quebra a autenticação — mesmo ciphertext, PageID diferente.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal.log")
@@ -176,7 +176,7 @@ func TestWAL_Encryption_AADBoundToPageID(t *testing.T) {
 	opts.SyncPolicy = SyncEveryWrite
 	opts.Cipher = cipher
 
-	// Escreve entries grandes pra forçar >= 2 páginas
+	// Escreve entries grandes pra forçar >= 2 pages
 	w, _ := NewWALWriter(path, opts)
 	big := make([]byte, 5000)
 	for i := 0; i < len(big); i++ {
@@ -194,28 +194,28 @@ func TestWAL_Encryption_AADBoundToPageID(t *testing.T) {
 	w.Close()
 
 	// Estrutura no disco: PageFile reserva pageID 0 (offset 0..8191 em zeros).
-	// Páginas escritas começam no pageID 1 (offset 8192) e avançam.
-	// Copia body da página 2 (offset 16384..24575) pra página 1 (offset 8192..16383).
+	// Páginas writes começam no pageID 1 (offset 8192) e avançam.
+	// Copia body da page 2 (offset 16384..24575) pra page 1 (offset 8192..16383).
 	raw, _ := os.ReadFile(path)
 	if len(raw) < 3*8192 {
-		t.Fatalf("arquivo curto demais (%d bytes) pra ter 3 páginas", len(raw))
+		t.Fatalf("arquivo curto demais (%d bytes) pra ter 3 pages", len(raw))
 	}
-	// Copia body inteiro (32..8191) da página 2 pra página 1. O header da
-	// página fica intacto — sem isso o checksum falharia primeiro. Mas o
-	// AAD=PageID da pagestore ainda é diferente → AES-GCM auth falha.
+	// Copia body inteiro (32..8191) da page 2 pra page 1. O header da
+	// page fica intacto — sem isso o checksum failia primeiro. Mas o
+	// AAD=PageID da pagestore ainda é diferente → AES-GCM auth failure.
 	copy(raw[8192+32:16384], raw[16384+32:24576])
-	// Atualiza o checksum do body da página 1 pra bypassar essa defesa
-	// (senão o teste pararia no checksum em vez de provar o AAD).
-	// NOTA: não temos acesso fácil ao CRC da pagestore aqui, então
+	// Atualiza o checksum do body da page 1 pra bypassar essa defesa
+	// (otherwise o teste pararia no checksum em vez de provar o AAD).
+	// NOTA: not temos acesso fácil ao CRC da pagestore aqui, então
 	// simplesmente aceitamos QUALQUER erro de auth como prova do AAD.
 	os.WriteFile(path, raw, 0644)
 
 	r, _ := NewWALReaderWithCipher(path, cipher)
 	defer r.Close()
 
-	// Iterar entries — em algum momento a página 1 (swapada) é lida e o
+	// Iterar entries — em algum momento a page 1 (swapada) é lida e o
 	// erro aparece. Checksum ou decrypt — ambos provam que a integridade
-	// foi quebrada (e especificamente pelo AAD=PageID, não pelo LSN).
+	// foi quebrada (e especificamente pelo AAD=PageID, not pelo LSN).
 	var readErr error
 	for i := 0; i < 10; i++ {
 		entry, err := r.ReadEntry()
@@ -231,22 +231,22 @@ func TestWAL_Encryption_AADBoundToPageID(t *testing.T) {
 		}
 	}
 	if readErr == nil {
-		t.Fatal("esperava erro de integridade, leu tudo sem problema")
+		t.Fatal("expected erro de integridade, leu tudo sem problema")
 	}
 	if !errors.Is(readErr, ErrChecksumMismatch) && !errors.Is(readErr, ErrDecryptFailed) {
-		t.Fatalf("esperava ChecksumMismatch ou DecryptFailed, recebi: %v", readErr)
+		t.Fatalf("expected ChecksumMismatch ou DecryptFailed, got: %v", readErr)
 	}
 }
 
 func TestWAL_Encryption_BackwardCompatible(t *testing.T) {
-	// Sem Cipher em Options, o WAL deve funcionar exatamente como antes:
+	// Sem Cipher em Options, o WAL must funcionar exatamente como antes:
 	// bytes em claro no disco, Reader sem cipher lê normalmente.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal.log")
 
 	opts := DefaultOptions()
 	opts.SyncPolicy = SyncEveryWrite
-	// opts.Cipher intencionalmente não definido
+	// opts.Cipher intencionalmente not definido
 
 	w, _ := NewWALWriter(path, opts)
 	payload := []byte(`{"plain":"text"}`)
@@ -267,7 +267,7 @@ func TestWAL_Encryption_BackwardCompatible(t *testing.T) {
 	// Verifica que os bytes do payload aparecem em claro no arquivo
 	raw, _ := os.ReadFile(path)
 	if !bytes.Contains(raw, payload) {
-		t.Fatal("payload deveria estar em claro quando Cipher não é configurado")
+		t.Fatal("payload should be em claro quando Cipher is not configurado")
 	}
 
 	// Reader legado lê sem problemas
@@ -278,6 +278,6 @@ func TestWAL_Encryption_BackwardCompatible(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Payload, payload) {
-		t.Fatalf("esperava %q, recebi %q", payload, got.Payload)
+		t.Fatalf("expected %q, got %q", payload, got.Payload)
 	}
 }

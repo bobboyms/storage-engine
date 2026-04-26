@@ -7,7 +7,7 @@ import (
 // LSNTracker gerencia o Log Sequence Number de forma thread-safe
 type LSNTracker struct {
 	current uint64
-	// Utilizando sync.Mutex para operações que não são puramente atômicas se necessário,
+	// Utilizando sync.Mutex para operações que are not puramente atômicas se necessário,
 	// mas para um contador simples, atomic é suficiente e mais rápido.
 	// Mantemos a struct preparada para lógica mais complexa se precisar.
 }

@@ -63,7 +63,7 @@ func TestHeapV2_WriteRead_Single(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 	if rid <= 0 {
-		t.Fatalf("RecordID deveria ser > 0, recebi %d", rid)
+		t.Fatalf("RecordID should be > 0, got %d", rid)
 	}
 
 	gotDoc, hdr, err := h.Read(rid)
@@ -74,30 +74,30 @@ func TestHeapV2_WriteRead_Single(t *testing.T) {
 		t.Fatalf("doc divergente: %q != %q", gotDoc, doc)
 	}
 	if !hdr.Valid {
-		t.Fatal("Valid deveria ser true em registro recém-escrito")
+		t.Fatal("Valid should be true em record recém-escrito")
 	}
 	if hdr.CreateLSN != 100 {
-		t.Fatalf("CreateLSN esperado 100, recebi %d", hdr.CreateLSN)
+		t.Fatalf("CreateLSN expected 100, got %d", hdr.CreateLSN)
 	}
 	if hdr.PrevRecordID != NoRecordID {
-		t.Fatalf("PrevRecordID esperado NoRecordID, recebi %d", hdr.PrevRecordID)
+		t.Fatalf("PrevRecordID expected NoRecordID, got %d", hdr.PrevRecordID)
 	}
 }
 
 func TestHeapV2_WriteSpansMultiplePages(t *testing.T) {
-	// Insere registros até forçar pelo menos 2 páginas, depois lê todos.
+	// Insere records até forçar pelo menos 2 pages, depois lê todos.
 	// Valida que:
-	//  1. Write sabe alocar página nova quando a ativa enche.
-	//  2. RecordIDs em páginas diferentes são únicos e decodificáveis.
-	//  3. Read consegue recuperar de qualquer página.
+	//  1. Write sabe alocar page nova quando a ativa enche.
+	//  2. RecordIDs em pages diferentes são únicos e decodificáveis.
+	//  3. Read consegue recuperar de qualquer page.
 	h := newHeap(t, nil)
 
-	bigDoc := make([]byte, 1000) // ~8 registros por página
+	bigDoc := make([]byte, 1000) // ~8 records por page
 	for i := range bigDoc {
 		bigDoc[i] = byte(i % 251)
 	}
 
-	const total = 30 // força várias rotações de página
+	const total = 30 // força várias rotações de page
 	rids := make([]int64, total)
 	seen := make(map[int64]bool, total)
 	pageSet := make(map[uint64]struct{})
@@ -118,7 +118,7 @@ func TestHeapV2_WriteSpansMultiplePages(t *testing.T) {
 	}
 
 	if len(pageSet) < 2 {
-		t.Fatalf("esperava >= 2 páginas usadas, usei %d", len(pageSet))
+		t.Fatalf("expected >= 2 pages usadas, usei %d", len(pageSet))
 	}
 
 	// Lê tudo de volta
@@ -131,7 +131,7 @@ func TestHeapV2_WriteSpansMultiplePages(t *testing.T) {
 			t.Fatalf("doc %d divergente", i)
 		}
 		if hdr.CreateLSN != uint64(i+1) {
-			t.Fatalf("CreateLSN %d: esperado %d, recebi %d", i, i+1, hdr.CreateLSN)
+			t.Fatalf("CreateLSN %d: expected %d, got %d", i, i+1, hdr.CreateLSN)
 		}
 	}
 }
@@ -140,7 +140,7 @@ func TestHeapV2_CloseReopen_PreservesData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "heap.db")
 	cipher := makeCipher(t) // exercita TDE de ponta a ponta
 
-	// Escreve alguns registros e fecha
+	// Escreve alguns records e fecha
 	h1 := newHeapAt(t, path, cipher)
 	docs := [][]byte{
 		[]byte(`primeiro`),
@@ -159,7 +159,7 @@ func TestHeapV2_CloseReopen_PreservesData(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Reabre com a MESMA chave
+	// Reabre com a MESMA key
 	h2, err := NewHeapV2(path, 16, cipher)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -169,24 +169,24 @@ func TestHeapV2_CloseReopen_PreservesData(t *testing.T) {
 	for i, expected := range docs {
 		got, hdr, err := h2.Read(rids[i])
 		if err != nil {
-			t.Fatalf("Read pós-reopen %d: %v", i, err)
+			t.Fatalf("Read after reopen %d: %v", i, err)
 		}
 		if !bytes.Equal(got, expected) {
-			t.Fatalf("doc %d: esperado %q, recebi %q", i, expected, got)
+			t.Fatalf("doc %d: expected %q, got %q", i, expected, got)
 		}
 		if hdr.CreateLSN != uint64(i+1) {
 			t.Fatalf("LSN %d divergente", i)
 		}
 	}
 
-	// E consegue continuar escrevendo (adota última página como ativa)
+	// E consegue continuar escrevendo (adota última page como ativa)
 	rid, err := h2.Write([]byte(`quarto`), 99, NoRecordID)
 	if err != nil {
-		t.Fatalf("Write pós-reopen: %v", err)
+		t.Fatalf("Write after reopen: %v", err)
 	}
 	got, _, _ := h2.Read(rid)
 	if !bytes.Equal(got, []byte(`quarto`)) {
-		t.Fatal("write pós-reopen corrompido")
+		t.Fatal("write after reopen corrupted")
 	}
 }
 
@@ -243,21 +243,21 @@ func TestHeapV2_Concurrent_WritesAndReads(t *testing.T) {
 	wg.Wait()
 
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros durante execução concorrente", errCount.Load())
+		t.Fatalf("%d erros durante execução concurrent", errCount.Load())
 	}
 }
 
 func TestHeapV2_RecordTooLarge(t *testing.T) {
 	h := newHeap(t, nil)
 
-	huge := make([]byte, 10000) // > 8KB, não cabe numa página
+	huge := make([]byte, 10000) // > 8KB, not cabe numa page
 	if _, err := h.Write(huge, 1, NoRecordID); !errors.Is(err, ErrRecordTooLarge) {
-		t.Fatalf("esperava ErrRecordTooLarge, recebi: %v", err)
+		t.Fatalf("expected ErrRecordTooLarge, got: %v", err)
 	}
 }
 
 func TestHeapV2_Delete_LazyPreservesDoc(t *testing.T) {
-	// Invariante MVCC: delete NÃO apaga os bytes — só marca Valid=false
+	// Invariante MVCC: delete NOT apaga os bytes — só marca Valid=false
 	// e seta DeleteLSN. Read continua devolvendo o doc.
 	h := newHeap(t, nil)
 
@@ -270,19 +270,19 @@ func TestHeapV2_Delete_LazyPreservesDoc(t *testing.T) {
 
 	gotDoc, hdr, err := h.Read(rid)
 	if err != nil {
-		t.Fatalf("Read pós-delete: %v", err)
+		t.Fatalf("Read after delete: %v", err)
 	}
 	if !bytes.Equal(gotDoc, doc) {
 		t.Fatal("doc foi perdido no delete lazy")
 	}
 	if hdr.Valid {
-		t.Fatal("Valid deveria ser false")
+		t.Fatal("Valid should be false")
 	}
 	if hdr.DeleteLSN != 20 {
-		t.Fatalf("DeleteLSN esperado 20, recebi %d", hdr.DeleteLSN)
+		t.Fatalf("DeleteLSN expected 20, got %d", hdr.DeleteLSN)
 	}
 	if hdr.CreateLSN != 10 {
-		t.Fatalf("CreateLSN deveria ser preservado (10), recebi %d", hdr.CreateLSN)
+		t.Fatalf("CreateLSN should be preservado (10), got %d", hdr.CreateLSN)
 	}
 }
 
@@ -303,11 +303,11 @@ func TestHeapV2_WriteRead_Multiple_SamePage(t *testing.T) {
 		rids[i] = rid
 	}
 
-	// Todos os três devem estar na mesma página (são pequenos)
+	// Todos os três mustm estar na mesma page (são pequenos)
 	pid0, _ := DecodeRecordID(rids[0])
 	pid2, _ := DecodeRecordID(rids[2])
 	if pid0 != pid2 {
-		t.Fatalf("esperava mesma página, recebi %d e %d", pid0, pid2)
+		t.Fatalf("expected mesma page, got %d e %d", pid0, pid2)
 	}
 
 	for i, expected := range docs {
@@ -322,10 +322,10 @@ func TestHeapV2_WriteRead_Multiple_SamePage(t *testing.T) {
 }
 
 // TestHeapV2_Vacuum_PopulatesFSM verifica que Vacuum registra espaço livre
-// no FSM após compactar páginas com tombstones, e que o espaço reportado
-// é maior do que antes (mais slots livres após compactação).
+// no FSM after compactar pages com tombstones, e que o espaço reportado
+// é maior do que antes (mais slots livres after compactação).
 func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
-	// Heap com pool amplo para não forçar flush inesperado
+	// Heap com pool amplo para not forçar flush inexpected
 	path := filepath.Join(t.TempDir(), "heap.db")
 	h, err := NewHeapV2(path, 32, nil)
 	if err != nil {
@@ -333,8 +333,8 @@ func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
 	}
 	defer h.Close()
 
-	// Insere registros suficientes para preencher pelo menos uma página.
-	// Usa docs grandes (500 bytes) para garantir que ficam em página única.
+	// Insere records suficientes para preencher pelo menos uma page.
+	// Usa docs grandes (500 bytes) para garantir que ficam em page única.
 	doc := bytes.Repeat([]byte("x"), 500)
 	var rids []int64
 	for i := 0; i < 3; i++ {
@@ -345,7 +345,7 @@ func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
 		rids = append(rids, rid)
 	}
 
-	// Captura espaço livre da primeira página via FSM antes dos deletes.
+	// Captura espaço livre da primeira page via FSM antes dos deletes.
 	pid0, _ := DecodeRecordID(rids[0])
 	freeBeforeVacuum := 0
 	h.FSM().mu.Lock()
@@ -354,23 +354,23 @@ func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
 	}
 	h.FSM().mu.Unlock()
 
-	// Deleta todos os registros para gerar tombstones.
+	// Deleta todos os records para gerar tombstones.
 	for i, rid := range rids {
 		if err := h.Delete(rid, uint64(10+i)); err != nil {
 			t.Fatalf("Delete %d: %v", i, err)
 		}
 	}
 
-	// Vacuum com minLSN alto → todos os tombstones reclamados.
+	// Vacuum com minLSN alto → todos os tombstones reclaimed.
 	n, err := h.Vacuum(100)
 	if err != nil {
 		t.Fatalf("Vacuum: %v", err)
 	}
 	if n == 0 {
-		t.Fatal("Vacuum deveria ter reclamado ao menos um slot")
+		t.Fatal("Vacuum should have reclaimdo ao menos um slot")
 	}
 
-	// Após vacuum, o FSM deve reportar MAIS espaço livre na página (slots reclamados).
+	// Após vacuum, o FSM must reportar MAIS espaço livre na page (slots reclaimed).
 	freeAfterVacuum := 0
 	h.FSM().mu.Lock()
 	if f, ok := h.FSM().pages[pid0]; ok {
@@ -379,13 +379,13 @@ func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
 	h.FSM().mu.Unlock()
 
 	if freeAfterVacuum <= freeBeforeVacuum {
-		t.Fatalf("FSM deveria reportar mais espaço após Vacuum: antes=%d, depois=%d",
+		t.Fatalf("FSM should reportar mais espaço after Vacuum: antes=%d, depois=%d",
 			freeBeforeVacuum, freeAfterVacuum)
 	}
 }
 
 // TestHeapV2_FSM_ReusesVacuumedSpace verifica que Write reutiliza espaço
-// liberado pelo Vacuum via FSM em vez de sempre alocar nova página.
+// liberado pelo Vacuum via FSM em vez de sempre alocar nova page.
 func TestHeapV2_FSM_ReusesVacuumedSpace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "heap.db")
 	h, err := NewHeapV2(path, 8, nil)
@@ -408,7 +408,7 @@ func TestHeapV2_FSM_ReusesVacuumedSpace(t *testing.T) {
 	}
 
 	if h.FSM().Len() == 0 {
-		t.Skip("página não compactada (muito espaço em uso), pulando teste de reuso")
+		t.Skip("page not compactada (muito espaço em uso), pulando teste de reuso")
 	}
 
 	rid2, err := h.Write(doc, 3, -1)
@@ -417,9 +417,9 @@ func TestHeapV2_FSM_ReusesVacuumedSpace(t *testing.T) {
 	}
 	got, _, err := h.Read(rid2)
 	if err != nil {
-		t.Fatalf("Read após reutilização: %v", err)
+		t.Fatalf("Read after reutilização: %v", err)
 	}
 	if !bytes.Equal(got, doc) {
-		t.Fatal("doc corrompido após reutilização de página via FSM")
+		t.Fatal("doc corrupted after reutilização de page via FSM")
 	}
 }

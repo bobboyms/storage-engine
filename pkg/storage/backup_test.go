@@ -103,10 +103,10 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("BackupOnline: %v", err)
 	}
 	if manifest.CheckpointLSN == 0 {
-		t.Fatal("BackupOnline não registrou LSN de checkpoint")
+		t.Fatal("BackupOnline not recordu LSN de checkpoint")
 	}
 	if len(manifest.Files) < 3 {
-		t.Fatalf("backup deveria conter heap, índices e WAL; arquivos=%d", len(manifest.Files))
+		t.Fatalf("backup should conter heap, indexs e WAL; arquivos=%d", len(manifest.Files))
 	}
 
 	putAccount(t, db.engine, 6, "after-backup@example.com")
@@ -129,13 +129,13 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 			t.Fatalf("Get restored %d: %v", i, err)
 		}
 		if !ok || !strings.Contains(got, fmt.Sprintf("user-%d@example.com", i)) {
-			t.Fatalf("registro %d ausente no restore: ok=%v got=%s", i, ok, got)
+			t.Fatalf("record %d ausente no restore: ok=%v got=%s", i, ok, got)
 		}
 	}
 	if got, ok, err := restored.Get("accounts", "id", types.IntKey(6)); err != nil {
 		t.Fatalf("Get post-backup: %v", err)
 	} else if ok {
-		t.Fatalf("restore incluiu escrita posterior ao backup: %s", got)
+		t.Fatalf("restore incluiu write posterior ao backup: %s", got)
 	}
 }
 
@@ -167,10 +167,10 @@ func TestVerifyBackupDetectsCorruption(t *testing.T) {
 	}
 
 	if _, err := VerifyBackup(backupDir); err == nil {
-		t.Fatal("VerifyBackup deveria detectar corrupção")
+		t.Fatal("VerifyBackup should detectar corruption")
 	}
 	if _, err := RestoreBackup(backupDir, filepath.Join(t.TempDir(), "restore")); err == nil {
-		t.Fatal("RestoreBackup deveria rejeitar backup corrompido")
+		t.Fatal("RestoreBackup should rejeitar backup corrupted")
 	}
 }
 
@@ -207,13 +207,13 @@ func TestOnlineBackupWhileWritesAreRunning(t *testing.T) {
 	if _, err := db.engine.BackupOnline(backupDir); err != nil {
 		close(stop)
 		<-done
-		t.Fatalf("BackupOnline com writes concorrentes: %v", err)
+		t.Fatalf("BackupOnline com writes concurrent: %v", err)
 	}
 
 	close(stop)
 	<-done
 	if n := atomic.LoadInt64(&writeErrors); n != 0 {
-		t.Fatalf("write goroutine falhou %d vez(es)", n)
+		t.Fatalf("write goroutine failed %d vez(es)", n)
 	}
 	if _, err := VerifyBackup(backupDir); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
@@ -241,6 +241,6 @@ func TestRestoreBackupDoesNotOverwriteExistingFiles(t *testing.T) {
 		t.Fatalf("WriteFile existing: %v", err)
 	}
 	if _, err := RestoreBackup(backupDir, targetDir); err == nil {
-		t.Fatal("RestoreBackup deveria recusar sobrescrever arquivo existente")
+		t.Fatal("RestoreBackup should recusar sobrescrever arquivo existsnte")
 	}
 }

@@ -11,19 +11,19 @@ import (
 /*
 EXEMPLO: Write Transactions
 
-Este exemplo demonstra:
-1. BeginWriteTransaction() - Inicia uma transação de escrita
+Este example demonstra:
+1. BeginWriteTransaction() - Inicia uma transação de write
 2. Put() e Del() dentro da transação
 3. Commit() - Persiste todas as operações atomicamente
 4. Rollback() - Descarta todas as operações pendentes
 
-Transações de escrita garantem:
+Transações de write garantem:
 - Atomicidade: Todas as operações ou nenhuma
 - Durabilidade: WAL com marcadores BEGIN/COMMIT/ABORT
-- Consistência: Estado válido após commit ou rollback
+- Consistência: Estado valid after commit ou rollback
 
 Fluxo de WAL:
-  BEGIN -> OP1 -> OP2 -> ... -> COMMIT (sucesso)
+  BEGIN -> OP1 -> OP2 -> ... -> COMMIT (success)
   BEGIN -> OP1 -> OP2 -> ABORT (rollback)
 */
 
@@ -47,13 +47,13 @@ func main() {
 	tx1 := engine.BeginWriteTransaction()
 	fmt.Println("TX1 iniciada")
 
-	// Adicionar operações à transação (ainda não persistidas)
+	// Adicionar operações à transação (ainda not persistidas)
 	tx1.Put("accounts", "id", types.IntKey(1), `{"id": 1, "name": "Alice", "balance": 1000}`)
 	tx1.Put("accounts", "id", types.IntKey(2), `{"id": 2, "name": "Bob", "balance": 2000}`)
 	tx1.Put("accounts", "id", types.IntKey(3), `{"id": 3, "name": "Carol", "balance": 3000}`)
 	fmt.Println("  3 operações adicionadas ao buffer da transação")
 
-	// Verificar que os dados AINDA NÃO estão visíveis
+	// Verificar que os data AINDA NÃO estão visíveis
 	_, found, _ := engine.Get("accounts", "id", types.IntKey(1))
 	fmt.Printf("  Antes do commit - Alice existe? %v\n", found)
 
@@ -62,10 +62,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("  Erro no commit: %v\n", err)
 	} else {
-		fmt.Println("  ✓ Commit realizado com sucesso")
+		fmt.Println("  ✓ Commit realizado com success")
 	}
 
-	// Agora os dados estão visíveis
+	// Agora os data estão visíveis
 	doc, found, _ := engine.Get("accounts", "id", types.IntKey(1))
 	if found {
 		fmt.Printf("  Após commit - Alice: %s\n", doc)
@@ -89,14 +89,14 @@ func main() {
 	tx2.Del("accounts", "id", types.IntKey(3))
 	fmt.Println("  Operações adicionadas: atualizar Bob, deletar Carol")
 
-	// Simular erro ou decisão de cancelar
+	// Simular error ou decisão de cancelar
 	fmt.Println("  [Decidimos cancelar a operação]")
 	tx2.Rollback()
 	fmt.Println("  ✓ Rollback realizado")
 
 	// Verificar que nada mudou
 	docAfter, _, _ := engine.Get("accounts", "id", types.IntKey(2))
-	fmt.Printf("Estado de Bob após rollback: %s\n", docAfter)
+	fmt.Printf("Estado de Bob after rollback: %s\n", docAfter)
 
 	_, found3, _ := engine.Get("accounts", "id", types.IntKey(3))
 	fmt.Printf("Carol ainda existe? %v\n", found3)
@@ -107,7 +107,7 @@ func main() {
 	fmt.Println("\n=== Cenário 3: Transferência Atômica entre Contas ===")
 
 	// Ler saldos atuais
-	fmt.Println("Saldos antes da transferência:")
+	fmt.Println("Saldos before da transferência:")
 	for i := int64(1); i <= 3; i++ {
 		doc, _, _ := engine.Get("accounts", "id", types.IntKey(i))
 		fmt.Printf("  Conta %d: %s\n", i, doc)
@@ -126,11 +126,11 @@ func main() {
 	// Commit atômico
 	err = transfer.Commit()
 	if err == nil {
-		fmt.Println("✓ Transferência concluída com sucesso")
+		fmt.Println("✓ Transferência concluída com success")
 	}
 
 	// Verificar resultado
-	fmt.Println("\nSaldos após a transferência:")
+	fmt.Println("\nSaldos after a transferência:")
 	for i := int64(1); i <= 3; i++ {
 		doc, _, _ := engine.Get("accounts", "id", types.IntKey(i))
 		fmt.Printf("  Conta %d: %s\n", i, doc)
@@ -145,7 +145,7 @@ func main() {
 	engine.Close()
 	engine = setupEngineWithLog(heapPath, walPath)
 
-	// Inserir dados iniciais novamente
+	// Inserir data iniciais novamente
 	init := engine.BeginWriteTransaction()
 	init.Put("accounts", "id", types.IntKey(100), `{"id": 100, "name": "Empresa", "balance": 100000}`)
 	init.Put("accounts", "id", types.IntKey(101), `{"id": 101, "name": "Fornecedor", "balance": 0}`)
@@ -188,18 +188,18 @@ func main() {
 │ Atomicidade   │ Todas as operações são aplicadas juntas no      │
 │               │ Commit ou nenhuma no Rollback                   │
 ├───────────────┼─────────────────────────────────────────────────┤
-│ Consistência  │ Estado válido após cada transação               │
+│ Consistência  │ Estado valid after cada transação               │
 │               │ (ex: saldos sempre somam o mesmo total)         │
 ├───────────────┼─────────────────────────────────────────────────┤
 │ Isolamento    │ Snapshot Isolation via BeginRead/BeginTx        │
-│               │ (outras transações não veem mudanças pendentes) │
+│               │ (outras transações not veem mudanças pendentes) │
 ├───────────────┼─────────────────────────────────────────────────┤
 │ Durabilidade  │ WAL com marcadores BEGIN/COMMIT/ABORT           │
 │               │ Recovery reconstrói estado do WAL               │
 └───────────────┴─────────────────────────────────────────────────┘
 `)
 
-	fmt.Println("✓ Exemplo concluído!")
+	fmt.Println("✓ Example concluído!")
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {

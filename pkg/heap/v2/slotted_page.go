@@ -11,9 +11,9 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
-// SlottedHeader ocupa os primeiros 12 bytes do body de uma página.
+// SlottedHeader ocupa os primeiros 12 bytes do body de uma page.
 // Mantido em claro dentro do body (que pode ser cifrado pela camada
-// de PageFile, então não precisa de proteção adicional aqui).
+// de PageFile, então not precisa de proteção adicional aqui).
 const (
 	SlottedHeaderSize = 12
 	SlotSize          = 4 // uint16 offset + uint16 length
@@ -26,20 +26,20 @@ const (
 const NoRecordID int64 = -1
 
 var (
-	ErrPageFull     = errors.New("heap/v2: sem espaço livre na página")
-	ErrSlotNotFound = errors.New("heap/v2: slot inválido ou fora do intervalo")
-	ErrBadRecord    = errors.New("heap/v2: registro corrompido (length inconsistente)")
-	// ErrVacuumed sinaliza que o slot existe no dir mas seu registro
-	// foi reclamado por Compact. SlotID permanece estável (referências
-	// externas continuam válidas), mas a leitura não devolve conteúdo.
-	// Chain walks devem tratar como fim de cadeia.
-	ErrVacuumed = errors.New("heap/v2: slot vacuumado (registro reclamado)")
+	ErrPageFull     = errors.New("heap/v2: no free space on page")
+	ErrSlotNotFound = errors.New("heap/v2: invalid slot or slot out of range")
+	ErrBadRecord    = errors.New("heap/v2: record corrupted (length inconsistente)")
+	// ErrVacuumed sinaliza que o slot exists no dir mas seu record
+	// foi reclaimdo por Compact. SlotID permanece estável (referências
+	// externas continuam válidas), mas a read not devolve content.
+	// Chain walks mustm tratar como fim de cadeia.
+	ErrVacuumed = errors.New("heap/v2: slot vacuumado (record reclaimdo)")
 )
 
 // RecordHeader é alias pro tipo compartilhado em pkg/heap. Isso permite
 // que a interface heap.Heap trate v1 e v2 intercambiavelmente sem
 // conversões. Os métodos de encoding ficam como funções de pacote
-// (abaixo) porque Go não permite métodos fora do pacote de origem.
+// (abaixo) porque Go not permite métodos fora do pacote de origem.
 type RecordHeader = heap.RecordHeader
 
 func encodeRecordHeader(h *RecordHeader, buf []byte) {
@@ -61,11 +61,11 @@ func decodeRecordHeader(h *RecordHeader, buf []byte) {
 	h.PrevRecordID = int64(binary.LittleEndian.Uint64(buf[17:25]))
 }
 
-// slottedHeader é a visão decodificada do cabeçalho no body da página.
+// slottedHeader é a visão decodificada do cabeçalho no body da page.
 type slottedHeader struct {
 	numSlots       uint16
 	numValid       uint16
-	freeSpaceStart uint16 // onde o próximo registro vai começar
+	freeSpaceStart uint16 // onde o próximo record vai começar
 	freeSpaceEnd   uint16 // final do slot directory (slots crescem pra cima daqui)
 	flags          uint8
 	// reserved[3]
@@ -90,7 +90,7 @@ func (h *slottedHeader) decode(buf []byte) {
 }
 
 // SlottedPage é a visão slotted de uma pagestore.Page. Os bytes ficam
-// no body da página (atrás do PageHeader de 32 bytes do pagestore).
+// no body da page (atrás do PageHeader de 32 bytes do pagestore).
 //
 // Layout do body (8160 bytes sem cifra, 8132 com cifra na camada PageFile):
 //
@@ -99,22 +99,22 @@ func (h *slottedHeader) decode(buf []byte) {
 //	16         slot 1   (4 bytes)
 //	...        slot N-1
 //	freeStart  [espaço livre]
-//	freeEnd    registro N-1 bytes
+//	freeEnd    record N-1 bytes
 //	           ...
-//	           registro 0 bytes
+//	           record 0 bytes
 //	bodySize   fim do body
 //
-// Slots crescem pra cima (baixo endereço → alto), registros crescem
+// Slots crescem pra cima (baixo endereço → alto), records crescem
 // pra baixo (alto endereço → baixo). Quando freeStart >= freeEnd, cheio.
 type SlottedPage struct {
 	page *pagestore.Page
 	body []byte // alias para page.Body()
 }
 
-// InitSlottedPage zera uma página e inicializa o slotted header com
-// `maxBodySize` como limite superior para o espaço de registros.
+// InitSlottedPage zera uma page e inicializa o slotted header com
+// `maxBodySize` como limite superior para o espaço de records.
 //
-// Quando a página será cifrada pela camada PageFile, `maxBodySize` deve
+// Quando a page será cifrada pela camada PageFile, `maxBodySize` must
 // ser `pagestore.PageFile.UsableBodySize()` (= BodySize - 28 com AES-GCM).
 // Sem cifra, passe `pagestore.BodySize`.
 func InitSlottedPage(p *pagestore.Page, maxBodySize int) *SlottedPage {
@@ -134,8 +134,8 @@ func InitSlottedPage(p *pagestore.Page, maxBodySize int) *SlottedPage {
 	return &SlottedPage{page: p, body: body}
 }
 
-// OpenSlottedPage conecta-se a uma página já inicializada (ex: lida do disco).
-// NÃO zera a página.
+// OpenSlottedPage conecta-se a uma page já inicializada (ex: lida do disco).
+// NOT zera a page.
 func OpenSlottedPage(p *pagestore.Page) *SlottedPage {
 	return &SlottedPage{page: p, body: p.Body()}
 }
@@ -150,14 +150,14 @@ func (sp *SlottedPage) writeHeader(h slottedHeader) {
 	h.encode(sp.body[:SlottedHeaderSize])
 }
 
-// NumSlots devolve a quantidade total de slots (válidos ou não).
+// NumSlots devolve a quantidade total de slots (válidos ou not).
 func (sp *SlottedPage) NumSlots() int { return int(sp.header().numSlots) }
 
 // NumValid devolve a quantidade de slots com Valid=1.
 func (sp *SlottedPage) NumValid() int { return int(sp.header().numValid) }
 
-// FreeSpace devolve quantos bytes livres há entre slot dir e o primeiro registro.
-// Nota: inserir um novo registro consome 4 bytes de slot + tamanho do registro,
+// FreeSpace devolve quantos bytes livres há entre slot dir e o primeiro record.
+// Nota: inserir um novo record consome 4 bytes de slot + tamanho do record,
 // então é preciso FreeSpace() >= 4 + recordSize.
 func (sp *SlottedPage) FreeSpace() int {
 	h := sp.header()
@@ -179,25 +179,25 @@ func (sp *SlottedPage) writeSlot(i uint16, offset, length uint16) {
 	binary.LittleEndian.PutUint16(sp.body[base+2:base+4], length)
 }
 
-// Insert grava um registro (header + doc) na página. Retorna o SlotID
+// Insert grava um record (header + doc) na page. Retorna o SlotID
 // alocado. SlotIDs são monotonicamente crescentes — o engine nunca
-// reusa um SlotID enquanto o slot existir no dir.
+// reusa um SlotID enquanto o slot exist no dir.
 func (sp *SlottedPage) Insert(rh RecordHeader, doc []byte) (uint16, error) {
 	recordSize := RecordHeaderSize + len(doc)
 	needed := SlotSize + recordSize
 
 	h := sp.header()
 	if sp.FreeSpace() < needed {
-		return 0, fmt.Errorf("%w: precisa %d bytes, tem %d", ErrPageFull, needed, sp.FreeSpace())
+		return 0, fmt.Errorf("%w: needs %d bytes, has %d", ErrPageFull, needed, sp.FreeSpace())
 	}
 	if recordSize > 0xFFFF {
-		return 0, fmt.Errorf("heap/v2: registro de %d bytes excede limite uint16", recordSize)
+		return 0, fmt.Errorf("heap/v2: record of %d bytes exceeds uint16 limit", recordSize)
 	}
 
-	// Novo registro vai em freeSpaceEnd - recordSize, crescendo pra trás.
+	// Novo record vai em freeSpaceEnd - recordSize, crescendo pra trás.
 	newRecordOffset := h.freeSpaceEnd - uint16(recordSize)
 
-	// Grava o header do registro e o doc.
+	// Grava o header do record e o doc.
 	encodeRecordHeader(&rh, sp.body[newRecordOffset:newRecordOffset+RecordHeaderSize])
 	copy(sp.body[newRecordOffset+RecordHeaderSize:newRecordOffset+uint16(recordSize)], doc)
 
@@ -217,17 +217,17 @@ func (sp *SlottedPage) Insert(rh RecordHeader, doc []byte) (uint16, error) {
 	return slotID, nil
 }
 
-// Compact reclama o espaço dos slots cujo registro foi deletado
+// Compact reclaim o espaço dos slots cujo record foi deleted
 // (Valid=false) e cujo DeleteLSN <= minLSN. O SlotID dos vacuumados
 // permanece no dir (marcado com length=0, Read devolve ErrVacuumed) —
-// assim referências externas (ex: índices B+ tree) continuam válidas,
-// só que agora apontam pra "gone". Chain walks devem tratar como fim.
+// assim referências externas (ex: indexs B+ tree) continuam válidas,
+// só que agora apontam pra "gone". Chain walks mustm tratar como fim.
 //
 // Retorna o número de slots vacuumados nesta operação.
 //
-// A região de registros é reescrita por atrás: sobreviventes são empacotados
+// A região de records é rewrite por atrás: sobreviventes são empacotados
 // do fim pro início, preservando a convenção "newer=deeper". O slot dir
-// é atualizado com os novos offsets — SlotIDs NÃO mudam.
+// é atualizado com os novos offsets — SlotIDs NOT mudam.
 func (sp *SlottedPage) Compact(minLSN uint64) (int, error) {
 	h := sp.header()
 	if h.numSlots == 0 {
@@ -268,7 +268,7 @@ func (sp *SlottedPage) Compact(minLSN uint64) (int, error) {
 		return 0, nil
 	}
 
-	// Reescreve a região de registros num buffer temporário, depois copia
+	// Reescreve a região de records num buffer temporário, depois copia
 	// de volta. Evita copias sobrepostas (que corromperiam dados).
 	tmp := make([]byte, len(sp.body))
 	currentPos := uint16(len(sp.body))
@@ -280,22 +280,22 @@ func (sp *SlottedPage) Compact(minLSN uint64) (int, error) {
 		sp.writeSlot(s.slotID, currentPos, s.length)
 	}
 
-	// Zera a antiga região de registros e copia a compactada.
+	// Zera a antiga região de records e copia a compactada.
 	for i := int(h.freeSpaceEnd); i < len(sp.body); i++ {
 		sp.body[i] = 0
 	}
 	copy(sp.body[currentPos:], tmp[currentPos:])
 
 	h.freeSpaceEnd = currentPos
-	// numValid não muda — tombstones vacuumados já estavam em "inválido".
+	// numValid not muda — tombstones vacuumados já estavam em "inválido".
 	sp.writeHeader(h)
 
 	return vacuumed, nil
 }
 
-// Iterate percorre TODOS os slots (válidos e inválidos) na ordem do
+// Iterate percorre TODOS os slots (válidos e invalids) na ordem do
 // SlotID. Invariante crítico pro vacuum: o iterador precisa ver
-// tombstones pra decidir se reclama.
+// tombstones pra decidir se reclaim.
 //
 // Se `fn` retorna erro, a iteração para e o erro é propagado.
 func (sp *SlottedPage) Iterate(fn func(slotID uint16, rh RecordHeader, doc []byte) error) error {
@@ -312,7 +312,7 @@ func (sp *SlottedPage) Iterate(fn func(slotID uint16, rh RecordHeader, doc []byt
 	return nil
 }
 
-// MarkDeleted é o delete lazy do MVCC: altera o header do registro
+// MarkDeleted é o delete lazy do MVCC: altera o header do record
 // in-place (Valid=false, DeleteLSN=deleteLSN). Os bytes do doc e o
 // resto do header (CreateLSN, PrevRecordID) permanecem — essencial
 // para transações antigas continuarem lendo a versão.
@@ -333,7 +333,7 @@ func (sp *SlottedPage) MarkDeleted(slotID uint16, deleteLSN uint64) error {
 	var rh RecordHeader
 	decodeRecordHeader(&rh, sp.body[offset:offset+RecordHeaderSize])
 
-	// Se já está inválido, noop — não decrementa numValid duas vezes.
+	// Se já está invalid, noop — not decrementa numValid duas vezes.
 	if !rh.Valid {
 		return nil
 	}

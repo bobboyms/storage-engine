@@ -53,7 +53,7 @@ func Between(start, end types.Comparable) *ScanCondition {
 	return &ScanCondition{Operator: OpBetween, Value: start, ValueEnd: end}
 }
 
-// Matches verifica se uma chave satisfaz a condição
+// Matches verifica se uma key satisfaz a condição
 func (sc *ScanCondition) Matches(key types.Comparable) bool {
 	switch sc.Operator {
 	case OpEqual:
@@ -75,7 +75,7 @@ func (sc *ScanCondition) Matches(key types.Comparable) bool {
 	}
 }
 
-// GetStartKey retorna a chave inicial para otimizar o scan
+// GetStartKey retorna a key inicial para otimizar o scan
 func (sc *ScanCondition) GetStartKey() types.Comparable {
 	switch sc.Operator {
 	case OpEqual, OpGreaterThan, OpGreaterOrEqual, OpBetween:
@@ -95,11 +95,11 @@ func (sc *ScanCondition) ShouldSeek() bool {
 	}
 }
 
-// ShouldContinue indica se devemos continuar o scan após encontrar uma chave
+// ShouldContinue indica se mustmos continuar o scan after encontrar uma key
 func (sc *ScanCondition) ShouldContinue(key types.Comparable) bool {
 	switch sc.Operator {
 	case OpEqual:
-		// Para =, paramos após encontrar a chave (ou quando ultrapassar)
+		// Para =, paramos after encontrar a key (ou quando ultrapassar)
 		return key.Compare(sc.Value) <= 0
 	case OpLessThan, OpLessOrEqual:
 		// Para < e <=, paramos quando ultrapassar o limite

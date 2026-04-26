@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// Testes de leitura do WAL no novo backend page-based. Tests que
+// Testes de read do WAL no novo backend page-based. Tests que
 // manipulavam bytes raw (TestWALReader_InvalidMagic, _TruncatedPayload,
 // etc) foram removidos — magic/truncation agora são checados na camada
-// do pagestore (checksum de página + magic de página), não no WAL
-// entry level. Tests equivalentes existem em pkg/pagestore.
+// do pagestore (checksum de page + magic de page), not no WAL
+// entry level. Tests equivalentes existsm em pkg/pagestore.
 
 func TestWALReader_ReadsMultipleEntriesInOrder(t *testing.T) {
 	tmpFile := t.TempDir() + "/wal_read.log"
@@ -73,10 +73,10 @@ func TestWALReader_ReadsMultipleEntriesInOrder(t *testing.T) {
 	}
 }
 
-// TestWALReader_PageCorruption_PropagatesError: corrupção no body da
-// página (bit flip) é detectada pelo checksum CRC32 do pagestore e
+// TestWALReader_PageCorruption_PropagatesError: corruption no body da
+// page (bit flip) é detectada pelo checksum CRC32 do pagestore e
 // propagada como ErrChecksumMismatch. Importante pra alerting em
-// produção — NUNCA silenciar corrupção como EOF.
+// produção — NUNCA silenciar corruption como EOF.
 func TestWALReader_PageCorruption_PropagatesError(t *testing.T) {
 	tmpFile := t.TempDir() + "/wal_corrupt.log"
 
@@ -92,7 +92,7 @@ func TestWALReader_PageCorruption_PropagatesError(t *testing.T) {
 	w.WriteEntry(e)
 	w.Close()
 
-	// Corrompe byte dentro do body da página 1 (pageID 0 é reservado)
+	// Corrompe byte dentro do body da page 1 (pageID 0 é reservado)
 	f, _ := os.OpenFile(tmpFile, os.O_RDWR, 0644)
 	f.WriteAt([]byte{0xFF}, 8192+200)
 	f.Close()
@@ -102,14 +102,14 @@ func TestWALReader_PageCorruption_PropagatesError(t *testing.T) {
 
 	_, err := r.ReadEntry()
 	if err != ErrChecksumMismatch {
-		t.Errorf("Esperava ErrChecksumMismatch, recebi: %v", err)
+		t.Errorf("Expected ErrChecksumMismatch, got: %v", err)
 	}
 }
 
 func TestNewWALReader_NonExistent(t *testing.T) {
 	_, err := NewWALReader("/path/that/does/not/exist/wal.log")
 	if err == nil {
-		t.Error("Esperava erro para arquivo inexistente")
+		t.Error("Expected erro para arquivo inexistsnte")
 	}
 }
 
@@ -128,6 +128,6 @@ func TestWALReader_EmptyWAL(t *testing.T) {
 
 	_, err = r.ReadEntry()
 	if err != io.EOF {
-		t.Errorf("Esperava EOF em WAL vazio, recebi %v", err)
+		t.Errorf("Expected EOF em WAL empty, got %v", err)
 	}
 }

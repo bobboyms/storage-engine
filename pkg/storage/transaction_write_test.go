@@ -454,7 +454,7 @@ func TestWriteTransaction_DelNonExistent(t *testing.T) {
 	tx := se.BeginWriteTransaction()
 	err := tx.Del("users", "id", types.IntKey(999))
 	if err != nil {
-		t.Errorf("Del should not error for non-existent key: %v", err)
+		t.Errorf("Del should not error for non-existsnt key: %v", err)
 	}
 	tx.Commit()
 }

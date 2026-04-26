@@ -39,7 +39,7 @@ func TestBTreeV2_Typed_Float(t *testing.T) {
 	for i, k := range keys {
 		v, found, _ := tr.Get(types.FloatKey(k))
 		if !found || v != int64(i) {
-			t.Fatalf("FloatKey(%v): found=%v v=%d, esperado i=%d", k, found, v, i)
+			t.Fatalf("FloatKey(%v): found=%v v=%d, expected i=%d", k, found, v, i)
 		}
 	}
 
@@ -51,11 +51,11 @@ func TestBTreeV2_Typed_Float(t *testing.T) {
 	})
 	want := []float64{-3.14, -1.5, 0.0, 1.5, 3.14, 100.5}
 	if len(seen) != len(want) {
-		t.Fatalf("ScanAll esperado %d, recebi %d", len(want), len(seen))
+		t.Fatalf("ScanAll expected %d, got %d", len(want), len(seen))
 	}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("ScanAll pos %d: esperado %v, recebi %v (ordenação via FloatKeyCodec quebrou)",
+			t.Fatalf("ScanAll pos %d: expected %v, got %v (ordenação via FloatKeyCodec quebrou)",
 				i, want[i], seen[i])
 		}
 	}
@@ -83,7 +83,7 @@ func TestBTreeV2_Typed_Bool(t *testing.T) {
 	want := []bool{false, true}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("Bool pos %d: esperado %v, recebi %v", i, want[i], seen[i])
+			t.Fatalf("Bool pos %d: expected %v, got %v", i, want[i], seen[i])
 		}
 	}
 }
@@ -111,7 +111,7 @@ func TestBTreeV2_Typed_Date(t *testing.T) {
 		return nil
 	})
 	if len(seen) != 4 {
-		t.Fatalf("esperado 4, recebi %d", len(seen))
+		t.Fatalf("expected 4, got %d", len(seen))
 	}
 	for i := 1; i < len(seen); i++ {
 		if seen[i].Before(seen[i-1]) {
@@ -142,7 +142,7 @@ func TestBTreeV2_Typed_Int_NegativesOrderedCorrectly(t *testing.T) {
 	want := []int64{-100, -10, 0, 10, 100}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("pos %d: esperado %d, recebi %d (IntKey negativo ordenado errado)", i, want[i], seen[i])
+			t.Fatalf("pos %d: expected %d, got %d (IntKey negativo ordenado errado)", i, want[i], seen[i])
 		}
 	}
 }

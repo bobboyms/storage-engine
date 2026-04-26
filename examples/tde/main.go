@@ -1,15 +1,15 @@
 // EXEMPLO: TDE (Transparent Data Encryption)
 //
-// Este exemplo mostra como abrir o storage engine com dados criptografados
+// Este example mostra como abrir o storage engine com data criptografados
 // em repouso:
 //   - heap criptografado
 //   - indice B+Tree automatico criptografado
 //   - WAL criptografado
-//   - DEKs persistidas no keystore, cifradas pela master key
+//   - DEKs persistidas no keystore, encryptiondas pela master key
 //
 // Em producao, a master key deve vir de KMS/HSM/secret manager. Para rodar
-// este exemplo localmente, voce pode deixar DB_MASTER_KEY_HEX vazio; o exemplo
-// gera uma chave temporaria e remove os arquivos ao final.
+// este example localmente, voce pode deixar DB_MASTER_KEY_HEX empty; o example
+// gera uma key temporaria e remove os files ao final.
 package main
 
 import (
@@ -32,8 +32,8 @@ const (
 	tableName    = "accounts"
 	indexName    = "email"
 
-	// Chave fixa apenas para exemplo local: 32 bytes em hex.
-	// Nunca use uma chave hardcoded como esta em producao.
+	// Chave fixa apenas para example local: 32 bytes em hex.
+	// Nunca use uma key hardcoded como esta em producao.
 	testMasterKeyHex = "00112233445566778899aabbccddeeff102132435465768798a9babbdcddedef"
 )
 
@@ -43,7 +43,7 @@ func main() {
 
 	masterKey, generated, err := loadMasterKey()
 	if err != nil {
-		fmt.Printf("erro carregando master key: %v\n", err)
+		fmt.Printf("error carregando master key: %v\n", err)
 		return
 	}
 	if generated {
@@ -54,7 +54,7 @@ func main() {
 
 	se, indexPath, err := openEncryptedEngine(masterKey)
 	if err != nil {
-		fmt.Printf("erro abrindo engine com TDE: %v\n", err)
+		fmt.Printf("error abrindo engine com TDE: %v\n", err)
 		return
 	}
 
@@ -63,48 +63,48 @@ func main() {
 
 	if err := se.Put(tableName, indexName, types.VarcharKey(secretEmail), secretDoc); err != nil {
 		_ = se.Close()
-		fmt.Printf("erro gravando documento: %v\n", err)
+		fmt.Printf("error gravando documento: %v\n", err)
 		return
 	}
 
 	doc, found, err := se.Get(tableName, indexName, types.VarcharKey(secretEmail))
 	if err != nil || !found {
 		_ = se.Close()
-		fmt.Printf("erro lendo documento antes do reopen: found=%v err=%v\n", found, err)
+		fmt.Printf("error lendo documento before do reopen: found=%v err=%v\n", found, err)
 		return
 	}
-	fmt.Printf("Documento lido antes do reopen: %s\n", doc)
+	fmt.Printf("Documento lido before do reopen: %s\n", doc)
 
 	if err := se.Close(); err != nil {
-		fmt.Printf("erro fechando engine: %v\n", err)
+		fmt.Printf("error fechando engine: %v\n", err)
 		return
 	}
 
 	plaintext := []byte("tde-secret-card-4111")
 	if err := assertNoPlaintext(heapPath, plaintext); err != nil {
-		fmt.Printf("falha TDE no heap: %v\n", err)
+		fmt.Printf("failure TDE no heap: %v\n", err)
 		return
 	}
 	if err := assertNoPlaintext(indexPath, []byte(secretEmail)); err != nil {
-		fmt.Printf("falha TDE no indice: %v\n", err)
+		fmt.Printf("failure TDE no indice: %v\n", err)
 		return
 	}
 	if err := assertNoPlaintext(walPath, plaintext); err != nil {
-		fmt.Printf("falha TDE no WAL: %v\n", err)
+		fmt.Printf("failure TDE no WAL: %v\n", err)
 		return
 	}
 	fmt.Println("OK: heap, indice e WAL nao contem o segredo em plaintext.")
 
 	reopened, _, err := openEncryptedEngine(masterKey)
 	if err != nil {
-		fmt.Printf("erro reabrindo engine com a mesma chave: %v\n", err)
+		fmt.Printf("error reabrindo engine com a mesma key: %v\n", err)
 		return
 	}
 	defer reopened.Close()
 
 	recovered, found, err := reopened.Get(tableName, indexName, types.VarcharKey(secretEmail))
 	if err != nil || !found {
-		fmt.Printf("erro lendo apos reopen: found=%v err=%v\n", found, err)
+		fmt.Printf("error lendo apos reopen: found=%v err=%v\n", found, err)
 		return
 	}
 	fmt.Printf("Documento lido apos reopen: %s\n", recovered)

@@ -122,7 +122,7 @@ func TestTDEProduction_EncryptsHeapAutoIndexAndWALAndReopens(t *testing.T) {
 		t.Fatalf("Stat keystore: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0600 {
-		t.Fatalf("keystore deve ser 0600, got %v", got)
+		t.Fatalf("keystore must ser 0600, got %v", got)
 	}
 
 	se2, _ := openTDEAccountsEngine(t, heapPath, walPath, keyStorePath, masterKey)
@@ -148,7 +148,7 @@ func TestTDEProduction_WrongMasterKeyCannotOpenExistingDEKs(t *testing.T) {
 		t.Fatalf("NewKeyStore wrong master: %v", err)
 	}
 	if _, err := wrongKS.GetOrCreateDEK("wal:accounts"); err == nil {
-		t.Fatal("wrong master key decifrou DEK existente; esperado erro")
+		t.Fatal("wrong master key decifrou DEK existsnte; expected erro")
 	}
 }
 
@@ -167,8 +167,8 @@ func TestTDEProduction_EncryptedWALRecoveryAfterCrash(t *testing.T) {
 		t.Fatalf("Put before crash: %v", err)
 	}
 
-	// Simula crash: fecha apenas o WAL para persistir a página corrente.
-	// Não fecha o engine, heap ou BTree, evitando flush limpo do estado de dados.
+	// Simula crash: fecha apenas o WAL para persistir a page corrente.
+	// Not fecha o engine, heap ou BTree, evitando flush limpo do estado de dados.
 	if err := se.WAL.Close(); err != nil {
 		t.Fatalf("close WAL before simulated crash: %v", err)
 	}

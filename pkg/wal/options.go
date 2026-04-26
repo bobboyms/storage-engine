@@ -10,7 +10,7 @@ import (
 type SyncPolicy int
 
 const (
-	// SyncEveryWrite chama fsync() após cada escrita.
+	// SyncEveryWrite chama fsync() after cada write.
 	// Mais seguro, menor performance.
 	SyncEveryWrite SyncPolicy = iota
 
@@ -42,9 +42,9 @@ type Options struct {
 
 	// Cipher opcional para TDE (Transparent Data Encryption).
 	// Se nil, o WAL é escrito em claro (comportamento padrão).
-	// Quando configurado, o body das páginas do WAL é cifrado via
-	// pagestore.PageFile; headers físicos de página ficam em claro para
-	// validação de integridade, mas entries lógicas do WAL não ficam.
+	// Quando configurado, o body das pages do WAL é cifrado via
+	// pagestore.PageFile; headers físicos de page ficam em claro para
+	// validação de integridade, mas entries lógicas do WAL do not stay.
 	Cipher crypto.Cipher
 
 	// MaxSegmentBytes habilita rotação automática do WAL quando o arquivo
@@ -52,7 +52,7 @@ type Options struct {
 	MaxSegmentBytes int64
 
 	// RetentionSegments define quantos segmentos antigos, já cobertos por
-	// checkpoint, devem permanecer no diretório ativo após truncate.
+	// checkpoint, mustm permanecer no diretório ativo after truncate.
 	// Segmentos necessários para recovery desde o último checkpoint nunca
 	// são removidos por essa política.
 	RetentionSegments int
@@ -70,7 +70,7 @@ type Options struct {
 //
 // Se o workload pode tolerar perda de alguns ms (analytics, caches),
 // troque explicitamente pra SyncInterval/SyncBatch — é opt-in consciente,
-// não o padrão.
+// not o padrão.
 func DefaultOptions() Options {
 	return Options{
 		DirPath:              "./wal_data",

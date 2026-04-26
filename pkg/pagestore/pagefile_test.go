@@ -87,11 +87,11 @@ func TestRoundTrip_1000Pages(t *testing.T) {
 					t.Fatalf("read %d: %v", i, err)
 				}
 				if !bytes.Equal(got.Body()[:usable], expected[i]) {
-					t.Fatalf("page %d: body divergente após round-trip", i)
+					t.Fatalf("page %d: body divergente after round-trip", i)
 				}
 				hdr, _ := got.GetHeader()
 				if hdr.PageID != id {
-					t.Fatalf("page %d: header.PageID = %d, esperado %d", i, hdr.PageID, id)
+					t.Fatalf("page %d: header.PageID = %d, expected %d", i, hdr.PageID, id)
 				}
 			}
 		})
@@ -118,7 +118,7 @@ func TestPersistence_CloseAndReopen(t *testing.T) {
 	}
 	pf.Close()
 
-	// Reabre com a mesma chave
+	// Reabre com a mesma key
 	pf2, err := NewPageFile(path, cipher)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestPersistence_CloseAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Body()[:pf2.cipher.UsableBodySize()], p.Body()[:pf.cipher.UsableBodySize()]) {
-		t.Fatal("body divergente após reabertura")
+		t.Fatal("body divergente after reopen")
 	}
 }
 
@@ -167,7 +167,7 @@ func TestTamperDetection_ChecksumCatchesBodyCorruption(t *testing.T) {
 	pf2, _ := NewPageFile(path, nil)
 	defer pf2.Close()
 	if _, err := pf2.ReadPage(id); !errors.Is(err, ErrChecksumMismatch) {
-		t.Fatalf("esperava ErrChecksumMismatch, recebi: %v", err)
+		t.Fatalf("expected ErrChecksumMismatch, got: %v", err)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestEncrypted_WrongKeyFails(t *testing.T) {
 	pf2, _ := NewPageFile(path, newCipher(t))
 	defer pf2.Close()
 	if _, err := pf2.ReadPage(id); !errors.Is(err, ErrDecryptFailed) {
-		t.Fatalf("esperava ErrDecryptFailed, recebi: %v", err)
+		t.Fatalf("expected ErrDecryptFailed, got: %v", err)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestEncrypted_AADBoundToPageID(t *testing.T) {
 	_ = pf.WritePage(id2, &p)
 	pf.Close()
 
-	// Troca bodies entre páginas e ajusta checksum pra passar na defesa
+	// Troca bodies entre pages e ajusta checksum pra passar na defesa
 	// de checksum. Também corrige o PageID de cada header pra bypassar
 	// a defesa "hdr.PageID != pageID". Sobra AAD amarrado a pageID.
 	raw, _ := os.ReadFile(path)
@@ -221,7 +221,7 @@ func TestEncrypted_AADBoundToPageID(t *testing.T) {
 	pf2, _ := NewPageFile(path, cipher)
 	defer pf2.Close()
 	if _, err := pf2.ReadPage(id1); !errors.Is(err, ErrDecryptFailed) {
-		t.Fatalf("esperava ErrDecryptFailed por AAD divergente, recebi: %v", err)
+		t.Fatalf("expected ErrDecryptFailed por AAD divergente, got: %v", err)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestInvalidMagic(t *testing.T) {
 	pf2, _ := NewPageFile(path, nil)
 	defer pf2.Close()
 	if _, err := pf2.ReadPage(id); !errors.Is(err, ErrInvalidMagic) {
-		t.Fatalf("esperava ErrInvalidMagic, recebi: %v", err)
+		t.Fatalf("expected ErrInvalidMagic, got: %v", err)
 	}
 }
 
@@ -253,7 +253,7 @@ func TestOutOfRange(t *testing.T) {
 	pf, _ := openTemp(t, nil)
 	defer pf.Close()
 	if _, err := pf.ReadPage(PageID(99)); !errors.Is(err, ErrPageOutOfRange) {
-		t.Fatalf("esperava ErrPageOutOfRange, recebi: %v", err)
+		t.Fatalf("expected ErrPageOutOfRange, got: %v", err)
 	}
 }
 
@@ -263,10 +263,10 @@ func TestPageID_ZeroReserved(t *testing.T) {
 
 	var p Page
 	if err := pf.WritePage(InvalidPageID, &p); err == nil {
-		t.Fatal("escrita em pageID 0 deveria falhar")
+		t.Fatal("write em pageID 0 should fail")
 	}
 	if _, err := pf.ReadPage(InvalidPageID); err == nil {
-		t.Fatal("leitura em pageID 0 deveria falhar")
+		t.Fatal("read em pageID 0 should fail")
 	}
 }
 
@@ -276,10 +276,10 @@ func TestCloseIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pf.Close(); err != nil {
-		t.Fatalf("segundo Close deveria ser no-op, recebi: %v", err)
+		t.Fatalf("segundo Close should be no-op, got: %v", err)
 	}
 	if _, err := pf.AllocatePage(); !errors.Is(err, ErrClosed) {
-		t.Fatalf("AllocatePage pós-Close deveria retornar ErrClosed, recebi: %v", err)
+		t.Fatalf("AllocatePage pós-Close should return ErrClosed, got: %v", err)
 	}
 }
 
@@ -292,7 +292,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	const readers = 8
 	const opsPerWriter = 50
 
-	// Pré-aloca e pré-grava algumas páginas para os readers terem algo.
+	// Pré-aloca e pré-grava algumas pages para os readers terem algo.
 	usable := pf.cipher.UsableBodySize()
 	initialIDs := make([]PageID, 20)
 	for i := range initialIDs {
@@ -305,7 +305,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Writers: alocam + gravam páginas novas
+	// Writers: alocam + gravam pages novas
 	for w := 0; w < writers; w++ {
 		wg.Add(1)
 		go func(seed int) {
@@ -345,23 +345,23 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 
 	// Verifica que numPages está consistente com nextID
 	if pf.NumPages() == 0 {
-		t.Fatal("numPages deveria ser > 0 após writes")
+		t.Fatal("numPages should be > 0 after writes")
 	}
 }
 
 func TestOpenInvalidFileSize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.db")
-	// Escreve 100 bytes (não múltiplo de 8192)
+	// Escreve 100 bytes (not múltiplo de 8192)
 	os.WriteFile(path, make([]byte, 100), 0644)
 
 	_, err := NewPageFile(path, nil)
 	if err == nil {
-		t.Fatal("esperava erro ao abrir arquivo com tamanho não-múltiplo de PageSize")
+		t.Fatal("expected error opening abrir arquivo com tamanho not-múltiplo de PageSize")
 	}
 }
 
 // binaryPutU32 escreve little-endian sem importar encoding/binary
-// apenas neste arquivo de teste (mantém os imports do test file curtos).
+// only in this test file (mantém os imports do test file curtos).
 func binaryPutU32(b []byte, v uint32) {
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)

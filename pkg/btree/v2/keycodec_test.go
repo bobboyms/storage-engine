@@ -14,7 +14,7 @@ func TestCodec_Int_Roundtrip(t *testing.T) {
 		enc := c.Encode(types.IntKey(v))
 		dec := c.Decode(enc).(types.IntKey)
 		if int64(dec) != v {
-			t.Errorf("Int roundtrip falhou: in=%d out=%d", v, int64(dec))
+			t.Errorf("Int roundtrip failed: in=%d out=%d", v, int64(dec))
 		}
 	}
 }
@@ -26,16 +26,16 @@ func TestCodec_Int_CompareOrdering(t *testing.T) {
 	pos := c.Encode(types.IntKey(100))
 
 	if c.Compare(neg, zero) != -1 {
-		t.Error("Int: -100 deveria ser < 0")
+		t.Error("Int: -100 should be < 0")
 	}
 	if c.Compare(zero, pos) != -1 {
-		t.Error("Int: 0 deveria ser < 100")
+		t.Error("Int: 0 should be < 100")
 	}
 	if c.Compare(neg, pos) != -1 {
-		t.Error("Int: -100 deveria ser < 100 (crítico — comparação uint64 direta falharia)")
+		t.Error("Int: -100 should be < 100 (crítico — comparação uint64 direta failia)")
 	}
 	if c.Compare(pos, neg) != 1 {
-		t.Error("Int: 100 deveria ser > -100")
+		t.Error("Int: 100 should be > -100")
 	}
 	if c.Compare(zero, zero) != 0 {
 		t.Error("Int: 0 == 0")
@@ -60,7 +60,7 @@ func TestCodec_Float_CompareOrdering(t *testing.T) {
 	pos := c.Encode(types.FloatKey(1.5))
 
 	if c.Compare(neg, pos) != -1 {
-		t.Error("Float: -1.5 < 1.5 (crítico — bits IEEE754 uint64 diretos falhariam)")
+		t.Error("Float: -1.5 < 1.5 (crítico — bits IEEE754 uint64 diretos failiam)")
 	}
 	if c.Compare(zero, zero) != 0 {
 		t.Error("Float: 0 == 0")

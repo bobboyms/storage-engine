@@ -45,16 +45,16 @@ func TestBTreeV2_Varchar_InsertGet_SingleLeaf(t *testing.T) {
 			t.Fatalf("Get %q: %v", k, err)
 		}
 		if !found {
-			t.Fatalf("key %q sumiu", k)
+			t.Fatalf("key %q disappeared", k)
 		}
 		if v != want {
-			t.Fatalf("key %q: esperado %d, recebi %d", k, want, v)
+			t.Fatalf("key %q: expected %d, got %d", k, want, v)
 		}
 	}
 
-	// Key inexistente
+	// Key inexistsnte
 	if _, found, _ := tr.Get(s("zulu")); found {
-		t.Fatal("zulu não deveria existir")
+		t.Fatal("zulu not should exist")
 	}
 }
 
@@ -65,40 +65,40 @@ func TestBTreeV2_Varchar_Update(t *testing.T) {
 
 	v, _, _ := tr.Get(s("foo"))
 	if v != 200 {
-		t.Fatalf("update falhou: %d", v)
+		t.Fatalf("update failed: %d", v)
 	}
 }
 
 func TestBTreeV2_Varchar_Upsert(t *testing.T) {
 	tr := newVarcharTree(t)
 
-	// Nova chave: oldValue=0, exists=false
+	// Nova key: oldValue=0, exists=false
 	called := false
 	tr.Upsert(s("new"), func(old int64, exists bool) (int64, error) {
 		called = true
 		if exists {
-			t.Fatal("exists deveria ser false pra key nova")
+			t.Fatal("exists should be false pra key nova")
 		}
 		return 42, nil
 	})
 	if !called {
-		t.Fatal("fn não chamada")
+		t.Fatal("fn not chamada")
 	}
 	v, _, _ := tr.Get(s("new"))
 	if v != 42 {
-		t.Fatalf("Upsert não persistiu")
+		t.Fatalf("Upsert not persistiu")
 	}
 
-	// Chave existente: recebe oldValue=42
+	// Chave existsnte: recebe oldValue=42
 	tr.Upsert(s("new"), func(old int64, exists bool) (int64, error) {
 		if !exists || old != 42 {
-			t.Fatalf("Upsert: esperava exists=true old=42, recebi exists=%v old=%d", exists, old)
+			t.Fatalf("Upsert: expected exists=true old=42, got exists=%v old=%d", exists, old)
 		}
 		return old + 1, nil
 	})
 	v, _, _ = tr.Get(s("new"))
 	if v != 43 {
-		t.Fatalf("Upsert update falhou: %d", v)
+		t.Fatalf("Upsert update failed: %d", v)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestBTreeV2_Varchar_ScanAll(t *testing.T) {
 		tr.Insert(s(k), int64(i))
 	}
 
-	// ScanAll deve emitir em ordem lexicográfica
+	// ScanAll must emitir em ordem lexicográfica
 	var seen []string
 	err := tr.ScanAll(func(key types.Comparable, v int64) error {
 		seen = append(seen, string(key.(types.VarcharKey)))
@@ -123,7 +123,7 @@ func TestBTreeV2_Varchar_ScanAll(t *testing.T) {
 	want := []string{"apple", "banana", "cherry", "mango", "zebra"}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("pos %d: esperado %q, recebi %q", i, want[i], seen[i])
+			t.Fatalf("pos %d: expected %q, got %q", i, want[i], seen[i])
 		}
 	}
 }
@@ -146,11 +146,11 @@ func TestBTreeV2_Varchar_Scan_Range(t *testing.T) {
 
 	want := []string{"b", "c", "d", "e"}
 	if len(seen) != len(want) {
-		t.Fatalf("esperado %v, recebi %v", want, seen)
+		t.Fatalf("expected %v, got %v", want, seen)
 	}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("pos %d: esperado %q, recebi %q", i, want[i], seen[i])
+			t.Fatalf("pos %d: expected %q, got %q", i, want[i], seen[i])
 		}
 	}
 }
@@ -180,7 +180,7 @@ func TestBTreeV2_Varchar_ReopenPreservesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reabre com mesma chave
+	// Reabre com mesma key
 	tr2, err := NewBTreeV2Varchar(path, 16, cipher, VarcharKeyCodec{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -190,15 +190,15 @@ func TestBTreeV2_Varchar_ReopenPreservesKeys(t *testing.T) {
 	for k, want := range inserted {
 		v, found, _ := tr2.Get(s(k))
 		if !found || v != want {
-			t.Fatalf("key %q: found=%v v=%d (esperado %d)", k, found, v, want)
+			t.Fatalf("key %q: found=%v v=%d (expected %d)", k, found, v, want)
 		}
 	}
 }
 
 func TestBTreeV2_Varchar_InsertBeyondLeaf_Splits(t *testing.T) {
-	// Força múltiplos splits com chaves variáveis. Keys de 20 bytes:
+	// Força múltiplos splits com keys variáveis. Keys de 20 bytes:
 	// ~8KB body / (12 slot + 20 key) = ~255 slots por leaf.
-	// 1000 chaves → pelo menos 3-4 leaves.
+	// 1000 keys → pelo menos 3-4 leaves.
 	tr := newVarcharTree(t)
 
 	const N = 1000
@@ -231,7 +231,7 @@ func TestBTreeV2_Varchar_InsertBeyondLeaf_Splits(t *testing.T) {
 		return nil
 	})
 	if count != N {
-		t.Fatalf("scan esperado %d, recebi %d", N, count)
+		t.Fatalf("scan expected %d, got %d", N, count)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestBTreeV2_Varchar_Remove_MultiLeafAndReopen(t *testing.T) {
 			t.Fatalf("Delete %q: %v", key, err)
 		}
 		if !removed {
-			t.Fatalf("Delete %q deveria retornar true", key)
+			t.Fatalf("Delete %q should return true", key)
 		}
 	}
 
@@ -281,22 +281,22 @@ func TestBTreeV2_Varchar_Remove_MultiLeafAndReopen(t *testing.T) {
 	err = tr2.ScanAll(func(key types.Comparable, value int64) error {
 		count++
 		if _, gone := deleted[string(key.(types.VarcharKey))]; gone {
-			t.Fatalf("scan retornou chave removida %q", key)
+			t.Fatalf("scan retornou key removida %q", key)
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("ScanAll pós-reopen: %v", err)
+		t.Fatalf("ScanAll after reopen: %v", err)
 	}
 	if count != total-len(deleted) {
-		t.Fatalf("scan count esperado %d, recebi %d", total-len(deleted), count)
+		t.Fatalf("scan count expected %d, got %d", total-len(deleted), count)
 	}
 
 	for key := range deleted {
 		if _, found, err := tr2.Get(s(key)); err != nil {
 			t.Fatalf("Get %q: %v", key, err)
 		} else if found {
-			t.Fatalf("key %q deveria ter sido removida", key)
+			t.Fatalf("key %q should have sido removida", key)
 		}
 	}
 
@@ -304,7 +304,7 @@ func TestBTreeV2_Varchar_Remove_MultiLeafAndReopen(t *testing.T) {
 		if _, found, err := tr2.Get(s(key)); err != nil {
 			t.Fatalf("Get %q: %v", key, err)
 		} else if !found {
-			t.Fatalf("key %q sumiu após delete/reopen", key)
+			t.Fatalf("key %q disappeared after delete/reopen", key)
 		}
 	}
 }
@@ -331,7 +331,7 @@ func TestBTreeV2_Varchar_Remove_CollapsesRootToLeaf(t *testing.T) {
 			t.Fatalf("Delete %q: %v", key, err)
 		}
 		if !removed {
-			t.Fatalf("Delete %q deveria retornar true", key)
+			t.Fatalf("Delete %q should return true", key)
 		}
 	}
 
@@ -346,7 +346,7 @@ func TestBTreeV2_Varchar_Remove_CollapsesRootToLeaf(t *testing.T) {
 	}
 	if !rootVP.IsLeaf() {
 		rootH.Release()
-		t.Fatal("root deveria colapsar para leaf após deletes em varchar")
+		t.Fatal("root should colapsar para leaf after deletes em varchar")
 	}
 	rootH.Release()
 
@@ -365,7 +365,7 @@ func TestBTreeV2_Varchar_Remove_CollapsesRootToLeaf(t *testing.T) {
 		if _, found, err := tr2.Get(s(key)); err != nil {
 			t.Fatalf("Get %q: %v", key, err)
 		} else if found {
-			t.Fatalf("key %q deveria ter sido removida", key)
+			t.Fatalf("key %q should have sido removida", key)
 		}
 	}
 	for i := total - 4; i < total; i++ {

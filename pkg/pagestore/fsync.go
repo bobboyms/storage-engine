@@ -9,13 +9,12 @@ var syncFile = func(f *os.File) error {
 	return f.Sync()
 }
 
-// fsyncDir abre o diretório e chama Sync — garantia POSIX de que
-// criações/renames dentro dele persistem além de um crash.
+// fsyncDir opens the directory and calls Sync, which is the POSIX
+// guarantee that creates and renames inside it persist across a crash.
 //
-// Em Windows o comportamento é diferente (abrir diretório pra read
-// geralmente não funciona como em POSIX). A função propaga o erro e
-// deixa o caller decidir — no nosso caso, NewPageFile trata como
-// erro fatal.
+// On Windows the behavior is different; opening a directory for reading
+// usually does not work like POSIX. The function propagates the error and
+// lets the caller decide; in our case, NewPageFile treats it as fatal.
 func fsyncDir(dirPath string) error {
 	d, err := os.Open(dirPath)
 	if err != nil {

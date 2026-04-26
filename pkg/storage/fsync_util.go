@@ -8,10 +8,10 @@ import (
 
 // durableWriteFile escreve `data` em `path` com garantias fortes de
 // durabilidade. Substitui `os.WriteFile`, que:
-//   - NÃO fsync o arquivo (conteúdo fica em page cache do SO)
-//   - NÃO fsync o diretório (entrada no inode table pode sumir após crash)
+//   - NOT fsync o arquivo (content fica em page cache do SO)
+//   - NOT fsync o diretório (entrada no inode table pode sumir after crash)
 //
-// Contrato de durability após retorno bem-sucedido:
+// Contrato de durability after retorno bem-sucedido:
 //   - Conteúdo do arquivo está no disco (fsync do file)
 //   - Entrada do arquivo no diretório está no disco (fsync do parent dir)
 //   - Arquivo antigo, se existia no mesmo path, foi substituído atomicamente
@@ -49,19 +49,19 @@ func durableWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 
 	// 4. fsync do diretório — garante que a entry do nome está no disco
-	// Sem isso, após crash o rename pode "sumir" (filesystem não persistiu o dir).
+	// Sem isso, after crash o rename pode "sumir" (filesystem not persistiu o dir).
 	return fsyncDir(filepath.Dir(path))
 }
 
 // fsyncDir abre o diretório e faz fsync. Crítico em POSIX pra garantir
 // que operações no nível do dir (create, rename) sobrevivem crash.
-// No Windows, open de diretório não funciona como esperado — retornamos
+// No Windows, open de diretório not funciona como expected — retornamos
 // nil por convenção (Windows tem comportamento diferente de durabilidade).
 func fsyncDir(dirPath string) error {
 	d, err := os.Open(dirPath)
 	if err != nil {
-		// Em alguns FSs/OSes o diretório não pode ser aberto pra write;
-		// usamos apenas Sync read-only. Se falhar, propaga o erro.
+		// Em alguns FSs/OSes o diretório cannot ser aberto pra write;
+		// usamos apenas Sync read-only. Se fail, propaga o erro.
 		return fmt.Errorf("fsyncDir: open %s: %w", dirPath, err)
 	}
 	defer d.Close()

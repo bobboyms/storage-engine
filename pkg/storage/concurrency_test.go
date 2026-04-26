@@ -63,7 +63,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 8; i++ {
-			time.Sleep(12 * time.Millisecond) // Checkpoint no meio das escritas
+			time.Sleep(12 * time.Millisecond) // Checkpoint no meio das writes
 			err := se.CreateCheckpoint()
 			if err != nil {
 				t.Errorf("Checkpoint failed: %v", err)
@@ -114,15 +114,15 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		expected := fmt.Sprintf("\"val-%d\"", i)                // JSON string format
 		if doc != expected && doc != fmt.Sprintf("val-%d", i) { // Fallback check
 			// Se o JSON conversion acontecer ou nao, dependendo do teste anterior
-			// Mas como usamos JsonToBson no Put, e string simples falha, ele vira raw bytes.
-			// O Get tenta BsonToJson, falha, retorna raw string.
-			// Então deve ser "val-X"
+			// Mas como usamos JsonToBson no Put, e string simples failure, ele vira raw bytes.
+			// O Get tenta BsonToJson, failure, retorna raw string.
+			// Então must ser "val-X"
 		}
 	}
 }
 
 // TestConcurrency_PerTableLocking verifica que operações em tabelas diferentes
-// podem ocorrer simultaneamente (não bloqueiam uma à outra)
+// podem ocorrer simultaneamente (not bloqueiam uma à outra)
 func TestConcurrency_PerTableLocking(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
@@ -167,7 +167,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
-			// O documento deve conter o campo "id" pois é o índice
+			// O documento must conter o campo "id" pois é o index
 			val := fmt.Sprintf(`{"id": %d, "name": "user-%d"}`, i, i)
 			err := se.Put("users", "id", types.IntKey(i), val)
 			if err != nil {
@@ -182,7 +182,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
-			// O documento deve conter o campo "id" pois é o índice
+			// O documento must conter o campo "id" pois é o index
 			val := fmt.Sprintf(`{"id": %d, "order": "order-%d"}`, i, i)
 			err := se.Put("orders", "id", types.IntKey(i), val)
 			if err != nil {
@@ -197,7 +197,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
-			// Ignora erros de chave não encontrada (podem não ter sido inseridas ainda)
+			// Ignora erros de key not encontrada (podem not ter sido inseridas ainda)
 			se.Get("users", "id", types.IntKey(i))
 			time.Sleep(500 * time.Microsecond)
 		}
@@ -208,7 +208,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
-			// Ignora erros de chave não encontrada (podem não ter sido inseridas ainda)
+			// Ignora erros de key not encontrada (podem not ter sido inseridas ainda)
 			se.Get("orders", "id", types.IntKey(i))
 			time.Sleep(500 * time.Microsecond)
 		}
@@ -234,8 +234,8 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 	t.Logf("Successfully inserted %d users and %d orders concurrently", numInserts, numInserts)
 }
 
-// TestConcurrency_ReadWriteMix testa leituras e escritas concorrentes na mesma tabela
-// Este teste valida que múltiplas operações podem ocorrer concorrentemente na mesma tabela
+// TestConcurrency_ReadWriteMix testa reads e writes concurrent na mesma tabela
+// Este teste valida que múltiplas operações podem ocorrer concurrentmente na mesma tabela
 func TestConcurrency_ReadWriteMix(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
@@ -267,7 +267,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	// Keys 0-24: Will be deleted by delete goroutine
 	// Keys 25-49: Will be read by reader goroutine (safe, not deleted)
 	for i := 0; i < 50; i++ {
-		// O documento deve conter o campo "id" pois é o índice
+		// O documento must conter o campo "id" pois é o index
 		se.Put("mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
 	}
 
@@ -280,7 +280,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 50; i < 50+numOps; i++ {
-			// O documento deve conter o campo "id" pois é o índice
+			// O documento must conter o campo "id" pois é o index
 			err := se.Put("mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
 			if err != nil {
 				errChan <- fmt.Errorf("write error key %d: %w", i, err)

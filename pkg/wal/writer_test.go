@@ -74,7 +74,7 @@ func TestWALWriter_BatchSync(t *testing.T) {
 	payload := []byte("12345")
 	entrySize := int64(HeaderSize + len(payload))
 
-	// Escreve 2 entradas (total ~60 bytes, < 100). Não deve syncar fisica
+	// Escreve 2 entradas (total ~60 bytes, < 100). Not must syncar fisica
 	entry := AcquireEntry()
 	entry.Header.PayloadLen = uint32(len(payload))
 	entry.Payload = append(entry.Payload, payload...)
@@ -82,19 +82,19 @@ func TestWALWriter_BatchSync(t *testing.T) {
 	w.WriteEntry(entry)
 	w.WriteEntry(entry)
 
-	// O arquivo fisico pode estar vazio ou incompleto pois está no buffer do bufio/OS
-	// Vamos forçar mais 2 escritas para estourar o limite de 100 bytes
+	// O arquivo fisico pode estar empty ou incompleto pois está no buffer do bufio/OS
+	// Vamos forçar mais 2 writes para estourar o limite de 100 bytes
 	w.WriteEntry(entry)
 	w.WriteEntry(entry)
 	ReleaseEntry(entry)
 
-	// Agora deve ter syncado
+	// Agora must ter syncado
 	info, err := os.Stat(tmpFile)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
 
-	// Tamanho esperado = 4 * entrySize
+	// Tamanho expected = 4 * entrySize
 	expected := 4 * entrySize
 	if info.Size() != expected {
 		// Nota: Testar isso com precisão depende de como o SO reporta, mas o Sync garante flush

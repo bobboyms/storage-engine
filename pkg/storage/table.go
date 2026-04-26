@@ -31,14 +31,14 @@ func NewHeapForTable(format HeapFormat, path string, cipher ...crypto.Cipher) (h
 
 	switch format {
 	case HeapFormatV2:
-		// BufferPool default: 64 páginas = 512KB de RAM por tabela.
+		// BufferPool default: 64 pages = 512KB de RAM por tabela.
 		return v2.NewHeapV2(path, 64, c)
 	default:
 		return nil, fmt.Errorf("heap format desconhecido: %d", format)
 	}
 }
 
-// BTreeFormat seleciona a implementação de B+ tree por índice.
+// BTreeFormat seleciona a implementação de B+ tree por index.
 type BTreeFormat int
 
 const (
@@ -61,7 +61,7 @@ func NewBTreeForIndex(format BTreeFormat, primary bool, keyType DataType, path s
 		}
 		return btreev2.NewBTreeV2Typed(path, 16, cipher, codec)
 	default:
-		return nil, fmt.Errorf("btree format desconhecido: %d", format)
+		return nil, fmt.Errorf("unknown btree format: %d", format)
 	}
 }
 
@@ -72,7 +72,7 @@ func defaultV2IndexPath(heapPath, tableName, indexName string) string {
 }
 
 // codecForDataType mapeia DataType fixo → btreev2.KeyCodec.
-// Varchar tem path separado (NewBTreeV2Varchar) e não passa aqui.
+// Varchar tem path separado (NewBTreeV2Varchar) e does not go through aqui.
 func codecForDataType(t DataType) (btreev2.KeyCodec, error) {
 	switch t {
 	case TypeInt:
@@ -84,9 +84,9 @@ func codecForDataType(t DataType) (btreev2.KeyCodec, error) {
 	case TypeDate:
 		return btreev2.DateKeyCodec{}, nil
 	case TypeVarchar:
-		return nil, fmt.Errorf("codecForDataType: TypeVarchar não aceita aqui — use NewBTreeV2Varchar")
+		return nil, fmt.Errorf("codecForDataType: TypeVarchar is not accepted here - use NewBTreeV2Varchar")
 	default:
-		return nil, fmt.Errorf("DataType não reconhecida: %d", t)
+		return nil, fmt.Errorf("unrecognized DataType: %d", t)
 	}
 }
 
@@ -109,18 +109,18 @@ type Index struct {
 	Name    string
 	Primary bool
 	Type    DataType
-	// Tree é a implementação page-based do índice.
+	// Tree é a implementação page-based do index.
 	Tree btree.Tree
 }
 
 // Table representa uma tabela no banco de dados com seu próprio lock
-// para permitir operações concorrentes em tabelas diferentes.
+// para permitir operações concurrent em tabelas diferentes.
 //
 // Heap é a implementação page-based associada à tabela.
 type Table struct {
 	Name    string
 	Indices map[string]*Index
-	mu      sync.RWMutex // Lock por tabela para concorrência granular
+	mu      sync.RWMutex // Lock por tabela para concurrency granular
 	Heap    heap.Heap
 }
 
@@ -144,7 +144,7 @@ func (t *Table) RUnlock() {
 	t.mu.RUnlock()
 }
 
-// GetIndex retorna o índice pelo nome de forma thread-safe (Schema Lock)
+// GetIndex retorna o index pelo nome de forma thread-safe (Schema Lock)
 func (t *Table) GetIndex(indexName string) (*Index, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -158,7 +158,7 @@ func (t *Table) GetIndex(indexName string) (*Index, error) {
 	return index, nil
 }
 
-// GetIndices retorna todos os índices da tabela de forma thread-safe (Schema Lock)
+// GetIndices retorna todos os indexs da tabela de forma thread-safe (Schema Lock)
 func (t *Table) GetIndices() []*Index {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -166,7 +166,7 @@ func (t *Table) GetIndices() []*Index {
 	return t.GetIndicesUnsafe()
 }
 
-// GetIndicesUnsafe retorna todos os índices sem adquirir lock.
+// GetIndicesUnsafe retorna todos os indexs sem adquirir lock.
 // O CHAMADOR DEVE GARANTIR QUE JÁ POSSUI RLOCK OU LOCK NA TABELA!
 func (t *Table) GetIndicesUnsafe() []*Index {
 	indices := make([]*Index, 0, len(t.Indices))
@@ -189,8 +189,8 @@ func NewTableMenager() *TableMetaData {
 	}
 }
 
-// NewEncryptedTableMenager cria metadados de tabela cujo índice BTreeV2
-// automático herda o cipher informado. Use quando quiser TDE em índices
+// NewEncryptedTableMenager cria metadados de tabela cujo index BTreeV2
+// automático herda o cipher informado. Use quando quiser TDE em indexs
 // criados implicitamente por NewTable.
 func NewEncryptedTableMenager(indexCipher crypto.Cipher) *TableMetaData {
 	return &TableMetaData{
@@ -199,7 +199,7 @@ func NewEncryptedTableMenager(indexCipher crypto.Cipher) *TableMetaData {
 	}
 }
 
-// SetDefaultIndexCipher configura o cipher usado por índices BTreeV2 criados
+// SetDefaultIndexCipher configura o cipher usado por indexs BTreeV2 criados
 // automaticamente por NewTable. Índices fornecidos explicitamente em Index.Tree
 // preservam o cipher com que foram abertos.
 func (tb *TableMetaData) SetDefaultIndexCipher(indexCipher crypto.Cipher) {
@@ -218,7 +218,7 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 		}
 	}
 
-	// Verifica se a tabela já existe
+	// Verifica se a tabela já exists
 	if _, exists := tb.tables[tableName]; exists {
 		return &errors.TableAlreadyExistsError{
 			Name: tableName,
@@ -230,7 +230,7 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 	primaryCount := 0
 	for _, value := range indices {
 		// Se o caller já forneceu uma Tree, usamos ela. Caso contrário,
-		// criamos automaticamente um índice BTreeV2 sidecar para a tabela.
+		// criamos automaticamente um index BTreeV2 sidecar para a tabela.
 		var tree btree.Tree
 		if value.Tree != nil {
 			tree = value.Tree
@@ -242,7 +242,7 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 				return err
 			}
 		} else {
-			return fmt.Errorf("storage: heap legado não é mais suportado; use NewHeapForTable(HeapFormatV2, ...)")
+			return fmt.Errorf("storage: legacy heap is no longer supported; use NewHeapForTable(HeapFormatV2, ...)")
 		}
 
 		if value.Primary {
@@ -300,7 +300,7 @@ func (tb *TableMetaData) GetIndexByName(tableName string, indexName string) (*In
 		return nil, err
 	}
 
-	// Protege acesso ao mapa de índices da tabela
+	// Protege acesso ao mapa de indexs da tabela
 	table.mu.RLock()
 	defer table.mu.RUnlock()
 

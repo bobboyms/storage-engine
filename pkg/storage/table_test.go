@@ -64,12 +64,12 @@ func TestNewTable_Success_MultipleIndices(t *testing.T) {
 
 	table, _ := mgr.GetTableByName("users")
 
-	// Verifica que todos os índices foram criados
+	// Verifica que todos os indexs foram criados
 	if len(table.Indices) != 3 {
 		t.Fatalf("Expected 3 indices, got %d", len(table.Indices))
 	}
 
-	// Verifica índice primário
+	// Verifica index primário
 	idIndex, err := mgr.GetIndexByName("users", "id")
 	if err != nil {
 		t.Fatalf("Primary index 'id' should exist: %v", err)
@@ -127,7 +127,7 @@ func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 	tmpDir := t.TempDir()
 	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 
-	// Primeira criação - deve funcionar
+	// Primeira criação - must funcionar
 	err := mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3, hm)
@@ -135,7 +135,7 @@ func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 		t.Fatalf("First table creation should succeed: %v", err)
 	}
 
-	// Segunda criação com mesmo nome - deve falhar
+	// Segunda criação com mesmo nome - must fail
 	err = mgr.NewTable("users", []storage.Index{
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3, hm)
@@ -152,9 +152,9 @@ func TestNewTable_Error_DuplicateTableName(t *testing.T) {
 func TestGetTableByName_Error_NotFound(t *testing.T) {
 	mgr := storage.NewTableMenager()
 
-	_, err := mgr.GetTableByName("nonexistent")
+	_, err := mgr.GetTableByName("nonexistsnt")
 	if err == nil {
-		t.Fatal("GetTableByName should fail for nonexistent table")
+		t.Fatal("GetTableByName should fail for nonexistsnt table")
 	}
 
 	if _, ok := err.(*errors.TableNotFoundError); !ok {
@@ -171,9 +171,9 @@ func TestGetIndexByName_Error_IndexNotFound(t *testing.T) {
 		{Name: "id", Primary: true, Type: storage.TypeInt},
 	}, 3, hm)
 
-	_, err := mgr.GetIndexByName("users", "nonexistent")
+	_, err := mgr.GetIndexByName("users", "nonexistsnt")
 	if err == nil {
-		t.Fatal("GetIndexByName should fail for nonexistent index")
+		t.Fatal("GetIndexByName should fail for nonexistsnt index")
 	}
 
 	if _, ok := err.(*errors.IndexNotFoundError); !ok {
@@ -211,20 +211,20 @@ func TestTableManager_Integration(t *testing.T) {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
-	// Tenta inserir duplicata na PK - deve falhar (Update em MVCC)
-	// Em MVCC, Put em PK existente = Update.
+	// Tenta inserir duplicata na PK - must fail (Update em MVCC)
+	// Em MVCC, Put em PK existsnte = Update.
 	err = se.Put("users", "id", types.IntKey(1), "user_1_duplicate")
 	if err != nil {
 		t.Fatalf("Updating primary key should succeed: %v", err)
 	}
 
-	// Insere dados no índice secundário (permite duplicatas)
+	// Insere dados no index secundário (permite duplicatas)
 	err = se.Put("users", "age", types.IntKey(25), "age_25")
 	if err != nil {
 		t.Fatalf("Failed to insert into secondary index: %v", err)
 	}
 
-	err = se.Put("users", "age", types.IntKey(25), "age_25_2") // Duplicata OK em índice secundário
+	err = se.Put("users", "age", types.IntKey(25), "age_25_2") // Duplicata OK em index secundário
 	if err != nil {
 		t.Fatalf("Secondary index should allow duplicates: %v", err)
 	}
@@ -260,9 +260,9 @@ func TestDataTypeString(t *testing.T) {
 
 func TestGetIndexByName_Error_TableNotFound(t *testing.T) {
 	mgr := storage.NewTableMenager()
-	_, err := mgr.GetIndexByName("nonexistent", "id")
+	_, err := mgr.GetIndexByName("nonexistsnt", "id")
 	if err == nil {
-		t.Fatal("Expected error for nonexistent table")
+		t.Fatal("Expected error for nonexistsnt table")
 	}
 }
 
@@ -318,9 +318,9 @@ func TestGetIndexes(t *testing.T) {
 
 func TestGetIndexes_Error_TableNotFound(t *testing.T) {
 	mgr := storage.NewTableMenager()
-	_, err := mgr.GetIndexes("nonexistent")
+	_, err := mgr.GetIndexes("nonexistsnt")
 	if err == nil {
-		t.Fatal("Expected error for nonexistent table")
+		t.Fatal("Expected error for nonexistsnt table")
 	}
 	if _, ok := err.(*errors.TableNotFoundError); !ok {
 		t.Fatalf("Expected TableNotFoundError, got %T: %v", err, err)

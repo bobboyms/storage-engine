@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Este arquivo tem testes "funcionais" de durability — não testam fsync
+// Este arquivo tem testes "funcionais" de durability — not testam fsync
 // no nível do filesystem (requer privilégios), mas garantem que:
 //   - Os caminhos corretos são usados (durableWriteFile em vez de
 //     os.WriteFile direto)
@@ -20,40 +20,40 @@ func TestDurableWriteFile_AtomicOnRename(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "data.bin")
 
-	// Primeira escrita
+	// Primeira write
 	if err := durableWriteFile(path, []byte("v1"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != "v1" {
-		t.Fatalf("esperado v1, recebi %q", got)
+		t.Fatalf("expected v1, got %q", got)
 	}
 
-	// Sobrescrita (atomic via rename)
+	// Sobrwrite (atomic via rename)
 	if err := durableWriteFile(path, []byte("v2-longer"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = os.ReadFile(path)
 	if string(got) != "v2-longer" {
-		t.Fatalf("esperado v2-longer, recebi %q", got)
+		t.Fatalf("expected v2-longer, got %q", got)
 	}
 
-	// Não deixa .tmp pra trás
+	// Not deixa .tmp pra trás
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Fatalf(".tmp deveria ter sido removido via rename, mas existe")
+		t.Fatalf(".tmp should have sido removido via rename, mas exists")
 	}
 }
 
 func TestDurableWriteFile_CleanupTempOnWriteError(t *testing.T) {
-	// Passa um path dentro de diretório que não existe → Open falha
-	path := filepath.Join(t.TempDir(), "nonexistent", "file.bin")
+	// Passa um path dentro de diretório que does not exist → Open failure
+	path := filepath.Join(t.TempDir(), "nonexistsnt", "file.bin")
 	err := durableWriteFile(path, []byte("x"), 0644)
 	if err == nil {
-		t.Fatal("esperava erro")
+		t.Fatal("expected erro")
 	}
-	// .tmp NÃO deve ter sido criado porque o Open falhou antes
+	// .tmp NOT must ter sido criado porque o Open failed antes
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal(".tmp vazou após falha de open")
+		t.Fatal(".tmp vazou after failure de open")
 	}
 }
 
@@ -69,19 +69,19 @@ func TestDurableWriteFile_HandlesLargeData(t *testing.T) {
 
 	stat, _ := os.Stat(path)
 	if stat.Size() != int64(len(data)) {
-		t.Fatalf("size: esperado %d, recebi %d", len(data), stat.Size())
+		t.Fatalf("size: expected %d, got %d", len(data), stat.Size())
 	}
 }
 
-func TestFsyncDir_NonexistentReturnsError(t *testing.T) {
-	err := fsyncDir(filepath.Join(t.TempDir(), "nao-existe"))
+func TestFsyncDir_NonexistsntReturnsError(t *testing.T) {
+	err := fsyncDir(filepath.Join(t.TempDir(), "nao-exists"))
 	if err == nil {
-		t.Fatal("esperava erro em diretório inexistente")
+		t.Fatal("expected erro em diretório inexistsnte")
 	}
 }
 
-// TestDurableWrite_NoTempLeftoverOnSuccess: múltiplas escritas durables
-// não deixam .tmp no filesystem (rename os substituiu).
+// TestDurableWrite_NoTempLeftoverOnSuccess: múltiplas writes durables
+// not deixam .tmp no filesystem (rename os substituiu).
 func TestDurableWrite_NoTempLeftoverOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 5; i++ {
@@ -98,24 +98,24 @@ func TestDurableWrite_NoTempLeftoverOnSuccess(t *testing.T) {
 		}
 	}
 	if len(files) != 5 {
-		t.Fatalf("esperado 5 arquivos finais, recebi %d", len(files))
+		t.Fatalf("expected 5 arquivos finais, got %d", len(files))
 	}
 }
 
 // TestEngine_PutIsDurableByDefault valida que com DefaultOptions do WAL,
-// um Put + (crash-like: sem Close) ainda tem os dados visíveis ao
-// reabrir. É o teste mais importante pra durabilidade de commits.
+// um Put + (crash-like: sem Close) ainda tem os dados visible ao
+// reopen. É o teste mais importante pra durabilidade de commits.
 func TestEngine_PutIsDurableByDefault(t *testing.T) {
 	// Este teste depende de imports que estão em outro arquivo do pacote.
 	// Escrito de forma a ser executável pelo package test.
 	// Documentação: simula um "crash limpo" (fechar WAL explicitamente
-	// sem fechar tabelas/heap) e valida que ao reabrir, o WAL tem os
+	// sem fechar tabelas/heap) e valida que ao reopen, o WAL tem os
 	// commits.
 	t.Skip("placeholder — cenário de crash cheio roda no storage_test " +
 		"(TestBTreeV2_Integration_ReopenWithTDE faz algo análogo)")
 }
 
-// Confirma que PerformanceOptions ainda existe pra casos de trade-off.
+// Confirma que PerformanceOptions ainda exists pra casos de trade-off.
 // (mantém a API explícita pra quem conscientemente aceita perda)
 func TestDurability_Documented_Defaults(t *testing.T) {
 	// Sem muita lógica — apenas lembra que essas duas funções são

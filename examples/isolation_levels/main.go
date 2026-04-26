@@ -12,27 +12,27 @@ import (
 /*
 EXEMPLO: Níveis de Isolamento de Transações
 
-Este exemplo demonstra os dois níveis de isolamento suportados:
+Este example demonstra os dois níveis de isolamento suportados:
 
 1. RepeatableRead (Padrão - Snapshot Isolation):
    - Transação vê um snapshot consistente do momento em que iniciou
-   - Leituras repetidas retornam os mesmos dados
-   - Não vê alterações feitas por outras transações após seu início
+   - Leituras repetidas retornam os mesmos data
+   - Not vê alterações feitas por outras transações after seu início
    - Evita dirty read, non-repeatable read e phantom read observacional
-   - Ainda não é Serializable: write skew continua possível
+   - Ainda not é Serializable: write skew continua possível
 
 2. ReadCommitted:
-   - Cada leitura vê os dados mais recentes commitados
-   - Pode ver alterações feitas por outras transações durante sua execução
+   - Cada read vê os data mais recentes commitados
+   - Pode ver alterações feitas por outras transações during sua execução
    - Menos isolada, mas mais "fresca"
    - Evita dirty read, mas permite non-repeatable read e phantom read
 
-Fenômenos de concorrência:
+Fenômenos de concurrency:
 - RepeatableRead previne "non-repeatable reads"
 - RepeatableRead previne phantom read observacional
 - ReadCommitted permite "non-repeatable reads" e phantoms
-- Lost update por leitura obsoleta em WriteTransaction é rejeitado
-- Write skew ainda pode acontecer porque não há Serializable/range locking
+- Lost update por read obsoleta em WriteTransaction é rejeitado
+- Write skew ainda pode acontecer porque not há Serializable/range locking
 */
 
 func main() {
@@ -68,25 +68,25 @@ func main() {
 
 	// Ler saldo de Alice
 	doc, _, _ := tx1.Get("accounts", "id", types.IntKey(1))
-	fmt.Printf("TX1 - Primeira leitura de Alice: %s\n", doc)
+	fmt.Printf("TX1 - Primeira read de Alice: %s\n", doc)
 
 	// Simular outra transação que modifica o saldo
 	fmt.Println("\n[Outra transação atualiza saldo de Alice para $1500]")
 	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1500, "owner": "Alice"}`)
 
-	// Aguardar um pouco para garantir que a escrita foi feita
+	// Aguardar um pouco para garantir que a write foi feita
 	time.Sleep(time.Millisecond * 10)
 
 	// TX1 ainda deve ver o valor antigo (snapshot isolation)
 	doc, _, _ = tx1.Get("accounts", "id", types.IntKey(1))
-	fmt.Printf("TX1 - Segunda leitura de Alice (após update externo): %s\n", doc)
+	fmt.Printf("TX1 - Segunda read de Alice (after update externo): %s\n", doc)
 
 	// Nova transação deve ver o valor novo
 	tx2 := engine.BeginTransaction(storage.RepeatableRead)
 	doc, _, _ = tx2.Get("accounts", "id", types.IntKey(1))
 	fmt.Printf("TX2 (nova) - Lê Alice: %s\n", doc)
 
-	fmt.Println("\n→ RepeatableRead: TX1 vê o mesmo valor nas duas leituras")
+	fmt.Println("\n→ RepeatableRead: TX1 vê o mesmo valor nas duas reads")
 	fmt.Println("  Isso PREVINE 'non-repeatable reads'")
 
 	// ========================================
@@ -101,9 +101,9 @@ func main() {
 	tx3 := engine.BeginTransaction(storage.ReadCommitted)
 	fmt.Println("TX3 iniciada (ReadCommitted)")
 
-	// Primeira leitura
+	// Primeira read
 	doc, _, _ = tx3.Get("accounts", "id", types.IntKey(1))
-	fmt.Printf("TX3 - Primeira leitura de Alice: %s\n", doc)
+	fmt.Printf("TX3 - Primeira read de Alice: %s\n", doc)
 
 	// Outra transação modifica
 	fmt.Println("\n[Outra transação atualiza saldo de Alice para $1800]")
@@ -112,9 +112,9 @@ func main() {
 
 	// TX3 deve ver o valor NOVO (read committed refresha o snapshot)
 	doc, _, _ = tx3.Get("accounts", "id", types.IntKey(1))
-	fmt.Printf("TX3 - Segunda leitura de Alice (após update externo): %s\n", doc)
+	fmt.Printf("TX3 - Segunda read de Alice (after update externo): %s\n", doc)
 
-	fmt.Println("\n→ ReadCommitted: TX3 vê o valor atualizado na segunda leitura")
+	fmt.Println("\n→ ReadCommitted: TX3 vê o valor atualizado na segunda read")
 	fmt.Println("  Isso PERMITE 'non-repeatable reads'")
 
 	// ========================================
@@ -126,14 +126,14 @@ func main() {
 	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
 	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2000, "owner": "Bob"}`)
 
-	// Transação de leitura que calcula saldo total
+	// Transação de read que calcula saldo total
 	fmt.Println("\nTX4: Calculando saldo total (RepeatableRead)")
 	tx4 := engine.BeginTransaction(storage.RepeatableRead)
 
 	docAlice, _, _ := tx4.Get("accounts", "id", types.IntKey(1))
 	fmt.Printf("  Leu Alice: %s\n", docAlice)
 
-	// Simular transferência durante a leitura
+	// Simular transferência during a read
 	fmt.Println("\n  [Transferência em andamento: Alice -$500, Bob +$500]")
 	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 500, "owner": "Alice"}`)
 	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2500, "owner": "Bob"}`)
@@ -144,7 +144,7 @@ func main() {
 
 	fmt.Println("\n→ Com RepeatableRead, TX4 vê estado CONSISTENTE:")
 	fmt.Println("  Alice=$1000 + Bob=$2000 = $3000 (correto!)")
-	fmt.Println("  Mesmo que a transferência tenha ocorrido durante a leitura")
+	fmt.Println("  Mesmo que a transferência tenha ocorrido during a read")
 
 	// Mostrar diferença com ReadCommitted
 	fmt.Println("\n--- Se fosse ReadCommitted (hipotético) ---")
@@ -161,15 +161,15 @@ func main() {
 	fmt.Println("║ RepeatableRead    ║ Snapshot no início da transação        ║")
 	fmt.Println("║ (Padrão)          ║ Leituras consistentes, sem mudanças    ║")
 	fmt.Println("╠═══════════════════╬════════════════════════════════════════╣")
-	fmt.Println("║ ReadCommitted     ║ Snapshot refreshado a cada leitura     ║")
-	fmt.Println("║                   ║ Sempre vê dados mais recentes          ║")
+	fmt.Println("║ ReadCommitted     ║ Snapshot refreshado a cada read     ║")
+	fmt.Println("║                   ║ Sempre vê data mais recentes          ║")
 	fmt.Println("╚═══════════════════╩════════════════════════════════════════╝")
 
 	fmt.Println("\nQuando usar cada um?")
 	fmt.Println("- RepeatableRead: Relatórios, cálculos agregados, consistência")
 	fmt.Println("- ReadCommitted: Monitoramento em tempo real, dashboards")
 
-	fmt.Println("\n✓ Exemplo concluído!")
+	fmt.Println("\n✓ Example concluído!")
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {

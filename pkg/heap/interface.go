@@ -10,12 +10,12 @@ type Heap interface {
 	// versão anterior numa cadeia MVCC.
 	Write(doc []byte, createLSN uint64, prevRecordID int64) (int64, error)
 
-	// Read devolve o documento e o header do registro identificado
+	// Read devolve o documento e o header do record identificado
 	// por `recordID`. O header é retornado mesmo se Valid=false —
-	// transações antigas precisam ler versões deletadas.
+	// transações antigas precisam ler versões deleted.
 	Read(recordID int64) ([]byte, *RecordHeader, error)
 
-	// Delete marca o registro como inválido (lazy delete do MVCC).
+	// Delete marca o record como invalid (lazy delete do MVCC).
 	// Bytes do doc e CreateLSN/PrevRecordID são preservados.
 	Delete(recordID int64, deleteLSN uint64) error
 

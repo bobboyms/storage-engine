@@ -40,7 +40,7 @@ func TestAESGCM_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(pt, plaintext) {
-		t.Fatalf("round-trip falhou: %q != %q", pt, plaintext)
+		t.Fatalf("round-trip failed: %q != %q", pt, plaintext)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestAESGCM_TamperDetection(t *testing.T) {
 	ct[len(ct)-5] ^= 0x01
 
 	if _, err := c.Decrypt(ct, nil); err == nil {
-		t.Fatal("esperava falha de autenticação após adulteração")
+		t.Fatal("expected failure de autenticação after adulteração")
 	}
 }
 
@@ -60,9 +60,9 @@ func TestAESGCM_AADMismatch(t *testing.T) {
 	c, _ := NewAESGCM(mustKey(t))
 	ct, _ := c.Encrypt([]byte("dado"), []byte("lsn=1"))
 
-	// AAD diferente = autenticação falha (impede record-swap)
+	// AAD diferente = autenticação failure (impede record-swap)
 	if _, err := c.Decrypt(ct, []byte("lsn=2")); err == nil {
-		t.Fatal("esperava falha por AAD divergente")
+		t.Fatal("expected failure por AAD divergente")
 	}
 }
 
@@ -81,7 +81,7 @@ func TestKeyStore_WrapUnwrap(t *testing.T) {
 	}
 	ct, _ := cipher1.Encrypt([]byte("segredo"), nil)
 
-	// Reabre com a mesma master key — deve recuperar a DEK e decifrar
+	// Reabre com a mesma master key — must recuperar a DEK e decifrar
 	ks2, err := NewKeyStore(filepath.Join(dir, "keys.json"), master)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestKeyStore_WrapUnwrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(pt) != "segredo" {
-		t.Fatalf("esperava 'segredo', recebi %q", pt)
+		t.Fatalf("expected 'segredo', got %q", pt)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestKeyStore_WrongMasterKey(t *testing.T) {
 	// Outro processo tentando abrir com master key errada
 	wrongKS, _ := NewKeyStore(filepath.Join(dir, "keys.json"), mustKey(t))
 	if _, err := wrongKS.GetOrCreateDEK("heap:users"); err == nil {
-		t.Fatal("esperava falha ao decifrar DEK com master key errada")
+		t.Fatal("expected failed to decifrar DEK com master key errada")
 	}
 }
 
@@ -126,7 +126,7 @@ func TestKeyStore_RotateMasterKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reabrir com a master key NOVA deve funcionar; com a velha, não
+	// Reabrir com a master key NOVA must funcionar; com a velha, not
 	rotated, err := NewKeyStore(filepath.Join(dir, "keys.json"), newMaster)
 	if err != nil {
 		t.Fatal(err)
@@ -137,11 +137,11 @@ func TestKeyStore_RotateMasterKey(t *testing.T) {
 	}
 	pt, err := cipher2.Decrypt(ct, nil)
 	if err != nil || string(pt) != "entry" {
-		t.Fatalf("dados antigos devem continuar legíveis após rotação: pt=%q err=%v", pt, err)
+		t.Fatalf("dados antigos mustm continuar legíveis after rotação: pt=%q err=%v", pt, err)
 	}
 
 	stale, _ := NewKeyStore(filepath.Join(dir, "keys.json"), oldMaster)
 	if _, err := stale.GetOrCreateDEK("wal"); err == nil {
-		t.Fatal("master key antiga não deveria mais funcionar")
+		t.Fatal("master key antiga not should mais funcionar")
 	}
 }

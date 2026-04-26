@@ -7,8 +7,8 @@ import (
 )
 
 // PageCipher envolve um crypto.Cipher com a convenção específica de
-// cifragem de páginas: AAD = PageID em little-endian. Amarra cada
-// ciphertext ao seu pageID e impede ataques de swap entre páginas.
+// cifragem de pages: AAD = PageID em little-endian. Amarra cada
+// ciphertext ao seu pageID e impede ataques de swap entre pages.
 //
 // Quando o crypto.Cipher subjacente é NoOp, PageCipher também é no-op
 // (sem alocações no caminho quente, sem expansão do body).

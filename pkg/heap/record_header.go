@@ -1,6 +1,6 @@
 package heap
 
-// RecordHeader é o metadata por registro (MVCC), compartilhado pela
+// RecordHeader é o metadata por record (MVCC), compartilhado pela
 // implementação page-based do heap.
 //
 // PrevRecordID é um int64 opaco apontando para a versão anterior.

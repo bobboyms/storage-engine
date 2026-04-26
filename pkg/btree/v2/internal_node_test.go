@@ -6,7 +6,7 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
-// Helper: cria uma página de internal node vazia com cmp default.
+// Helper: cria uma page de internal node empty com cmp default.
 func newInternalPage(t *testing.T, leftmost pagestore.PageID) (*pagestore.Page, *NodePage) {
 	t.Helper()
 	var p pagestore.Page
@@ -21,10 +21,10 @@ func TestInternalPage_InitEmpty(t *testing.T) {
 		t.Fatal("internal node reportando IsLeaf=true")
 	}
 	if np.NumKeys() != 0 {
-		t.Fatalf("internal recém-init deveria ter 0 chaves, tem %d", np.NumKeys())
+		t.Fatalf("internal freshly initialized should have 0 keys, tem %d", np.NumKeys())
 	}
 	if lm := np.LeftmostChild(); lm != 42 {
-		t.Fatalf("leftmost child esperado 42, recebi %d", lm)
+		t.Fatalf("leftmost child expected 42, got %d", lm)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestInternalPage_InsertSeparatorAndFindChild(t *testing.T) {
 	//   child 400: 30 <= key
 	_, np := newInternalPage(t, 100)
 
-	// Insere fora de ordem — InsertSeparator deve manter ordenação
+	// Insere fora de ordem — InsertSeparator must manter ordenação
 	if err := np.InsertSeparator(30, 400); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestInternalPage_InsertSeparatorAndFindChild(t *testing.T) {
 	}
 
 	if np.NumKeys() != 3 {
-		t.Fatalf("NumKeys esperado 3, recebi %d", np.NumKeys())
+		t.Fatalf("NumKeys expected 3, got %d", np.NumKeys())
 	}
 
 	cases := []struct {
@@ -71,7 +71,7 @@ func TestInternalPage_InsertSeparatorAndFindChild(t *testing.T) {
 	for _, c := range cases {
 		got := np.FindChild(c.key)
 		if got != c.wantChild {
-			t.Errorf("%s: FindChild(%d) = %d, esperado %d", c.descricao, c.key, got, c.wantChild)
+			t.Errorf("%s: FindChild(%d) = %d, expected %d", c.descricao, c.key, got, c.wantChild)
 		}
 	}
 }
@@ -87,6 +87,6 @@ func TestInternalPage_MaxCapacity(t *testing.T) {
 	}
 
 	if err := np.InsertSeparator(uint64(max*10), 9999); !errorsIs(err, ErrInternalFull) {
-		t.Fatalf("esperava ErrInternalFull, recebi: %v", err)
+		t.Fatalf("expected ErrInternalFull, got: %v", err)
 	}
 }

@@ -94,7 +94,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 	}
 
 	// Verify keys still exist in tree (pointing to tombstones).
-	// O vacuum v2 não reescreve o índice; ele apenas compacta o heap.
+	// O vacuum v2 not reescreve o index; ele apenas compacta o heap.
 	table, _ := meta.GetTableByName("users")
 	idx, _ := table.GetIndex("id")
 	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
@@ -112,7 +112,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 7. Verify compacted slots are logically invisíveis.
+	// 7. Verify compacted slots are logically invisible.
 	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
 		t.Error("Vacuum v2 should keep key 1 indexed even after reclaiming the slot")
 	}

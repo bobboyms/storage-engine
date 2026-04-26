@@ -43,7 +43,7 @@ func TestBTreeV2_Concurrent_Readers(t *testing.T) {
 	wg.Wait()
 
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros em readers concorrentes", errCount.Load())
+		t.Fatalf("%d erros em readers concurrent", errCount.Load())
 	}
 }
 
@@ -94,13 +94,13 @@ func TestBTreeV2_Concurrent_ScanAndGet(t *testing.T) {
 	wg.Wait()
 
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros em scan+get concorrentes", errCount.Load())
+		t.Fatalf("%d erros em scan+get concurrent", errCount.Load())
 	}
 	if scanCount.Load() != N {
-		t.Fatalf("scan esperava %d, viu %d", N, scanCount.Load())
+		t.Fatalf("scan expected %d, viu %d", N, scanCount.Load())
 	}
 	if getCount.Load() != 800 {
-		t.Fatalf("gets esperados 800, recebi %d", getCount.Load())
+		t.Fatalf("gets expecteds 800, got %d", getCount.Load())
 	}
 }
 
@@ -145,7 +145,7 @@ func TestBTreeV2_Concurrent_WritersSerializeWithReaders(t *testing.T) {
 						return
 					}
 					if v != 0 && v != 1 {
-						t.Errorf("valor torn para key %d: %d", i, v)
+						t.Errorf("value torn para key %d: %d", i, v)
 						errCount.Add(1)
 						return
 					}
@@ -156,13 +156,13 @@ func TestBTreeV2_Concurrent_WritersSerializeWithReaders(t *testing.T) {
 
 	wg.Wait()
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros de concorrência", errCount.Load())
+		t.Fatalf("%d erros de concurrency", errCount.Load())
 	}
 
 	for i := int64(0); i < N; i++ {
 		v, _, _ := tr.Get(k(i))
 		if v != 1 {
-			t.Fatalf("key %d: esperado 1 após writer, recebi %d", i, v)
+			t.Fatalf("key %d: expected 1 after writer, got %d", i, v)
 		}
 	}
 }
@@ -260,7 +260,7 @@ func TestBTreeV2_Concurrent_Writers_WithSplits(t *testing.T) {
 
 	wg.Wait()
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros em writers concorrentes com split", errCount.Load())
+		t.Fatalf("%d erros em writers concurrent com split", errCount.Load())
 	}
 
 	total := int64(writers * perWriter)
@@ -304,7 +304,7 @@ func TestBTreeV2_Varchar_Concurrent_Writers_WithSplits(t *testing.T) {
 
 	wg.Wait()
 	if errCount.Load() != 0 {
-		t.Fatalf("%d erros em varchar writers concorrentes com split", errCount.Load())
+		t.Fatalf("%d erros em varchar writers concurrent com split", errCount.Load())
 	}
 
 	for g := 0; g < writers; g++ {

@@ -13,7 +13,7 @@ import (
 /*
 EXEMPLO DE USO: Sistema de Scan com Operadores Genéricos
 
-Este arquivo demonstra como usar o novo sistema de operadores de scan
+Este file demonstra como usar o novo sistema de operadores de scan
 que suporta: =, !=, >, <, >=, <=, BETWEEN
 */
 
@@ -45,7 +45,7 @@ func main() {
 	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
 	defer paramsCleanup()
 
-	// 4. Inserir dados
+	// 4. Inserir data
 	se.Put("users", "age", types.IntKey(65), "user_65")
 	se.Put("users", "age", types.IntKey(18), "user_18")
 	se.Put("users", "age", types.IntKey(30), "user_30")

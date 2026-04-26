@@ -10,7 +10,7 @@ import (
 )
 
 // TestHeapV2_Integration_BasicCRUD valida que o engine inteiro funciona
-// quando uma tabela é criada com HeapFormatV2. Não inventa novos casos —
+// quando uma tabela é criada com HeapFormatV2. Not inventa novos casos —
 // espelha TestMVCC_SnapshotRead pra provar paridade com v1.
 func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -55,15 +55,15 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 		t.Fatalf("Get 1: %v", err)
 	}
 	if !found {
-		t.Fatal("key 1 deveria existir")
+		t.Fatal("key 1 should exist")
 	}
 	if doc == "" {
-		t.Fatal("doc 1 vazio")
+		t.Fatal("doc 1 empty")
 	}
 
 	doc, found, _ = se.Get("users_v2", "id", types.IntKey(2))
 	if !found || doc == "" {
-		t.Fatal("key 2 deveria existir com conteúdo")
+		t.Fatal("key 2 should exist com content")
 	}
 
 	// UPDATE via Put com mesma key (exercita Heap.Write com prevRecordID + Heap.Delete)
@@ -74,14 +74,14 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	// Leitura retorna a nova versão
 	doc, _, _ = se.Get("users_v2", "id", types.IntKey(1))
 	if doc != `{"id":1,"name":"alice-updated"}` {
-		t.Fatalf("update não refletiu: doc=%q", doc)
+		t.Fatalf("update not refletiu: doc=%q", doc)
 	}
 }
 
 // TestHeapV2_Integration_MVCC_SnapshotRead é a cópia do teste de MVCC
 // do v1, mas rodando em cima de uma tabela v2. Prova que chain walks
 // (PrevRecordID em v2 = pageID|slotID empacotado) funcionam através do
-// engine real — não só dos testes locais de pkg/heap/v2.
+// engine real — not só dos testes locais de pkg/heap/v2.
 func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
@@ -105,7 +105,7 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	}
 	defer se.Close()
 
-	// Setup: key 1 existe antes do snapshot
+	// Setup: key 1 exists antes do snapshot
 	if err := se.Put("mvcc_v2", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatal(err)
 	}
@@ -118,26 +118,26 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// tx1 não deve ver key 2 (isolation)
+	// tx1 should not ver key 2 (isolation)
 	if _, found, _ := tx1.Get("mvcc_v2", "id", types.IntKey(2)); found {
-		t.Error("tx1 não deveria ver key 2 (snapshot isolation falhou em v2)")
+		t.Error("tx1 not should ver key 2 (snapshot isolation failed em v2)")
 	}
 
-	// tx1 deve ver key 1
+	// tx1 must ver key 1
 	if _, found, _ := tx1.Get("mvcc_v2", "id", types.IntKey(1)); !found {
-		t.Error("tx1 deveria ver key 1 em v2")
+		t.Error("tx1 should ver key 1 em v2")
 	}
 
 	// Engine (novo snapshot) vê tudo
 	if _, found, _ := se.Get("mvcc_v2", "id", types.IntKey(2)); !found {
-		t.Error("engine deveria ver key 2 em v2")
+		t.Error("engine should ver key 2 em v2")
 	}
 }
 
 // TestHeapV2_Integration_EngineVacuum prova que se.Vacuum() faz dispatch
-// polimórfico: tabelas v2 vão pro caminho compact in-place (não o copy+
-// rebuild do v1). Após vacuum, tombstones deletados antes do minLSN
-// viram inacessíveis; engine.Get devolve "not found" (não erro).
+// polimórfico: tabelas v2 vão pro caminho compact in-place (not o copy+
+// rebuild do v1). Após vacuum, tombstones deleted antes do minLSN
+// viram inacessíveis; engine.Get devolve "not found" (not erro).
 func TestHeapV2_Integration_EngineVacuum(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
@@ -160,24 +160,24 @@ func TestHeapV2_Integration_EngineVacuum(t *testing.T) {
 	// Cria 2 linhas e delete uma
 	se.Put("vac_v2", "id", types.IntKey(1), `{"id":1,"nome":"alice"}`)
 	se.Put("vac_v2", "id", types.IntKey(2), `{"id":2,"nome":"bob"}`)
-	// Engine não tem Delete público direto pela key, simula via Put de tombstone?
+	// Engine not tem Delete público direto pela key, simula via Put de tombstone?
 	// Na verdade, o engine tem se.Delete. Mas pra este teste, o que importa é
 	// que a linha com Valid=false exista na chain. A forma mais simples é
 	// usar diretamente a API do heap pra marcar como deleted — mas isso
 	// contorna o engine.
 	//
 	// Abordagem pragmática: exercita Engine.Vacuum — mesmo sem tombstones
-	// deve passar sem erro (no-op). E valida que o dispatch foi pro v2.
+	// must passar sem erro (no-op). E valida que o dispatch foi pro v2.
 	if err := se.Vacuum("vac_v2"); err != nil {
 		t.Fatalf("Engine.Vacuum em tabela v2: %v", err)
 	}
 
-	// Após vacuum, linhas ainda devem estar acessíveis (não eram tombstones)
+	// Após vacuum, linhas ainda mustm estar acessíveis (not eram tombstones)
 	if _, found, _ := se.Get("vac_v2", "id", types.IntKey(1)); !found {
-		t.Error("key 1 sumiu após vacuum sem tombstones")
+		t.Error("key 1 disappeared after vacuum sem tombstones")
 	}
 	if _, found, _ := se.Get("vac_v2", "id", types.IntKey(2)); !found {
-		t.Error("key 2 sumiu após vacuum sem tombstones")
+		t.Error("key 2 disappeared after vacuum sem tombstones")
 	}
 }
 
@@ -207,28 +207,28 @@ func TestHeapV2_Integration_MVCC_UpdateChain(t *testing.T) {
 	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":1}`)
 	txA := se.BeginRead()
 
-	// v2 (após txA)
+	// v2 (after txA)
 	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":2}`)
 	txB := se.BeginRead()
 
-	// v3 (após txB)
+	// v3 (after txB)
 	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":3}`)
 
-	// txA deve ver v1
+	// txA must ver v1
 	doc, found, _ := txA.Get("chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":1}` {
-		t.Errorf("txA esperava v1, recebi found=%v doc=%q", found, doc)
+		t.Errorf("txA expected v1, got found=%v doc=%q", found, doc)
 	}
 
-	// txB deve ver v2
+	// txB must ver v2
 	doc, found, _ = txB.Get("chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":2}` {
-		t.Errorf("txB esperava v2, recebi found=%v doc=%q", found, doc)
+		t.Errorf("txB expected v2, got found=%v doc=%q", found, doc)
 	}
 
-	// Engine novo snapshot deve ver v3
+	// Engine novo snapshot must ver v3
 	doc, found, _ = se.Get("chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":3}` {
-		t.Errorf("engine esperava v3, recebi found=%v doc=%q", found, doc)
+		t.Errorf("engine expected v3, got found=%v doc=%q", found, doc)
 	}
 }

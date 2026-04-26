@@ -57,14 +57,14 @@ func TestFuzzyCheckpoint_Basic(t *testing.T) {
 		t.Fatalf("FuzzyCheckpoint: %v", err)
 	}
 
-	// Dados ainda acessíveis após checkpoint.
+	// Dados ainda acessíveis after checkpoint.
 	for i := 1; i <= 10; i++ {
 		_, found, err := se.Get("users", "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get %d: %v", i, err)
 		}
 		if !found {
-			t.Fatalf("registro %d não encontrado após checkpoint", i)
+			t.Fatalf("record %d not encontrado after checkpoint", i)
 		}
 	}
 }
@@ -78,9 +78,9 @@ func TestFuzzyCheckpoint_WALContainsCheckpointEntry(t *testing.T) {
 	}
 
 	walPath := filepath.Join(dir, "wal.log")
-	// Verifica que o arquivo WAL existe (o engine o criou).
+	// Verifica que o arquivo WAL exists (o engine o criou).
 	if _, err := os.Stat(walPath); err != nil {
-		t.Fatalf("WAL não encontrado: %v", err)
+		t.Fatalf("WAL not encontrado: %v", err)
 	}
 
 	ckLSN, found, err := findLastCheckpointLSN(walPath)
@@ -88,7 +88,7 @@ func TestFuzzyCheckpoint_WALContainsCheckpointEntry(t *testing.T) {
 		t.Fatalf("findLastCheckpointLSN: %v", err)
 	}
 	if !found {
-		t.Fatal("registro de checkpoint não encontrado no WAL")
+		t.Fatal("record de checkpoint not encontrado no WAL")
 	}
 	_ = ckLSN
 }
@@ -101,9 +101,9 @@ func TestFuzzyCheckpoint_NoWAL_IsNoop(t *testing.T) {
 	}
 	defer se.Close()
 
-	// FuzzyCheckpoint sem WAL deve retornar nil (no-op).
+	// FuzzyCheckpoint sem WAL must retornar nil (no-op).
 	if err := se.FuzzyCheckpoint(); err != nil {
-		t.Fatalf("FuzzyCheckpoint sem WAL deveria ser no-op: %v", err)
+		t.Fatalf("FuzzyCheckpoint sem WAL should be no-op: %v", err)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 	heapPath := filepath.Join(dir, tableName+".heap")
 	walPath := filepath.Join(dir, "wal.log")
 
-	// --- Fase 1: inserções + fuzzy checkpoint ---
+	// --- Fase 1: inserts + fuzzy checkpoint ---
 	func() {
 		hm, err := NewHeapForTable(HeapFormatV2, heapPath)
 		if err != nil {
@@ -144,12 +144,12 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 			}
 		}
 
-		// Checkpoint fuzzy — grava registro no WAL com beginLSN.
+		// Checkpoint fuzzy — grava record no WAL com beginLSN.
 		if err := se.FuzzyCheckpoint(); err != nil {
 			t.Fatalf("FuzzyCheckpoint: %v", err)
 		}
 
-		// Mais inserções depois do checkpoint.
+		// Mais inserts depois do checkpoint.
 		for i := 6; i <= 8; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"name":"emp%d"}`, i, i)
 			if err := se.Put(tableName, "id", types.IntKey(i), doc); err != nil {
@@ -158,16 +158,16 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 		}
 	}()
 
-	// --- Fase 2: verificar que findLastCheckpointLSN encontra o registro ---
+	// --- Fase 2: verificar que findLastCheckpointLSN encontra o record ---
 	ckLSN, found, err := findLastCheckpointLSN(walPath)
 	if err != nil {
 		t.Fatalf("findLastCheckpointLSN: %v", err)
 	}
 	if !found {
-		t.Fatal("esperava encontrar registro de checkpoint no WAL")
+		t.Fatal("expected encontrar record de checkpoint no WAL")
 	}
 	if ckLSN == 0 {
-		t.Fatal("checkpoint LSN não deve ser 0")
+		t.Fatal("checkpoint LSN should not ser 0")
 	}
 
 	// --- Fase 3: recovery usa checkpoint LSN ---
@@ -193,14 +193,14 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 	}
 	defer se2.Close()
 
-	// Todas as inserções (1-8) devem estar visíveis após recovery.
+	// Todas as inserts (1-8) mustm estar visible after recovery.
 	for i := 1; i <= 8; i++ {
 		_, found, err := se2.Get(tableName, "id", types.IntKey(i))
 		if err != nil {
-			t.Fatalf("Get %d após recovery: %v", i, err)
+			t.Fatalf("Get %d after recovery: %v", i, err)
 		}
 		if !found {
-			t.Fatalf("registro %d não encontrado após recovery com checkpoint", i)
+			t.Fatalf("record %d not encontrado after recovery com checkpoint", i)
 		}
 	}
 }
@@ -209,7 +209,7 @@ func TestFuzzyCheckpoint_MultipleCheckpoints(t *testing.T) {
 	dir := t.TempDir()
 	se := setupEngineWithWAL(t, dir, "items")
 
-	// Três rounds de inserções + checkpoints.
+	// Três rounds de inserts + checkpoints.
 	for round := 1; round <= 3; round++ {
 		for i := 1; i <= 3; i++ {
 			key := (round-1)*3 + i
@@ -229,11 +229,11 @@ func TestFuzzyCheckpoint_MultipleCheckpoints(t *testing.T) {
 		t.Fatalf("findLastCheckpointLSN: %v", err)
 	}
 	if !found {
-		t.Fatal("esperava registro de checkpoint")
+		t.Fatal("expected record de checkpoint")
 	}
-	// 3 rounds * 3 inserts = 9 inserts → último beginLSN deve ser >= 9.
+	// 3 rounds * 3 inserts = 9 inserts → último beginLSN must ser >= 9.
 	if ckLSN < 9 {
-		t.Fatalf("último checkpoint LSN esperado >= 9, got %d", ckLSN)
+		t.Fatalf("último checkpoint LSN expected >= 9, got %d", ckLSN)
 	}
 }
 
@@ -296,7 +296,7 @@ func TestFuzzyCheckpoint_RotatesAndTruncatesWALSafely(t *testing.T) {
 		t.Fatalf("SegmentPaths: %v", err)
 	}
 	if len(paths) >= 8 {
-		t.Fatalf("WAL não foi truncado; segmentos=%v", paths)
+		t.Fatalf("WAL was not truncado; segmentos=%v", paths)
 	}
 
 	recovered := open(t)
@@ -307,7 +307,7 @@ func TestFuzzyCheckpoint_RotatesAndTruncatesWALSafely(t *testing.T) {
 			t.Fatalf("Get %d: %v", i, err)
 		}
 		if !found {
-			t.Fatalf("registro %d não recuperado após truncate de WAL", i)
+			t.Fatalf("record %d not recuperado after truncate de WAL", i)
 		}
 	}
 }

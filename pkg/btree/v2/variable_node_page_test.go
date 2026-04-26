@@ -27,10 +27,10 @@ func TestVarNode_InitLeaf_Empty(t *testing.T) {
 		t.Fatal("leaf?")
 	}
 	if vp.NumKeys() != 0 {
-		t.Fatalf("esperado 0, recebi %d", vp.NumKeys())
+		t.Fatalf("expected 0, got %d", vp.NumKeys())
 	}
 	if vp.NextLeafPageID() != pagestore.InvalidPageID {
-		t.Fatal("sibling deveria ser invalid")
+		t.Fatal("sibling should be invalid")
 	}
 }
 
@@ -54,7 +54,7 @@ func TestVarNode_LeafInsertAndGet(t *testing.T) {
 	}
 
 	if vp.NumKeys() != 4 {
-		t.Fatalf("esperado 4, recebi %d", vp.NumKeys())
+		t.Fatalf("expected 4, got %d", vp.NumKeys())
 	}
 
 	// Ordem lexicográfica interna
@@ -62,7 +62,7 @@ func TestVarNode_LeafInsertAndGet(t *testing.T) {
 	for i, w := range want {
 		k, _ := vp.LeafAtVar(i)
 		if string(k) != w {
-			t.Fatalf("slot %d: esperado %q, recebi %q", i, w, string(k))
+			t.Fatalf("slot %d: expected %q, got %q", i, w, string(k))
 		}
 	}
 
@@ -71,7 +71,7 @@ func TestVarNode_LeafInsertAndGet(t *testing.T) {
 		t.Fatalf("Get bob: ok=%v v=%d", ok, v)
 	}
 	if _, ok := vp.LeafGetVar([]byte("zeta")); ok {
-		t.Fatal("Get zeta deveria falhar")
+		t.Fatal("Get zeta should fail")
 	}
 }
 
@@ -81,11 +81,11 @@ func TestVarNode_LeafInsertDuplicate_UpdatesInPlace(t *testing.T) {
 	_ = vp.LeafInsertVar([]byte("foo"), 999)
 
 	if vp.NumKeys() != 1 {
-		t.Fatalf("duplicata não deveria criar slot novo; NumKeys=%d", vp.NumKeys())
+		t.Fatalf("duplicata not should criar slot novo; NumKeys=%d", vp.NumKeys())
 	}
 	v, _ := vp.LeafGetVar([]byte("foo"))
 	if v != 999 {
-		t.Fatalf("update falhou: %d", v)
+		t.Fatalf("update failed: %d", v)
 	}
 }
 
@@ -113,23 +113,23 @@ func TestVarNode_LeafDelete_CompactsPage(t *testing.T) {
 		t.Fatalf("LeafDeleteVar: %v", err)
 	}
 	if !removed {
-		t.Fatal("LeafDeleteVar deveria remover chave existente")
+		t.Fatal("LeafDeleteVar should remover key existsnte")
 	}
 	if vp.NumKeys() != 3 {
-		t.Fatalf("esperava 3 chaves após delete, recebi %d", vp.NumKeys())
+		t.Fatalf("expected 3 keys after delete, got %d", vp.NumKeys())
 	}
 	if vp.FreeSpace() <= freeBefore {
-		t.Fatalf("delete deveria liberar espaço: before=%d after=%d", freeBefore, vp.FreeSpace())
+		t.Fatalf("delete should liberar espaço: before=%d after=%d", freeBefore, vp.FreeSpace())
 	}
 	if _, found := vp.LeafGetVar([]byte("bravo")); found {
-		t.Fatal("chave deletada não deveria existir")
+		t.Fatal("key deleted not should exist")
 	}
 
 	want := []string{"alpha", "charlie", "delta"}
 	for i, k := range want {
 		got, _ := vp.LeafAtVar(i)
 		if string(got) != k {
-			t.Fatalf("slot %d: esperado %q, recebi %q", i, k, string(got))
+			t.Fatalf("slot %d: expected %q, got %q", i, k, string(got))
 		}
 	}
 
@@ -141,7 +141,7 @@ func TestVarNode_LeafDelete_CompactsPage(t *testing.T) {
 func TestVarNode_LeafFull(t *testing.T) {
 	_, vp := newVarLeaf(t)
 
-	// Insere chaves de 100 bytes até a folha encher
+	// Insere keys de 100 bytes até a folha encher
 	big := bytes.Repeat([]byte("x"), 100)
 	var inserted int
 	for i := 0; i < 1000; i++ {
@@ -156,10 +156,10 @@ func TestVarNode_LeafFull(t *testing.T) {
 		t.Fatalf("encheu cedo demais: %d", inserted)
 	}
 
-	// Próxima insert com nova key deve ErrLeafFull
+	// Próxima insert com nova key must ErrLeafFull
 	newK := append([]byte("zzzzzzzz"), big...)
 	if err := vp.LeafInsertVar(newK, 9999); err != ErrLeafFull {
-		t.Fatalf("esperava ErrLeafFull, recebi %v", err)
+		t.Fatalf("expected ErrLeafFull, got %v", err)
 	}
 }
 
@@ -183,7 +183,7 @@ func TestVarNode_InitInternal_FindChild(t *testing.T) {
 	for _, c := range cases {
 		got := vp.FindChildVar([]byte(c.k))
 		if got != c.want {
-			t.Errorf("FindChild(%q) = %d, esperado %d", c.k, got, c.want)
+			t.Errorf("FindChild(%q) = %d, expected %d", c.k, got, c.want)
 		}
 	}
 }
@@ -191,7 +191,7 @@ func TestVarNode_InitInternal_FindChild(t *testing.T) {
 func TestVarNode_SplitLeaf(t *testing.T) {
 	_, left := newVarLeaf(t)
 
-	// Insere chaves pra ter 10 slots (ordem lexicográfica: "a0".."a9")
+	// Insere keys pra ter 10 slots (ordem lexicográfica: "a0".."a9")
 	for i := 0; i < 10; i++ {
 		k := []byte{'a', byte('0' + i)}
 		if err := left.LeafInsertVar(k, int64(i)); err != nil {
@@ -208,9 +208,9 @@ func TestVarNode_SplitLeaf(t *testing.T) {
 		t.Fatalf("split desbalanceado: left=%d right=%d", left.NumKeys(), right.NumKeys())
 	}
 
-	// sep deveria ser "a5" (primeira chave da metade direita)
+	// sep should be "a5" (primeira key da metade direita)
 	if string(sep) != "a5" {
-		t.Fatalf("sep esperado \"a5\", recebi %q", string(sep))
+		t.Fatalf("sep expected \"a5\", got %q", string(sep))
 	}
 
 	// left: a0..a4
@@ -218,7 +218,7 @@ func TestVarNode_SplitLeaf(t *testing.T) {
 		k, v := left.LeafAtVar(i)
 		want := string([]byte{'a', byte('0' + i)})
 		if string(k) != want || v != int64(i) {
-			t.Fatalf("left[%d]: esperado (%s,%d), recebi (%s,%d)", i, want, i, string(k), v)
+			t.Fatalf("left[%d]: expected (%s,%d), got (%s,%d)", i, want, i, string(k), v)
 		}
 	}
 	// right: a5..a9
@@ -226,7 +226,7 @@ func TestVarNode_SplitLeaf(t *testing.T) {
 		k, v := right.LeafAtVar(i)
 		want := string([]byte{'a', byte('0' + i + 5)})
 		if string(k) != want || v != int64(i+5) {
-			t.Fatalf("right[%d]: esperado (%s,%d), recebi (%s,%d)", i, want, i+5, string(k), v)
+			t.Fatalf("right[%d]: expected (%s,%d), got (%s,%d)", i, want, i+5, string(k), v)
 		}
 	}
 }
@@ -246,7 +246,7 @@ func TestVarNode_SplitInternal_MiddleKeyPromoted(t *testing.T) {
 
 	// mid = 7/2 = 3 → promovida = slot[3] = "f"
 	if string(promoted) != "f" {
-		t.Fatalf("promoted esperado \"f\", recebi %q", string(promoted))
+		t.Fatalf("promoted expected \"f\", got %q", string(promoted))
 	}
 
 	// left: c, d, e (3 slots, leftmost=100)
@@ -254,26 +254,26 @@ func TestVarNode_SplitInternal_MiddleKeyPromoted(t *testing.T) {
 		t.Fatalf("desbalanceado: left=%d right=%d", left.NumKeys(), right.NumKeys())
 	}
 	if lm := left.LeftmostChild(); lm != 100 {
-		t.Fatalf("left.leftmost esperado 100, recebi %d", lm)
+		t.Fatalf("left.leftmost expected 100, got %d", lm)
 	}
 
 	// right: leftmost = c_4 = child do slot[3] (f) = 104
 	if lm := right.LeftmostChild(); lm != 104 {
-		t.Fatalf("right.leftmost esperado 104, recebi %d", lm)
+		t.Fatalf("right.leftmost expected 104, got %d", lm)
 	}
 
 	wantLeft := []string{"c", "d", "e"}
 	for i, w := range wantLeft {
 		k, _ := left.InternalAtVar(i)
 		if string(k) != w {
-			t.Fatalf("left[%d]: esperado %q, recebi %q", i, w, string(k))
+			t.Fatalf("left[%d]: expected %q, got %q", i, w, string(k))
 		}
 	}
 	wantRight := []string{"g", "h", "i"}
 	for i, w := range wantRight {
 		k, _ := right.InternalAtVar(i)
 		if string(k) != w {
-			t.Fatalf("right[%d]: esperado %q, recebi %q", i, w, string(k))
+			t.Fatalf("right[%d]: expected %q, got %q", i, w, string(k))
 		}
 	}
 }
@@ -282,14 +282,14 @@ func TestVarNode_OpenVariableNodePage(t *testing.T) {
 	// Init, salva algo, reabre.
 	var p pagestore.Page
 	vp := InitLeafPageVar(&p, pagestore.BodySize, bytes.Compare)
-	vp.LeafInsertVar([]byte("chave-persistida"), 42)
+	vp.LeafInsertVar([]byte("key-persistida"), 42)
 
 	// Reabre
 	reopened, err := OpenVariableNodePage(&p, pagestore.BodySize, bytes.Compare)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, ok := reopened.LeafGetVar([]byte("chave-persistida"))
+	v, ok := reopened.LeafGetVar([]byte("key-persistida"))
 	if !ok || v != 42 {
 		t.Fatalf("reopen: ok=%v v=%d", ok, v)
 	}

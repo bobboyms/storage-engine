@@ -1,24 +1,24 @@
 package storage
 
-// FuzzyCheckpoint é um checkpoint não-bloqueante para escritas.
+// FuzzyCheckpoint é um checkpoint not-bloqueante para writes.
 //
 // Diferença do CreateCheckpoint (hard checkpoint):
-//   - CreateCheckpoint: comportamento idêntico, mas NÃO grava registro WAL.
+//   - CreateCheckpoint: comportamento idêntico, mas NOT grava record WAL.
 //     Recovery precisa reprocessar o WAL inteiro.
-//   - FuzzyCheckpoint: grava um registro EntryCheckpoint no WAL com o
+//   - FuzzyCheckpoint: grava um record EntryCheckpoint no WAL com o
 //     beginLSN. Recovery usa esse LSN para pular entradas antigas e
 //     iniciar o redo só a partir daí, reduzindo O(WAL completo) para
 //     O(WAL desde o último checkpoint).
 //
-// Semântica de não-bloqueio:
-//   Não adquire lock global de tabelas. As páginas são flushadas com
-//   latches por-frame (como sempre), então escritas em páginas DIFERENTES
+// Semântica de not-bloqueio:
+//   Not adquire lock global de tabelas. As pages são flushadas com
+//   latches por-frame (como sempre), então writes em pages DIFERENTES
 //   das que estão sendo flushadas prosseguem em paralelo. O único
-//   "bloqueio" é por-página e é de curtíssima duração.
+//   "bloqueio" é por-page e é de curtíssima duração.
 //
 // Garantia para recovery:
-//   Todas as páginas sujas com LSN ≤ beginLSN são flushadas antes do
-//   registro de checkpoint ser escrito. Portanto, recovery pode assumir
+//   Todas as pages sujas com LSN ≤ beginLSN são flushadas antes do
+//   record de checkpoint ser escrito. Portanto, recovery pode assumir
 //   que operações com LSN < beginLSN estão duravelmente em disco e pode
 //   pular o redo delas.
 //
@@ -35,7 +35,7 @@ import (
 	v2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
 )
 
-// FuzzyCheckpoint executa um checkpoint não-bloqueante e grava um registro
+// FuzzyCheckpoint executa um checkpoint not-bloqueante e grava um record
 // de checkpoint no WAL, permitindo que recovery pule entradas anteriores
 // ao beginLSN.
 func (se *StorageEngine) FuzzyCheckpoint() error {
@@ -50,13 +50,13 @@ func (se *StorageEngine) FuzzyCheckpoint() error {
 
 func (se *StorageEngine) fuzzyCheckpointLocked() error {
 	if se.WAL == nil {
-		// Sem WAL não há recovery, checkpoint fuzzy é no-op.
+		// Sem WAL there is no recovery, checkpoint fuzzy é no-op.
 		return nil
 	}
 
 	// 1. Determina o menor pageLSN ainda sujo. Esse é o ponto seguro de
-	//    redo para o checkpoint, porque qualquer página anterior já está
-	//    durável e qualquer página suja a partir daqui será flushada já.
+	//    redo para o checkpoint, porque qualquer page anterior já está
+	//    durável e qualquer page suja a partir daqui será flushada já.
 	beginLSN := se.oldestDirtyPageLSN()
 	if beginLSN == 0 {
 		beginLSN = se.lsnTracker.Current()
@@ -67,15 +67,15 @@ func (se *StorageEngine) fuzzyCheckpointLocked() error {
 		return fmt.Errorf("fuzzy checkpoint: sync WAL: %w", err)
 	}
 
-	// 3. Flush das páginas sujas — não bloqueia escritas (per-frame latch).
+	// 3. Flush das pages sujas — not bloqueia writes (per-frame latch).
 	if err := se.flushAllDirtyPages(); err != nil {
-		return fmt.Errorf("fuzzy checkpoint: flush páginas: %w", err)
+		return fmt.Errorf("fuzzy checkpoint: flush pages: %w", err)
 	}
 
-	// 4. Grava o registro de checkpoint no WAL com o beginLSN.
-	//    Recovery encontrará este registro e iniciará o redo a partir de beginLSN.
+	// 4. Grava o record de checkpoint no WAL com o beginLSN.
+	//    Recovery encontrará este record e iniciará o redo a partir de beginLSN.
 	if err := se.WAL.WriteCheckpointRecord(beginLSN); err != nil {
-		return fmt.Errorf("fuzzy checkpoint: escrever registro WAL: %w", err)
+		return fmt.Errorf("fuzzy checkpoint: escrever record WAL: %w", err)
 	}
 
 	if err := se.WAL.CheckpointLifecycle(beginLSN); err != nil {
@@ -130,7 +130,7 @@ func (se *StorageEngine) oldestDirtyPageLSN() uint64 {
 	return oldest
 }
 
-// flushAllDirtyPages flusha todas as páginas sujas de heaps e árvores
+// flushAllDirtyPages flusha todas as pages sujas de heaps e trees
 // sem adquirir locks globais de tabela.
 func (se *StorageEngine) flushAllDirtyPages() error {
 	syncedTrees := make(map[btree.Tree]bool)

@@ -15,7 +15,7 @@ import (
 /*
 EXEMPLO: Acesso Concorrente
 
-Este exemplo demonstra:
+Este example demonstra:
 1. Múltiplas goroutines escrevendo simultaneamente
 2. Leituras concorrentes com Snapshot Isolation
 3. Thread-safety do Storage Engine via Latch Crabbing
@@ -23,9 +23,9 @@ Este exemplo demonstra:
 
 O Storage Engine usa:
 - B+Tree com Latch Crabbing para lock-free concurrent access
-- Read locks (RLock) para leituras concorrentes
-- Write locks (Lock) apenas nos nós afetados durante escrita
-- Transações com Snapshot Isolation para leituras consistentes
+- Read locks (RLock) para reads concorrentes
+- Write locks (Lock) apenas nos nós afetados during write
+- Transações com Snapshot Isolation para reads consistentes
 */
 
 func main() {
@@ -77,7 +77,7 @@ func main() {
 	wg.Wait()
 	elapsed := time.Since(start)
 
-	fmt.Printf("✓ %d escritas concluídas em %v\n", writesOK, elapsed)
+	fmt.Printf("✓ %d writes concluídas em %v\n", writesOK, elapsed)
 	fmt.Printf("  - Sucesso: %d\n", writesOK)
 	fmt.Printf("  - Falhas: %d\n", writesFail)
 	fmt.Printf("  - Throughput: %.0f ops/sec\n", float64(writesOK)/elapsed.Seconds())
@@ -97,11 +97,11 @@ func main() {
 		go func(readerID int) {
 			defer wg.Done()
 
-			// Criar transação de leitura com Snapshot Isolation
+			// Criar transação de read com Snapshot Isolation
 			tx := engine.BeginRead()
 
 			for i := 0; i < readsPerReader; i++ {
-				// Ler chave aleatória (baseada no ID do reader)
+				// Ler key aleatória (baseada no ID do reader)
 				id := int64((readerID*7 + i*11) % int(writesOK))
 				if id <= 0 {
 					id = 1
@@ -120,7 +120,7 @@ func main() {
 	wg.Wait()
 	elapsed = time.Since(start)
 
-	fmt.Printf("✓ %d leituras concluídas em %v\n", readsOK, elapsed)
+	fmt.Printf("✓ %d reads concluídas em %v\n", readsOK, elapsed)
 	fmt.Printf("  - Throughput: %.0f ops/sec\n", float64(readsOK)/elapsed.Seconds())
 
 	// ========================================

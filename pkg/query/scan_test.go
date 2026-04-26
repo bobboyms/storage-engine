@@ -182,7 +182,7 @@ func TestMatches_Between(t *testing.T) {
 
 func TestMatches_DefaultFalse(t *testing.T) {
 	// Teste para o case default do switch
-	cond := &query.ScanCondition{Operator: query.ScanOperator(99)} // Operador inválido
+	cond := &query.ScanCondition{Operator: query.ScanOperator(99)} // Operador invalid
 	if cond.Matches(types.IntKey(10)) {
 		t.Error("Expected default case to return false")
 	}

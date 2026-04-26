@@ -12,20 +12,20 @@ import (
 /*
 EXEMPLO: Flush Durável e Recovery
 
-Este exemplo demonstra:
+Este example demonstra:
 1. Flush durável explícito do estado page-based
 2. Simulação de "crash" (fechamento sem flush explícito)
 3. Recovery automático a partir do WAL
-4. Verificação da integridade dos dados após recovery
+4. Verificação da integridade dos data after recovery
 
-O sistema usa Write-Ahead Logging (WAL) para garantir durabilidade:
-- Todas as operações são primeiro escritas no WAL
+O sistema usa Write-Ahead Logging (WAL) para garantir durability:
+- Todas as operações são primeiro writes no WAL
 - CreateCheckpoint agora força flush durável do estado page-based
 - Recovery reconstrói o estado relendo o WAL
 */
 
 func main() {
-	// Configurações de arquivos
+	// Configurações de files
 	walPath := "data.wal"
 	heapPath := "data.heap"
 	cleanup(walPath, heapPath)
@@ -38,7 +38,7 @@ func main() {
 
 	engine := setupEngine(heapPath, walPath)
 
-	// Inserir alguns dados
+	// Inserir alguns data
 	users := []struct {
 		id   int64
 		name string
@@ -59,16 +59,16 @@ func main() {
 	}
 	fmt.Printf("✓ %d usuários inseridos\n", len(users))
 
-	// Força flush durável das páginas/árvores
+	// Força flush durável das pages/trees
 	err := engine.CreateCheckpoint()
 	if err != nil {
 		fmt.Printf("Erro ao flushar estado: %v\n", err)
 	} else {
-		fmt.Println("✓ Estado flushado com sucesso")
+		fmt.Println("✓ Estado flushado com success")
 	}
 
-	// Verificar dados antes do "crash"
-	fmt.Println("\nDados antes do crash:")
+	// Verificar data before do "crash"
+	fmt.Println("\nDados before do crash:")
 	for i := int64(1); i <= 5; i++ {
 		doc, found, _ := engine.Get("users", "id", types.IntKey(i))
 		if found {
@@ -93,7 +93,7 @@ func main() {
 	}
 	fmt.Println("✓ Estado recuperado do WAL")
 
-	// Inserir mais dados (estes só estão duráveis no WAL)
+	// Inserir mais data (estes só estão duráveis no WAL)
 	newUsers := []struct {
 		id   int64
 		name string
@@ -132,20 +132,20 @@ func main() {
 
 	// Executar recovery - deve reconstituir:
 	// 1. Estado flushado (users 1-5)
-	// 2. Operações do WAL após o flush (users 6-8, update user 1, delete user 3)
+	// 2. Operações do WAL after o flush (users 6-8, update user 1, delete user 3)
 	err = engine.Recover(walPath)
 	if err != nil {
 		fmt.Printf("❌ Erro no recovery: %v\n", err)
 		return
 	}
-	fmt.Println("✓ Recovery executado com sucesso!")
+	fmt.Println("✓ Recovery executado com success!")
 
 	// ========================================
 	// FASE 4: VERIFICAÇÃO DOS DADOS
 	// ========================================
 	fmt.Println("\n=== FASE 4: Verificação dos Dados ===")
 
-	fmt.Println("\nEstado esperado após recovery:")
+	fmt.Println("\nEstado esperado after recovery:")
 	fmt.Println("- User 1: Alice Updated (atualizado via WAL)")
 	fmt.Println("- User 2: Bob (do flush)")
 	fmt.Println("- User 3: (deletado via WAL)")
@@ -159,12 +159,12 @@ func main() {
 		if found {
 			fmt.Printf("  ✓ User %d: %s\n", i, doc)
 		} else {
-			fmt.Printf("  ✗ User %d: (não encontrado/deletado)\n", i)
+			fmt.Printf("  ✗ User %d: (not encontrado/deletado)\n", i)
 		}
 	}
 
 	engine.Close()
-	fmt.Println("\n✓ Exemplo concluído com sucesso!")
+	fmt.Println("\n✓ Example concluído com success!")
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {

@@ -11,7 +11,7 @@ import (
 // helper apropriado.
 //
 // A estrutura geral é idêntica ao fixed, só o layout interno das
-// páginas muda (VariableNodePage em vez de NodePage).
+// pages muda (VariableNodePage em vez de NodePage).
 
 func (tr *BTreeV2) splitVarNode(h *pagestore.PageHandle, vp *VariableNodePage) (*pagestore.PageHandle, []byte, error) {
 	rightH, err := tr.bp.NewPage()
@@ -34,9 +34,9 @@ func (tr *BTreeV2) splitVarNode(h *pagestore.PageHandle, vp *VariableNodePage) (
 	return rightH, sepKey, nil
 }
 
-// predictSplitVarLocked retorna se a subárvore enraizada em `vp`
+// predictSplitVarLocked retorna se a subtree enraizada em `vp`
 // precisa splitar para concluir a inserção de `key`, e qual seria o
-// comprimento exato da chave promovida por esse split.
+// comprimento exato da key promovida por esse split.
 //
 // Contrato: `h`/`vp` já estão com latch exclusivo.
 func (tr *BTreeV2) predictSplitVarLocked(h *pagestore.PageHandle, vp *VariableNodePage, key []byte) (bool, int, error) {
@@ -343,8 +343,8 @@ func (tr *BTreeV2) removeCrabbingVar(encKey []byte) (bool, error) {
 	return true, nil
 }
 
-// getLockedVar lê a árvore variável com snapshot rápido do rootPageID
-// + latch crabbing de leitura entre páginas.
+// getLockedVar lê a tree variável com snapshot rápido do rootPageID
+// + latch crabbing de read entre pages.
 func (tr *BTreeV2) getLockedVar(encKey []byte) (int64, bool, error) {
 	pageID := tr.rootPage()
 	for {
@@ -405,7 +405,7 @@ func (tr *BTreeV2) scanLockedVar(start, end []byte, fn func(key types.Comparable
 				return nil
 			}
 
-			// Cópia da key — o body da página pode mudar após release.
+			// Cópia da key — o body da page pode mudar after release.
 			keyCopy := make([]byte, len(k))
 			copy(keyCopy, k)
 

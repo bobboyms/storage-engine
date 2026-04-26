@@ -155,6 +155,9 @@ Use the CI as a reference for required commands when the changed area touches th
 - Preserve existing user changes. Do not revert files you did not change unless the user explicitly requests it.
 - Prefer small, local changes.
 - Follow existing package patterns before introducing new abstractions.
+- Use English only across the repository.
+- Do not introduce or keep text in any language other than English in code, comments, error messages, log messages, test names, test failure messages, examples, or documentation.
+- When modifying an existing file, translate any non-English text you touch to English as part of the same change.
 - Run `gofmt` on changed Go files.
 - Avoid temporary files in the repository. Use `/tmp` for temporary artifacts.
 - Do not use destructive commands, reset, file checkout, or artifact removal without an explicit user request.

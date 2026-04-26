@@ -22,7 +22,7 @@ type AESGCM struct {
 
 func NewAESGCM(key []byte) (*AESGCM, error) {
 	if len(key) != KeySize {
-		return nil, fmt.Errorf("crypto: chave deve ter %d bytes, recebida %d", KeySize, len(key))
+		return nil, fmt.Errorf("crypto: key must ter %d bytes, gotda %d", KeySize, len(key))
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -54,8 +54,8 @@ func (c *AESGCM) Decrypt(ciphertext, aad []byte) ([]byte, error) {
 	body := ciphertext[NonceSize:]
 	plaintext, err := c.aead.Open(nil, nonce, body, aad)
 	if err != nil {
-		// AEAD falha = chave errada, dado corrompido OU adulteração
-		return nil, fmt.Errorf("crypto: falha de autenticação (chave inválida ou dado adulterado): %w", err)
+		// AEAD failure = key errada, dado corrupted OU adulteração
+		return nil, fmt.Errorf("crypto: authentication failure (invalid key or tampered data): %w", err)
 	}
 	return plaintext, nil
 }

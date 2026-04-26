@@ -12,21 +12,21 @@ import (
 )
 
 var (
-	ErrInvalidMagic     = errors.New("pagestore: magic inválido — arquivo corrompido ou não é page file")
-	ErrChecksumMismatch = errors.New("pagestore: checksum inválido — página corrompida")
-	ErrDecryptFailed    = errors.New("pagestore: falha ao decifrar (chave errada ou tamper)")
-	ErrPageOutOfRange   = errors.New("pagestore: pageID fora do intervalo alocado")
-	ErrClosed           = errors.New("pagestore: PageFile fechado")
+	ErrInvalidMagic     = errors.New("pagestore: invalid magic - corrupted file or not a page file")
+	ErrChecksumMismatch = errors.New("pagestore: invalid checksum - corrupted page")
+	ErrDecryptFailed    = errors.New("pagestore: failed to decrypt (wrong key or tampering)")
+	ErrPageOutOfRange   = errors.New("pagestore: pageID outside allocated range")
+	ErrClosed           = errors.New("pagestore: PageFile closed")
 )
 
-// PageFile é a primitiva de I/O de páginas fixas de 8KB.
+// PageFile é a primitiva de I/O de pages fixas de 8KB.
 //
-// Concorrência: leituras e escritas usam pread/pwrite (ReadAt/WriteAt) —
+// Concorrência: reads e writes usam pread/pwrite (ReadAt/WriteAt) —
 // seguras para goroutines múltiplas em offsets disjuntos. Allocate é
-// atômico. Close usa um flag atômico; operações depois de Close falham
+// atômico. Close usa um flag atômico; operações depois de Close fail
 // com ErrClosed em vez de tocar um descritor de arquivo liberado.
 //
-// Não há buffer pool aqui — cada Read/Write vai direto ao disco (via
+// Not há buffer pool aqui — cada Read/Write vai direto ao disco (via
 // page cache do SO). Cache é responsabilidade do BufferPool (Fase 2).
 type PageFile struct {
 	path   string
@@ -39,7 +39,7 @@ type PageFile struct {
 	numPages atomic.Uint64
 
 	// syncMu serializa apenas Sync() — ReadAt/WriteAt em offsets distintos
-	// não precisam de lock.
+	// not precisam de lock.
 	syncMu sync.Mutex
 
 	closed atomic.Bool
@@ -48,9 +48,9 @@ type PageFile struct {
 // NewPageFile abre ou cria um page file em `path`. Passe nil para
 // `cipher` para desligar TDE (o arquivo fica com o body em claro).
 //
-// Durability: se o arquivo é CRIADO (não existia antes), faz fsync do
+// Durability: se o arquivo é CRIADO (not existia antes), faz fsync do
 // diretório pai — sem isso a criação pode ser "esquecida" pelo FS em
-// caso de crash mesmo após a função retornar.
+// caso de crash mesmo after a função retornar.
 func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	// Detecta se vamos criar o arquivo pela primeira vez
 	_, statErr := os.Stat(path)
@@ -68,16 +68,16 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	}
 	if stat.Size()%PageSize != 0 {
 		f.Close()
-		return nil, fmt.Errorf("pagestore: tamanho do arquivo %d não é múltiplo de PageSize %d", stat.Size(), PageSize)
+		return nil, fmt.Errorf("pagestore: file size %d is not a multiple of PageSize %d", stat.Size(), PageSize)
 	}
 
 	// fsync do diretório pai quando o arquivo foi criado agora. Garante
-	// que a entry no diretório persiste além de crash imediato após
+	// que a entry no diretório persiste além de crash imediato after
 	// NewPageFile retornar.
 	if creating {
 		if err := fsyncDir(filepath.Dir(path)); err != nil {
 			f.Close()
-			return nil, fmt.Errorf("pagestore: fsync dir após create: %w", err)
+			return nil, fmt.Errorf("pagestore: fsync dir after create: %w", err)
 		}
 	}
 
@@ -88,7 +88,7 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	}
 
 	// PageID 0 é reservado (InvalidPageID). O próximo a alocar é o que
-	// corresponde ao fim do arquivo (ou 1 se estiver vazio).
+	// corresponde ao fim do arquivo (ou 1 se estiver empty).
 	n := uint64(stat.Size() / PageSize)
 	if n == 0 {
 		n = 1 // reserva o slot 0
@@ -99,7 +99,7 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	return pf, nil
 }
 
-// AllocatePage reserva um novo pageID. Não grava nada em disco — a
+// AllocatePage reserva um novo pageID. Not grava nada em disco — a
 // primeira gravação de verdade acontece em WritePage.
 func (pf *PageFile) AllocatePage() (PageID, error) {
 	if pf.closed.Load() {
@@ -109,20 +109,20 @@ func (pf *PageFile) AllocatePage() (PageID, error) {
 	return id, nil
 }
 
-// NumPages devolve quantas páginas já foram persistidas (inclui o slot 0).
+// NumPages devolve quantas pages já foram persistidas (inclui o slot 0).
 func (pf *PageFile) NumPages() uint64 { return pf.numPages.Load() }
 
-// UsableBodySize devolve quantos bytes do body de cada página ficam
+// UsableBodySize devolve quantos bytes do body de cada page ficam
 // disponíveis para payload depois de descontado o overhead da cifra.
 // Sem cifra = BodySize (8160). Com AES-GCM = BodySize - 28.
-// Quem monta payloads dentro da página (ex: SlottedPage) deve respeitar
-// esse limite para não perder bytes na cifragem.
+// Quem monta payloads dentro da page (ex: SlottedPage) must respeitar
+// esse limite para not perder bytes na cifragem.
 func (pf *PageFile) UsableBodySize() int { return pf.cipher.UsableBodySize() }
 
 // Path devolve o caminho do arquivo.
 func (pf *PageFile) Path() string { return pf.path }
 
-// WritePage grava a página `p` no offset correspondente a `pageID`.
+// WritePage grava a page `p` no offset correspondente a `pageID`.
 // O header é escrito em claro (com Magic, Version, PageID e Checksum
 // recalculados). O body é cifrado se TDE estiver ligado.
 func (pf *PageFile) WritePage(pageID PageID, p *Page) error {
@@ -130,7 +130,7 @@ func (pf *PageFile) WritePage(pageID PageID, p *Page) error {
 		return ErrClosed
 	}
 	if pageID == InvalidPageID {
-		return fmt.Errorf("pagestore: pageID 0 é reservado")
+		return fmt.Errorf("pagestore: pageID 0 is reserved")
 	}
 
 	// Monta o buffer on-disk num array local de 8KB.
@@ -146,7 +146,7 @@ func (pf *PageFile) WritePage(pageID PageID, p *Page) error {
 			return fmt.Errorf("pagestore: encrypt page %d: %w", pageID, err)
 		}
 		if len(enc) != BodySize {
-			return fmt.Errorf("pagestore: ciphertext tem %d bytes, esperado %d", len(enc), BodySize)
+			return fmt.Errorf("pagestore: ciphertext has %d bytes, expected %d", len(enc), BodySize)
 		}
 		copy(disk[HeaderSize:], enc)
 	}
@@ -180,15 +180,15 @@ func (pf *PageFile) WritePage(pageID PageID, p *Page) error {
 	return nil
 }
 
-// ReadPage lê e valida a página `pageID`. Valida magic + checksum
-// antes de tentar decifrar (fast fail em corrupção). Retorna a página
+// ReadPage lê e valida a page `pageID`. Valida magic + checksum
+// antes de tentar decifrar (fast fail em corruption). Retorna a page
 // com o body EM CLARO.
 func (pf *PageFile) ReadPage(pageID PageID) (*Page, error) {
 	if pf.closed.Load() {
 		return nil, ErrClosed
 	}
 	if pageID == InvalidPageID {
-		return nil, fmt.Errorf("pagestore: pageID 0 é reservado")
+		return nil, fmt.Errorf("pagestore: pageID 0 is reserved")
 	}
 	if uint64(pageID) >= pf.numPages.Load() {
 		return nil, ErrPageOutOfRange
@@ -211,9 +211,9 @@ func (pf *PageFile) ReadPage(pageID PageID) (*Page, error) {
 		return nil, ErrChecksumMismatch
 	}
 	if hdr.PageID != pageID {
-		// Defesa contra swap de páginas inteiras (header + body).
+		// Defesa contra swap de pages inteiras (header + body).
 		// AAD pega swap apenas de body; aqui pegamos swap completo.
-		return nil, fmt.Errorf("pagestore: pageID %d no header não bate com offset %d", hdr.PageID, pageID)
+		return nil, fmt.Errorf("pagestore: pageID %d in header does not match offset %d", hdr.PageID, pageID)
 	}
 
 	if !pf.cipher.IsNoOp() {
@@ -241,18 +241,18 @@ func (pf *PageFile) Sync() error {
 	return syncFile(pf.file)
 }
 
-// Close fecha o arquivo. Operações subsequentes falham com ErrClosed.
-// É idempotente — Close() duas vezes não é erro.
+// Close fecha o arquivo. Operações subsequentes fail com ErrClosed.
+// É idempotente — Close() duas vezes is not erro.
 //
 // Durability: antes de fechar, chama fsync pra garantir que os writes
-// pendentes foram persistidos. Sem isso, um crash imediatamente após
-// o processo terminar "limpo" pode perder as últimas escritas.
+// pendentes foram persistidos. Sem isso, um crash imediatamente after
+// o processo terminar "limpo" pode perder as últimas writes.
 func (pf *PageFile) Close() error {
 	if !pf.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	// Tenta fsync — se falhar (ex: disk full), ainda tentamos fechar
-	// pra não vazar descritor, mas propagamos o erro do fsync.
+	// Tenta fsync — se fail (ex: disk full), ainda tentamos fechar
+	// pra not vazar descritor, mas propagamos o erro do fsync.
 	syncErr := syncFile(pf.file)
 	closeErr := pf.file.Close()
 	if syncErr != nil {

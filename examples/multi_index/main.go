@@ -12,20 +12,20 @@ import (
 /*
 EXEMPLO: Múltiplos Índices
 
-Este exemplo demonstra:
-1. Criação de tabela com índice primário e secundários
-2. Busca por diferentes índices
+Este example demonstra:
+1. Criação de tabela com index primário e secundários
+2. Busca por diferentes indexs
 3. Trade-offs: espaço vs performance
-4. Quando usar índices secundários
+4. Quando usar indexs secundários
 
 Conceitos:
 - Índice Primário: Chave única, usado para identificação
 - Índice Secundário: Permite buscas rápidas por outros campos
 
-IMPORTANTE: Cada índice adicional aumenta:
-- Tempo de escrita (mais atualizações de B+Tree)
+IMPORTANTE: Cada index adicional aumenta:
+- Tempo de write (mais atualizações de B+Tree)
 - Espaço de armazenamento (cópias dos ponteiros)
-- Mas ACELERA leituras por aquele campo
+- Mas ACELERA reads por aquele campo
 */
 
 func main() {
@@ -44,7 +44,7 @@ func main() {
 	// ========================================
 	fmt.Println("=== Inserção de Dados ===")
 
-	// Usando InsertRow para atualizar todos os índices atomicamente
+	// Usando InsertRow para atualizar todos os indexs atomicamente
 	employees := []struct {
 		id         int64
 		email      string
@@ -94,7 +94,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Busca por Índice Secundário (email) ===")
 
-	// Também O(log n) graças ao índice
+	// Também O(log n) graças ao index
 	doc, found, _ = engine.Get("employees", "email", types.VarcharKey("grace@company.com"))
 	if found {
 		fmt.Printf("Email='grace@company.com': %s\n", doc)
@@ -103,7 +103,7 @@ func main() {
 	// ========================================
 	// 4. BUSCA POR DEPARTAMENTO
 	// ========================================
-	fmt.Println("\n=== Busca por Departamento (índice secundário) ===")
+	fmt.Println("\n=== Busca por Departamento (index secundário) ===")
 
 	// Buscar todos do Engineering usando scan
 	fmt.Println("Funcionários do Engineering:")
@@ -150,15 +150,15 @@ func main() {
 ┌─────────────────────────────────────────────────────────────────┐
 │ Cenário: Buscar funcionário por email                          │
 ├─────────────────────────────────────────────────────────────────┤
-│ SEM índice secundário:                                          │
+│ SEM index secundário:                                          │
 │   • Precisa fazer SCAN em toda a tabela                         │
-│   • Complexidade: O(n) onde n = número de registros             │
-│   • Com 1 milhão de registros: ~1 milhão de comparações         │
+│   • Complexidade: O(n) onde n = número de records             │
+│   • Com 1 milhão de records: ~1 milhão de comparações         │
 ├─────────────────────────────────────────────────────────────────┤
-│ COM índice secundário (email):                                  │
-│   • Busca direta na B+Tree do índice                            │
+│ COM index secundário (email):                                  │
+│   • Busca direta na B+Tree do index                            │
 │   • Complexidade: O(log n)                                      │
-│   • Com 1 milhão de registros: ~20 comparações                  │
+│   • Com 1 milhão de records: ~20 comparações                  │
 └─────────────────────────────────────────────────────────────────┘
 `)
 
@@ -173,22 +173,22 @@ func main() {
 ├──────────────────┼─────────────────────────────────────────────┤
 │ ✓ Buscas rápidas │ ✗ Mais espaço em disco (B+Tree extra)       │
 │   por múltiplos  │                                             │
-│   campos         │ ✗ Escritas mais lentas (atualiza N árvores) │
+│   campos         │ ✗ Escritas mais lentas (atualiza N trees) │
 │                  │                                             │
 │ ✓ Range scans    │ ✗ Mais complexidade no recovery             │
 │   eficientes     │                                             │
 │                  │ ✗ Checkpoints maiores                       │
 └──────────────────┴─────────────────────────────────────────────┘
 
-Quando criar índice secundário?
+Quando criar index secundário?
   ✓ Campo frequentemente usado em WHERE
   ✓ Campo usado em ORDER BY
   ✓ Campo usado em JOINs (quando suportado)
 
-Quando NÃO criar índice secundário?
-  ✗ Tabela pequena (< 1000 registros)
+Quando NÃO criar index secundário?
+  ✗ Tabela pequena (< 1000 records)
   ✗ Campo raramente consultado
-  ✗ Alto volume de escritas e poucas leituras
+  ✗ Alto volume de writes e poucas reads
 `)
 
 	// ========================================
@@ -199,8 +199,8 @@ Quando NÃO criar índice secundário?
 	// Atualizar salário do funcionário ID=2
 	newDoc := `{"id": 2, "email": "bob@company.com", "department": "Engineering", "salary": 95000.00}`
 
-	// IMPORTANTE: Ao atualizar, use UpsertRow para manter todos os índices consistentes.
-	// InsertRow é insert-only e rejeita chave primária duplicada.
+	// IMPORTANTE: Ao atualizar, use UpsertRow para manter todos os indexs consistentes.
+	// InsertRow é insert-only e rejeita key primária duplicada.
 	err := engine.UpsertRow("employees", newDoc, map[string]types.Comparable{
 		"id":         types.IntKey(2),
 		"email":      types.VarcharKey("bob@company.com"),
@@ -218,7 +218,7 @@ Quando NÃO criar índice secundário?
 		fmt.Printf("  Verificação: %s\n", doc)
 	}
 
-	fmt.Println("\n✓ Exemplo concluído!")
+	fmt.Println("\n✓ Example concluído!")
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {
@@ -226,7 +226,7 @@ func setupEngine(heapPath, walPath string) *storage.StorageEngine {
 
 	tableMgr := storage.NewTableMenager()
 
-	// Tabela com 4 índices:
+	// Tabela com 4 indexs:
 	// - id: Primário (identificação única)
 	// - email: Secundário (busca por email)
 	// - department: Secundário (busca por departamento)

@@ -1,11 +1,11 @@
 // EXEMPLO: Backup/restore online
 //
-// Este exemplo mostra:
+// Este example mostra:
 //   - como abrir o engine em modo de produção com WAL
 //   - como criar um backup online com o engine aberto
 //   - como validar a integridade do backup pelo manifest
-//   - como restaurar em um diretório vazio
-//   - como reabrir o engine restaurado e ler os dados
+//   - como restaurar em um directory empty
+//   - como reabrir o engine restaurado e ler os data
 package main
 
 import (
@@ -34,7 +34,7 @@ func main() {
 
 	source, err := openEngine(sourceDir)
 	if err != nil {
-		fmt.Printf("erro abrindo engine origem: %v\n", err)
+		fmt.Printf("error abrindo engine origem: %v\n", err)
 		return
 	}
 
@@ -42,7 +42,7 @@ func main() {
 		doc := fmt.Sprintf(`{"id":%d,"email":"user-%d@example.com","balance":%d}`, i, i, i*100)
 		if err := source.Put(tableName, indexName, types.IntKey(i), doc); err != nil {
 			_ = source.Close()
-			fmt.Printf("erro gravando documento %d: %v\n", i, err)
+			fmt.Printf("error gravando documento %d: %v\n", i, err)
 			return
 		}
 	}
@@ -51,31 +51,31 @@ func main() {
 	manifest, err := source.BackupOnline(backupDir)
 	if err != nil {
 		_ = source.Close()
-		fmt.Printf("erro criando backup online: %v\n", err)
+		fmt.Printf("error criando backup online: %v\n", err)
 		return
 	}
-	fmt.Printf("Backup criado em %s com %d arquivos e checkpoint LSN %d.\n",
+	fmt.Printf("Backup criado em %s com %d files e checkpoint LSN %d.\n",
 		backupDir, len(manifest.Files), manifest.CheckpointLSN)
 
 	if _, err := storage.VerifyBackup(backupDir); err != nil {
 		_ = source.Close()
-		fmt.Printf("backup falhou na verificacao: %v\n", err)
+		fmt.Printf("backup failed na verificacao: %v\n", err)
 		return
 	}
-	fmt.Println("Backup verificado com sucesso.")
+	fmt.Println("Backup verificado com success.")
 
-	// Esta escrita acontece depois do backup. Ela continua existindo no banco
+	// Esta write acontece after do backup. Ela continua existindo no banco
 	// origem, mas nao deve aparecer no restore feito a partir do snapshot.
 	if err := source.Put(tableName, indexName, types.IntKey(99),
 		`{"id":99,"email":"after-backup@example.com","balance":9900}`); err != nil {
 		_ = source.Close()
-		fmt.Printf("erro gravando documento pos-backup: %v\n", err)
+		fmt.Printf("error gravando documento pos-backup: %v\n", err)
 		return
 	}
 
 	if _, err := storage.RestoreBackup(backupDir, restoreDir); err != nil {
 		_ = source.Close()
-		fmt.Printf("erro restaurando backup: %v\n", err)
+		fmt.Printf("error restaurando backup: %v\n", err)
 		return
 	}
 	fmt.Printf("Backup restaurado em %s.\n", restoreDir)
@@ -83,7 +83,7 @@ func main() {
 	restored, err := openEngine(restoreDir)
 	if err != nil {
 		_ = source.Close()
-		fmt.Printf("erro abrindo engine restaurado: %v\n", err)
+		fmt.Printf("error abrindo engine restaurado: %v\n", err)
 		return
 	}
 	defer restored.Close()
@@ -92,7 +92,7 @@ func main() {
 	for i := int64(1); i <= 3; i++ {
 		doc, found, err := restored.Get(tableName, indexName, types.IntKey(i))
 		if err != nil {
-			fmt.Printf("erro lendo documento restaurado %d: %v\n", i, err)
+			fmt.Printf("error lendo documento restaurado %d: %v\n", i, err)
 			return
 		}
 		if !found {
@@ -104,11 +104,11 @@ func main() {
 
 	_, found, err := restored.Get(tableName, indexName, types.IntKey(99))
 	if err != nil {
-		fmt.Printf("erro lendo documento pos-backup no restore: %v\n", err)
+		fmt.Printf("error lendo documento pos-backup no restore: %v\n", err)
 		return
 	}
 	if found {
-		fmt.Println("ERRO: restore incluiu escrita posterior ao backup.")
+		fmt.Println("ERRO: restore incluiu write posterior ao backup.")
 		return
 	}
 

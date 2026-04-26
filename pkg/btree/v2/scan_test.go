@@ -34,11 +34,11 @@ func TestBTreeV2_ScanAll_SingleLeaf(t *testing.T) {
 
 	want := [][2]int64{{10, 100}, {20, 200}, {30, 300}, {40, 400}, {50, 500}}
 	if len(got) != len(want) {
-		t.Fatalf("esperado %d pares, recebi %d", len(want), len(got))
+		t.Fatalf("expected %d pares, got %d", len(want), len(got))
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("pos %d: esperado %v, recebi %v", i, want[i], got[i])
+			t.Fatalf("pos %d: expected %v, got %v", i, want[i], got[i])
 		}
 	}
 }
@@ -55,7 +55,7 @@ func TestBTreeV2_ScanAll_EmptyTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatalf("árvore vazia deveria não iterar, iterou %d", count)
+		t.Fatalf("tree empty should not iterar, iterou %d", count)
 	}
 }
 
@@ -74,10 +74,10 @@ func TestBTreeV2_ScanAll_SpansMultipleLeaves(t *testing.T) {
 	err := tr.ScanAll(func(key types.Comparable, v int64) error {
 		kk, _ := kvDec(key, v)
 		if kk != expectedKey {
-			t.Fatalf("pos %d: esperado key %d, recebi %d", count, expectedKey, kk)
+			t.Fatalf("pos %d: expected key %d, got %d", count, expectedKey, kk)
 		}
 		if v != kk*3 {
-			t.Fatalf("key %d: esperado value %d, recebi %d", kk, kk*3, v)
+			t.Fatalf("key %d: expected value %d, got %d", kk, kk*3, v)
 		}
 		expectedKey++
 		count++
@@ -87,7 +87,7 @@ func TestBTreeV2_ScanAll_SpansMultipleLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != N {
-		t.Fatalf("esperado %d iterações, recebi %d", N, count)
+		t.Fatalf("expected %d iterações, got %d", N, count)
 	}
 }
 
@@ -109,11 +109,11 @@ func TestBTreeV2_Scan_Range_SingleLeaf(t *testing.T) {
 
 	want := []int64{5, 6, 7, 8, 9, 10}
 	if len(got) != len(want) {
-		t.Fatalf("esperado %d chaves, recebi %d: %v", len(want), len(got), got)
+		t.Fatalf("expected %d keys, got %d: %v", len(want), len(got), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("pos %d: esperado %d, recebi %d", i, want[i], got[i])
+			t.Fatalf("pos %d: expected %d, got %d", i, want[i], got[i])
 		}
 	}
 }
@@ -128,7 +128,7 @@ func TestBTreeV2_Scan_Range_SpansLeaves(t *testing.T) {
 	err := tr.Scan(k(100), k(999), func(key types.Comparable, v int64) error {
 		kk, _ := kvDec(key, v)
 		if kk != int64(100+count) {
-			t.Fatalf("esperado key %d, recebi %d", 100+count, kk)
+			t.Fatalf("expected key %d, got %d", 100+count, kk)
 		}
 		count++
 		return nil
@@ -137,7 +137,7 @@ func TestBTreeV2_Scan_Range_SpansLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != 900 {
-		t.Fatalf("esperado 900 chaves, recebi %d", count)
+		t.Fatalf("expected 900 keys, got %d", count)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestBTreeV2_Scan_EmptyRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatalf("range fora do domínio deveria iterar 0, iterou %d", count)
+		t.Fatalf("range fora do domínio should iterar 0, iterou %d", count)
 	}
 }
 
@@ -174,11 +174,11 @@ func TestBTreeV2_Scan_StartBeforeFirstKey(t *testing.T) {
 	})
 	want := []int64{50, 100}
 	if len(got) != len(want) {
-		t.Fatalf("esperado %v, recebi %v", want, got)
+		t.Fatalf("expected %v, got %v", want, got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("pos %d: esperado %d, recebi %d", i, want[i], got[i])
+			t.Fatalf("pos %d: expected %d, got %d", i, want[i], got[i])
 		}
 	}
 }
@@ -199,9 +199,9 @@ func TestBTreeV2_Scan_EarlyStop(t *testing.T) {
 		return nil
 	})
 	if err != stop {
-		t.Fatalf("esperava erro 'parar', recebi %v", err)
+		t.Fatalf("expected erro 'parar', got %v", err)
 	}
 	if count != 5 {
-		t.Fatalf("esperado parar em 5, parou em %d", count)
+		t.Fatalf("expected parar em 5, parou em %d", count)
 	}
 }

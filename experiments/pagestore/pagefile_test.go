@@ -62,7 +62,7 @@ func TestRoundTrip_NoCipher(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Body(), p.Body()) {
-		t.Fatal("body divergente após round-trip")
+		t.Fatal("body divergente after round-trip")
 	}
 }
 
@@ -85,7 +85,7 @@ func TestRoundTrip_Encrypted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Body()[:usable], p.Body()[:usable]) {
-		t.Fatal("plaintext divergente após round-trip cifrado")
+		t.Fatal("plaintext divergente after round-trip encrypted")
 	}
 }
 
@@ -105,7 +105,7 @@ func TestEncrypted_DoesNotLeakPlaintext(t *testing.T) {
 
 	raw, _ := os.ReadFile(pf.path)
 	if bytes.Contains(raw, secret) {
-		t.Fatal("plaintext encontrado em claro no arquivo")
+		t.Fatal("plaintext encontrado em plaintext no file")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestTamperDetection_Checksum(t *testing.T) {
 	pf.Close()
 
 	raw, _ := os.ReadFile(pf.path)
-	// Adultera byte no meio do body (não no header)
+	// Adultera byte no meio do body (not no header)
 	raw[HeaderSize+100] ^= 0xFF
 	os.WriteFile(pf.path, raw, 0644)
 
@@ -160,9 +160,9 @@ func TestEncrypted_AADBoundToPageID(t *testing.T) {
 	_ = pf.WritePage(id2, &p) // conteúdo idêntico, AAD diferente
 	pf.Close()
 
-	// Troca fisicamente os bodies das duas páginas (mantém headers).
-	// Se AAD amarra ciphertext ao pageID, decifrar a página id1 com o
-	// body da id2 deve falhar (mesmo sendo do mesmo dono).
+	// Troca fisicamente os bodies das duas pages (mantém headers).
+	// Se AAD amarra ciphertext ao pageID, deencryptionr a page id1 com o
+	// body da id2 deve failurer (mesmo sendo do mesmo dono).
 	raw, _ := os.ReadFile(pf.path)
 	body1 := make([]byte, BodySize)
 	copy(body1, raw[HeaderSize:HeaderSize+BodySize])
@@ -170,7 +170,7 @@ func TestEncrypted_AADBoundToPageID(t *testing.T) {
 	copy(raw[PageSize+HeaderSize:PageSize+HeaderSize+BodySize], body1)
 
 	// Recalcula checksums dos headers para bypassar a defesa de checksum
-	// e confirmar que é a cifra autenticada que pega o swap.
+	// e confirmar que é a encryption autenticada que pega o swap.
 	sum1 := crc32Sum(raw[HeaderSize : HeaderSize+BodySize])
 	sum2 := crc32Sum(raw[PageSize+HeaderSize : PageSize+HeaderSize+BodySize])
 	raw[24] = byte(sum1)

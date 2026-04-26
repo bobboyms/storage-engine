@@ -24,21 +24,21 @@ func TestSplitLeafInto_HalfAndHalf(t *testing.T) {
 		t.Fatalf("split desequilibrado: left=%d right=%d", left.NumKeys(), right.NumKeys())
 	}
 	if sep != 10 {
-		t.Fatalf("separador esperado 10, recebi %d", sep)
+		t.Fatalf("separador expected 10, got %d", sep)
 	}
 
 	wantLeft := []uint64{0, 2, 4, 6, 8}
 	for i, w := range wantLeft {
 		k, v := left.LeafAt(i)
 		if k != w || v != int64(w)*10 {
-			t.Fatalf("left[%d]: esperado (%d,%d), recebi (%d,%d)", i, w, int64(w)*10, k, v)
+			t.Fatalf("left[%d]: expected (%d,%d), got (%d,%d)", i, w, int64(w)*10, k, v)
 		}
 	}
 	wantRight := []uint64{10, 12, 14, 16, 18}
 	for i, w := range wantRight {
 		k, v := right.LeafAt(i)
 		if k != w || v != int64(w)*10 {
-			t.Fatalf("right[%d]: esperado (%d,%d), recebi (%d,%d)", i, w, int64(w)*10, k, v)
+			t.Fatalf("right[%d]: expected (%d,%d), got (%d,%d)", i, w, int64(w)*10, k, v)
 		}
 	}
 }
@@ -58,7 +58,7 @@ func TestSplitLeafInto_PreservesSiblingLink(t *testing.T) {
 	_ = left.splitLeafInto(right)
 
 	if right.NextLeafPageID() != 99 {
-		t.Fatalf("right.NextLeaf esperado 99 (herdado), recebi %d", right.NextLeafPageID())
+		t.Fatalf("right.NextLeaf expected 99 (herdado), got %d", right.NextLeafPageID())
 	}
 }
 
@@ -73,14 +73,14 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 	promoted := left.splitInternalInto(right)
 
 	if promoted != 40 {
-		t.Fatalf("promoted esperado 40, recebi %d", promoted)
+		t.Fatalf("promoted expected 40, got %d", promoted)
 	}
 	if left.NumKeys() != 3 || right.NumKeys() != 3 {
 		t.Fatalf("split desbalanceado: left=%d right=%d", left.NumKeys(), right.NumKeys())
 	}
 
 	if lm := left.LeftmostChild(); lm != 100 {
-		t.Fatalf("left.leftmost esperado 100, recebi %d", lm)
+		t.Fatalf("left.leftmost expected 100, got %d", lm)
 	}
 	wantLeftSlots := []struct {
 		k uint64
@@ -89,12 +89,12 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 	for i, w := range wantLeftSlots {
 		k, c := left.InternalAt(i)
 		if k != w.k || c != w.c {
-			t.Fatalf("left[%d]: esperado (%d,%d), recebi (%d,%d)", i, w.k, w.c, k, c)
+			t.Fatalf("left[%d]: expected (%d,%d), got (%d,%d)", i, w.k, w.c, k, c)
 		}
 	}
 
 	if lm := right.LeftmostChild(); lm != 104 {
-		t.Fatalf("right.leftmost esperado 104, recebi %d", lm)
+		t.Fatalf("right.leftmost expected 104, got %d", lm)
 	}
 	wantRightSlots := []struct {
 		k uint64
@@ -103,7 +103,7 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 	for i, w := range wantRightSlots {
 		k, c := right.InternalAt(i)
 		if k != w.k || c != w.c {
-			t.Fatalf("right[%d]: esperado (%d,%d), recebi (%d,%d)", i, w.k, w.c, k, c)
+			t.Fatalf("right[%d]: expected (%d,%d), got (%d,%d)", i, w.k, w.c, k, c)
 		}
 	}
 }
@@ -122,6 +122,6 @@ func TestSplitLeafInto_OddNumberOfKeys(t *testing.T) {
 		t.Fatalf("split ímpar: left=%d right=%d", left.NumKeys(), right.NumKeys())
 	}
 	if sep != 3 {
-		t.Fatalf("separador esperado 3, recebi %d", sep)
+		t.Fatalf("separador expected 3, got %d", sep)
 	}
 }

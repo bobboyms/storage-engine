@@ -1,6 +1,6 @@
 // Package pagestore é um PROTÓTIPO DESCARTÁVEL (Fase 0 do plano de migração
 // page-based). Objetivo: validar decisões de design e medir overhead de
-// criptografia página-a-página antes de iniciar o refactor real em pkg/.
+// criptografia page-a-page before de iniciar o refactor real em pkg/.
 //
 // NÃO IMPORTE deste pacote a partir de pkg/ ou cmd/.
 package pagestore
@@ -11,7 +11,7 @@ import (
 	"hash/crc32"
 )
 
-// Tamanhos (constantes de design a serem confirmadas pela ADR).
+// Tamanhos (constbefore de design a serem confirmadas pela ADR).
 const (
 	PageSize   = 8192
 	HeaderSize = 32
@@ -22,8 +22,8 @@ const (
 	PageInvalid = ^uint64(0)
 )
 
-// PageType classifica o conteúdo da página — permite evoluir o formato
-// (heap, índice, meta) compartilhando a mesma infra de I/O/cifra.
+// PageType classifica o conteúdo da page — permite evoluir o formato
+// (heap, index, meta) compartilhando a mesma infra de I/O/encryption.
 type PageType uint8
 
 const (
@@ -34,9 +34,9 @@ const (
 	PageTypeBTreeLeaf
 )
 
-// PageHeader ocupa os primeiros 32 bytes da página — sempre em claro.
-// O checksum é sobre o CONTEÚDO EM DISCO (ciphertext quando há cifra),
-// permitindo detectar corrupção antes de tentar decifrar (fast fail).
+// PageHeader ocupa os primeiros 32 bytes da page — sempre em plaintext.
+// O checksum é sobre o CONTEÚDO EM DISCO (ciphertext quando há encryption),
+// permitindo detectar corrupção before de tentar deencryptionr (fast fail).
 type PageHeader struct {
 	Magic    uint32   // 4
 	Version  uint16   // 2
@@ -75,10 +75,10 @@ func (h *PageHeader) Decode(buf []byte) error {
 	return nil
 }
 
-// Page é o buffer físico de uma página em memória (8KB).
+// Page é o buffer físico de uma page em memória (8KB).
 type Page [PageSize]byte
 
-// Body aponta para os bytes após o header (8160 bytes).
+// Body aponta para os bytes after o header (8160 bytes).
 func (p *Page) Body() []byte { return p[HeaderSize:] }
 
 // HeaderBytes aponta para os 32 bytes iniciais.
