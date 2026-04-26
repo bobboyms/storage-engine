@@ -6,7 +6,9 @@ import (
 )
 
 func TestMainSmoke(t *testing.T) {
-	runInTempDir(t, main)
+	runInTempDir(t, func() {
+		main()
+	})
 }
 
 func runInTempDir(t *testing.T, fn func()) {
