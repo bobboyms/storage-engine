@@ -22,7 +22,7 @@ go.work
 /bin/
 /dist/
 /build/
-storage-engine
+/storage-engine
 
 # Test coverage files
 coverage.txt
@@ -82,3 +82,4 @@ __debug_bin
 .vscode/
 *.code-workspace
 data.heap_001.data
+cmd/storage-engine/main.go.bak2
