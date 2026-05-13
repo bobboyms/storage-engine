@@ -82,6 +82,7 @@ func (se *StorageEngine) fuzzyCheckpointLocked() error {
 		return fmt.Errorf("fuzzy checkpoint: lifecycle WAL: %w", err)
 	}
 
+	se.fireCheckpoint(CheckpointEvent{BeginLSN: beginLSN})
 	return nil
 }
 

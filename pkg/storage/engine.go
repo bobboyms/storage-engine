@@ -4,6 +4,7 @@ import (
 	goerrors "errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,9 @@ type StorageEngine struct {
 	degradedErr   error
 	testHooks     storageEngineTestHooks
 	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
+	logger        *slog.Logger
+	listener      EventListener
+	counters      engineCounters
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
@@ -65,11 +69,18 @@ type StorageEngine struct {
 //
 // Pra testes/memory-only (WAL=nil), use NewStorageEngine diretamente.
 func NewProductionStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*StorageEngine, error) {
+	return NewProductionStorageEngineWithOptions(tableMetaData, walWriter, Options{})
+}
+
+// NewProductionStorageEngineWithOptions is the recommended constructor for
+// production use. It mirrors NewProductionStorageEngine but accepts an
+// Options struct to plug in a Logger and an EventListener.
+func NewProductionStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WALWriter, opts Options) (*StorageEngine, error) {
 	if walWriter == nil {
 		return nil, fmt.Errorf("storage: NewProductionStorageEngine requires a non-nil walWriter (without WAL there is no durability)")
 	}
 
-	se, err := NewStorageEngine(tableMetaData, walWriter)
+	se, err := NewStorageEngineWithOptions(tableMetaData, walWriter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +93,14 @@ func NewProductionStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WAL
 }
 
 func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*StorageEngine, error) {
+	return NewStorageEngineWithOptions(tableMetaData, walWriter, Options{})
+}
+
+// NewStorageEngineWithOptions builds an engine wired with the supplied
+// Options (Logger + EventListener). The zero Options value is valid and
+// behaves like NewStorageEngine: logs go to io.Discard and no listener
+// callbacks fire.
+func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WALWriter, opts Options) (*StorageEngine, error) {
 	// Ao abrir o engine com um WAL já populado (reopen), precisamos
 	// avançar o lsnTracker para o maior LSN registrado. Sem isso,
 	// transações novas começam com SnapshotLSN=0 e not enxergam records
@@ -98,15 +117,43 @@ func NewStorageEngine(tableMetaData *TableMetaData, walWriter *wal.WALWriter) (*
 		initialLSN = maxLSN
 	}
 
+	logger := opts.Logger
+	if logger == nil {
+		logger = discardLogger()
+	}
+
 	se := &StorageEngine{
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
-		LockManager:   NewLockManager(LockManagerConfig{}),
 		lsnTracker:    NewLSNTracker(initialLSN),
 		txIDCounter:   initialLSN,
 		appliedLSN:    NewAppliedLSNTracker(),
 		TxRegistry:    NewTransactionRegistry(),
+		logger:        logger,
+		listener:      opts.Listener,
 	}
+	se.LockManager = NewLockManager(LockManagerConfig{
+		OnDeadlock: func(ev DeadlockEvent) {
+			se.counters.deadlocksDetected.Add(1)
+			se.logger.Warn("storage: deadlock victim aborted",
+				"victim_tx_id", ev.VictimTxID,
+				"cycle", ev.Cycle,
+			)
+			if se.listener.OnDeadlock != nil {
+				se.listener.OnDeadlock(ev)
+			}
+		},
+		OnLockWaitTimeout: func(ev LockWaitTimeoutEvent) {
+			se.counters.lockWaitTimeouts.Add(1)
+			se.logger.Warn("storage: lock wait timeout",
+				"tx_id", ev.TxID,
+				"resource", ev.Resource,
+			)
+			if se.listener.OnLockWaitTimeout != nil {
+				se.listener.OnLockWaitTimeout(ev)
+			}
+		},
+	})
 	se.registerPageRedoHooks()
 	return se, nil
 }
@@ -890,13 +937,14 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 	se.lsnTracker.Set(maxLSN)
 	atomic.StoreUint64(&se.txIDCounter, maxLSN)
 	se.clearDegraded()
-	if analysis.CheckpointLSN > 0 {
-		fmt.Printf("Recovered: physical redo applied=%d skipped=%d; logical entries applied=%d skipped=%d (checkpoint LSN=%d → redo start). Current LSN: %d\n",
-			physicalApplied, physicalSkipped, count, skipped, analysis.CheckpointLSN, maxLSN)
-	} else {
-		fmt.Printf("Recovered: physical redo applied=%d skipped=%d; logical entries applied=%d skipped=%d. Current LSN: %d\n",
-			physicalApplied, physicalSkipped, count, skipped, maxLSN)
-	}
+	se.fireRecoveryComplete(RecoveryEvent{
+		PhysicalApplied: physicalApplied,
+		PhysicalSkipped: physicalSkipped,
+		LogicalApplied:  count,
+		LogicalSkipped:  skipped,
+		CheckpointLSN:   analysis.CheckpointLSN,
+		MaxLSN:          maxLSN,
+	})
 	return nil
 }
 
@@ -929,7 +977,7 @@ func (se *StorageEngine) Vacuum(tableName string) error {
 	// Any Tombstone with DeleteLSN < minLSN is safe to remove.
 	minLSN := se.TxRegistry.GetMinActiveLSN()
 
-	fmt.Printf("Starting Vacuum for table %s. MinLSN: %d\n", tableName, minLSN)
+	se.logger.Info("storage: vacuum start", "table", tableName, "min_lsn", minLSN)
 
 	// 3. Dispatch para a implementação atual: compactação in-place,
 	// sem reescrever o B+ tree. Slots vacuumados viram length=0;
@@ -940,7 +988,7 @@ func (se *StorageEngine) Vacuum(tableName string) error {
 		if err != nil {
 			return fmt.Errorf("Vacuum v2 failed for table %s: %w", tableName, err)
 		}
-		fmt.Printf("Vacuum v2 completed for table %s: %d records reclaimed\n", tableName, n)
+		se.fireVacuumComplete(VacuumEvent{Table: tableName, MinLSN: minLSN, Reclaimed: n})
 		return nil
 	}
 

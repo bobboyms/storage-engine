@@ -52,10 +52,15 @@ func (se *StorageEngine) markDegraded(err error) {
 	}
 
 	se.runtimeMu.Lock()
-	if se.degradedErr == nil {
+	first := se.degradedErr == nil
+	if first {
 		se.degradedErr = err
 	}
 	se.runtimeMu.Unlock()
+
+	if first {
+		se.fireBackgroundError(err)
+	}
 }
 
 func (se *StorageEngine) clearDegraded() {

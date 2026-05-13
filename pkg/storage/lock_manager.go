@@ -30,15 +30,25 @@ func (e *DeadlockError) Unwrap() error {
 
 type LockManagerConfig struct {
 	WaitTimeout time.Duration
+
+	// OnDeadlock fires when a waits-for cycle is detected and a victim
+	// is aborted. The callback runs outside the lock manager mutex.
+	OnDeadlock func(DeadlockEvent)
+
+	// OnLockWaitTimeout fires when Acquire returns ErrLockWaitTimeout.
+	// The callback runs outside the lock manager mutex.
+	OnLockWaitTimeout func(LockWaitTimeoutEvent)
 }
 
 type LockManager struct {
-	mu          sync.Mutex
-	waitTimeout time.Duration
-	resources   map[string]*lockState
-	heldByTx    map[uint64]map[string]struct{}
-	waitingByTx map[uint64]*lockWaiter
-	abortedTxs  map[uint64]error
+	mu                sync.Mutex
+	waitTimeout       time.Duration
+	resources         map[string]*lockState
+	heldByTx          map[uint64]map[string]struct{}
+	waitingByTx       map[uint64]*lockWaiter
+	abortedTxs        map[uint64]error
+	onDeadlock        func(DeadlockEvent)
+	onLockWaitTimeout func(LockWaitTimeoutEvent)
 }
 
 type lockState struct {
@@ -60,11 +70,13 @@ func NewLockManager(cfg LockManagerConfig) *LockManager {
 	}
 
 	return &LockManager{
-		waitTimeout: waitTimeout,
-		resources:   make(map[string]*lockState),
-		heldByTx:    make(map[uint64]map[string]struct{}),
-		waitingByTx: make(map[uint64]*lockWaiter),
-		abortedTxs:  make(map[uint64]error),
+		waitTimeout:       waitTimeout,
+		resources:         make(map[string]*lockState),
+		heldByTx:          make(map[uint64]map[string]struct{}),
+		waitingByTx:       make(map[uint64]*lockWaiter),
+		abortedTxs:        make(map[uint64]error),
+		onDeadlock:        cfg.OnDeadlock,
+		onLockWaitTimeout: cfg.OnLockWaitTimeout,
 	}
 }
 
@@ -92,20 +104,29 @@ func (lm *LockManager) Acquire(txID uint64, resource string) error {
 	state.waiters = append(state.waiters, waiter)
 	lm.waitingByTx[txID] = waiter
 
+	var deadlockEvent *DeadlockEvent
 	if cycle := lm.findDeadlockCycleLocked(txID); len(cycle) > 0 {
 		victim := chooseDeadlockVictim(cycle)
+		cycleCopy := slices.Clone(cycle)
 		lm.abortTransactionLocked(victim, &DeadlockError{
 			VictimTxID: victim,
-			Cycle:      slices.Clone(cycle),
+			Cycle:      cycleCopy,
 		})
+		deadlockEvent = &DeadlockEvent{VictimTxID: victim, Cycle: cycleCopy}
 	}
 
 	if waiter.done {
 		lm.mu.Unlock()
+		if deadlockEvent != nil && lm.onDeadlock != nil {
+			lm.onDeadlock(*deadlockEvent)
+		}
 		return <-waiter.result
 	}
 
 	lm.mu.Unlock()
+	if deadlockEvent != nil && lm.onDeadlock != nil {
+		lm.onDeadlock(*deadlockEvent)
+	}
 
 	timer := time.NewTimer(lm.waitTimeout)
 	select {
@@ -126,6 +147,9 @@ func (lm *LockManager) Acquire(txID uint64, resource string) error {
 	delete(lm.waitingByTx, txID)
 	waiter.done = true
 	lm.mu.Unlock()
+	if lm.onLockWaitTimeout != nil {
+		lm.onLockWaitTimeout(LockWaitTimeoutEvent{TxID: txID, Resource: resource})
+	}
 	return ErrLockWaitTimeout
 }
 

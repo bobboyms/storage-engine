@@ -70,3 +70,10 @@ func (tr *TransactionRegistry) GetMinActiveLSN() uint64 {
 	defer tr.mu.Unlock()
 	return tr.minActiveLSN
 }
+
+// Active returns the number of currently registered transactions.
+func (tr *TransactionRegistry) Active() int {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return len(tr.activeTxns)
+}
