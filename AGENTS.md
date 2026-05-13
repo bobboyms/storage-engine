@@ -9,9 +9,9 @@ Treat this codebase as data infrastructure: small regressions can affect durabil
 ## Stack and Dependencies
 
 - Language: Go.
-- Version: defined in `go.mod` (`go 1.25.6`).
+- Version: defined in `go.mod` (`go 1.25.10`).
 - Module: `github.com/bobboyms/storage-engine`.
-- Notable observed dependencies: `github.com/google/uuid`, protobuf, Mongo BSON, compression libraries, Pebble, and indirect helper libraries.
+- Direct dependencies: `github.com/google/uuid` (UUID generation), `go.mongodb.org/mongo-driver/v2` (BSON encoding), `google.golang.org/protobuf` (protobuf encoding). Keep the dependency set minimal — run `go mod tidy` before committing module changes and avoid adding libraries unless a concrete, in-tree use exists.
 - Main build target: `cmd/storage-engine`.
 
 ## Project Structure
