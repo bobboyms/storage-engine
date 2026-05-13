@@ -145,8 +145,17 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	// `se` will check it.
 	// Actually `se` constructor doesn't take `hm` anymore.
 
-	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("wal: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
+	if err != nil {
+		// 6.1: corrupted CRC is now caught at open time by
+		// scanMaxWALLSN instead of being deferred to Recover.
+		walWriter.Close()
+		return
+	}
 	defer se.Close()
 
 	if err := se.Recover(walPath); err == nil {

@@ -80,16 +80,26 @@ type Stats struct {
 	Checkpoints        uint64
 	DeadlocksDetected  uint64
 	LockWaitTimeouts   uint64
-	DegradedSince      bool
+	// WALTailTruncations counts how many times the engine observed an
+	// io.ErrUnexpectedEOF while scanning the WAL during open (a partial
+	// write left by a crash mid-flush). Tail truncation is tolerated;
+	// any other I/O or corruption error causes the open to fail.
+	WALTailTruncations uint64
+	// NextTxID is the next transaction id the engine will assign. It is
+	// process-local: txIDs reset on restart by design, similar to how
+	// Postgres assigns XIDs.
+	NextTxID      uint64
+	DegradedSince bool
 }
 
 type engineCounters struct {
-	recoveries        atomic.Uint64
-	vacuumRuns        atomic.Uint64
-	vacuumReclaimed   atomic.Uint64
-	checkpoints       atomic.Uint64
-	deadlocksDetected atomic.Uint64
-	lockWaitTimeouts  atomic.Uint64
+	recoveries         atomic.Uint64
+	vacuumRuns         atomic.Uint64
+	vacuumReclaimed    atomic.Uint64
+	checkpoints        atomic.Uint64
+	deadlocksDetected  atomic.Uint64
+	lockWaitTimeouts   atomic.Uint64
+	walTailTruncations atomic.Uint64
 }
 
 func discardLogger() *slog.Logger {
@@ -113,6 +123,8 @@ func (se *StorageEngine) Stats() Stats {
 		Checkpoints:        se.counters.checkpoints.Load(),
 		DeadlocksDetected:  se.counters.deadlocksDetected.Load(),
 		LockWaitTimeouts:   se.counters.lockWaitTimeouts.Load(),
+		WALTailTruncations: se.counters.walTailTruncations.Load(),
+		NextTxID:           se.txIDCounter.Load() + 1,
 		DegradedSince:      degraded,
 	}
 }

@@ -44,17 +44,23 @@ type StorageEngine struct {
 	WAL           *wal.WALWriter // WAL persistente
 	LockManager   *LockManager
 	lsnTracker    *LSNTracker
-	txIDCounter   uint64
-	appliedLSN    *AppliedLSNTracker
-	TxRegistry    *TransactionRegistry
-	runtimeMu     sync.RWMutex
-	degradedErr   error
-	testHooks     storageEngineTestHooks
-	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
-	logger        *slog.Logger
-	listener      EventListener
-	codec         codec.Codec
-	counters      engineCounters
+	// txIDCounter is an independent monotonic source for transaction
+	// IDs. It is intentionally NOT seeded from the WAL's max LSN: txIDs
+	// are unique within a single engine instance (like Postgres XIDs)
+	// and reset to 0 on restart. Mixing the two counters previously hid
+	// transaction identity in the WAL, since txID and LSN values could
+	// collide for unrelated entries.
+	txIDCounter atomic.Uint64
+	appliedLSN  *AppliedLSNTracker
+	TxRegistry  *TransactionRegistry
+	runtimeMu   sync.RWMutex
+	degradedErr error
+	testHooks   storageEngineTestHooks
+	opMu        sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
+	logger      *slog.Logger
+	listener    EventListener
+	codec       codec.Codec
+	counters    engineCounters
 	// Nota: Lock por tabela agora está em Table.mu
 }
 
@@ -112,12 +118,14 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 	// Só fazemos o SCAN do WAL aqui (leve, O(entries), sem replay).
 	// O rebuild efetivo continua em Recover().
 	initialLSN := uint64(0)
+	tailTruncations := uint64(0)
 	if walWriter != nil {
-		maxLSN, err := scanMaxWALLSN(walWriter.Path(), walWriter.Cipher())
+		maxLSN, truncations, err := scanMaxWALLSN(walWriter.Path(), walWriter.Cipher())
 		if err != nil {
 			return nil, fmt.Errorf("storage: failed to synchronize WAL LSN: %w", err)
 		}
 		initialLSN = maxLSN
+		tailTruncations = truncations
 	}
 
 	logger := opts.Logger
@@ -134,12 +142,19 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
 		lsnTracker:    NewLSNTracker(initialLSN),
-		txIDCounter:   initialLSN,
 		appliedLSN:    NewAppliedLSNTracker(),
 		TxRegistry:    NewTransactionRegistry(),
 		logger:        logger,
 		listener:      opts.Listener,
 		codec:         docCodec,
+	}
+	if tailTruncations > 0 {
+		se.counters.walTailTruncations.Add(tailTruncations)
+		logger.Warn("storage: WAL tail truncated on open",
+			"path", walWriter.Path(),
+			"truncations", tailTruncations,
+			"max_lsn", initialLSN,
+		)
 	}
 	se.LockManager = NewLockManager(LockManagerConfig{
 		OnDeadlock: func(ev DeadlockEvent) {
@@ -168,43 +183,61 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 }
 
 func (se *StorageEngine) nextTxID() uint64 {
-	return atomic.AddUint64(&se.txIDCounter, 1)
+	return se.txIDCounter.Add(1)
 }
 
 // scanMaxWALLSN lê o WAL em `path` procurando o maior LSN. Leve e
-// independente de Recover (que faz replay completo). Arquivo inexistsnte
+// independente de Recover (que faz replay completo). Arquivo inexistente
 // ou empty → retorna 0 sem erro.
-func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
+//
+// Retorna também o número de tail-truncations observadas (entradas
+// parciais ao final do log decorrentes de crash mid-write). Apenas
+// erros do tipo io.ErrUnexpectedEOF são tolerados — qualquer outro
+// erro (CRC mismatch, magic inválido, I/O) é tratado como corrupção
+// real e propagado para o caller, que não deve continuar abrindo o
+// engine: usar um maxLSN sub-estimado faria com que escritas novas
+// reaproveitem LSNs já presentes no WAL.
+func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, uint64, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return 0, 0, nil
 		}
-		return 0, err
+		return 0, 0, err
 	}
 
 	reader, err := wal.NewWALReaderWithCipher(path, cipher)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer func() { _ = reader.Close() }()
 
-	var maxLSN uint64
+	var (
+		maxLSN      uint64
+		truncations uint64
+		count       int
+	)
 	for {
 		entry, err := reader.ReadEntry()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// WAL truncado no fim (crash mid-write) é expected —
-			// paramos sem erro, tendo lido até onde foi possível.
-			break
+			if isExpectedWALTail(err) {
+				// Crash mid-write — paramos sem erro, tendo
+				// lido até onde foi possível, e sinalizamos
+				// o evento para o caller registrar.
+				truncations++
+				break
+			}
+			return 0, 0, fmt.Errorf("storage: scanMaxWALLSN at entry %d: %w", count, err)
 		}
 		if entry.Header.LSN > maxLSN {
 			maxLSN = entry.Header.LSN
 		}
 		wal.ReleaseEntry(entry)
+		count++
 	}
-	return maxLSN, nil
+	return maxLSN, truncations, nil
 }
 
 // IsolationLevel define o nível de isolamento da transação
@@ -945,7 +978,10 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 	}
 
 	se.lsnTracker.Set(maxLSN)
-	atomic.StoreUint64(&se.txIDCounter, maxLSN)
+	// txIDCounter is intentionally NOT restored from the WAL: txIDs are
+	// process-local (reset on restart by design, like Postgres XIDs).
+	// Persisting/restoring them would require a checkpoint format
+	// change and is deliberately deferred.
 	se.clearDegraded()
 	se.fireRecoveryComplete(RecoveryEvent{
 		PhysicalApplied: physicalApplied,

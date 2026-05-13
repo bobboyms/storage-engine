@@ -114,14 +114,20 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	mgr2.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm2)
 
 	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se2, _ := storage.NewStorageEngine(mgr2, walWriter2)
+	se2, err := storage.NewStorageEngine(mgr2, walWriter2)
+	if err != nil {
+		// 6.1: scanMaxWALLSN now rejects mid-file corruption at open
+		// time, so the engine never gets a chance to mis-initialise
+		// its LSN tracker. That is the expected failure mode here.
+		walWriter2.Close()
+		t.Logf("Got expected open error: %v", err)
+		return
+	}
 	defer se2.Close()
 
-	err := se2.Recover(walPath)
-	if err == nil {
+	if err := se2.Recover(walPath); err == nil {
 		t.Fatal("Expected error for corrupted WAL")
 	}
-	t.Logf("Got expected error: %v", err)
 }
 
 func TestPut_InvalidKeyType_Coverage(t *testing.T) {
@@ -220,7 +226,13 @@ func TestRecover_InvalidPayload(t *testing.T) {
 	w.Close()
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
+	if err != nil {
+		// scanMaxWALLSN now rejects mid-file corruption up front; that
+		// is the expected behavior on an invalid payload.
+		walWriter.Close()
+		return
+	}
 	defer se.Close()
 
 	if err := se.Recover(walPath); err == nil {
