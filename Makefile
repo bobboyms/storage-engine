@@ -1,4 +1,4 @@
-.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix
+.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix vuln
 
 # Default target
 all: build
@@ -45,6 +45,12 @@ lint-fix:
 	@echo "Running golangci-lint with --fix..."
 	@golangci-lint run --fix ./...
 
+# Scan for known vulnerabilities (Go stdlib + dependencies)
+vuln:
+	@echo "Running govulncheck..."
+	@command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
+	@PATH="$$(go env GOPATH)/bin:$$PATH" govulncheck ./...
+
 # Run the application
 run: build
 	@./bin/storage-engine
@@ -68,5 +74,6 @@ help:
 	@echo "  make test-safety - Run race, chaos, faults, and stress suites"
 	@echo "  make lint    - Run golangci-lint"
 	@echo "  make lint-fix - Run golangci-lint and auto-fix"
+	@echo "  make vuln    - Scan for known vulnerabilities (govulncheck)"
 	@echo "  make run     - Build and run the engine"
 	@echo "  make clean   - Remove binaries"
