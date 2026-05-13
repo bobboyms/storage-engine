@@ -21,7 +21,7 @@ func UnmarshalBson(bsonData []byte) (bson.D, error) {
 	return doc, nil
 }
 
-func JsonToBson(jsonStr string) (bson.D, error) {
+func JSONToBson(jsonStr string) (bson.D, error) {
 	var doc bson.D
 	// true = Canonical (estrito), false = Relaxed
 	// Tenta converter diretamente de JSON bytes para estrutura BSON interna
@@ -33,7 +33,7 @@ func JsonToBson(jsonStr string) (bson.D, error) {
 	return doc, nil
 }
 
-func BsonToJson(bsonData []byte) (string, error) {
+func BSONToJSON(bsonData []byte) (string, error) {
 	var doc bson.D
 	err := bson.Unmarshal(bsonData, &doc)
 	if err != nil {

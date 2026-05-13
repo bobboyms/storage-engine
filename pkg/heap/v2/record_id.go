@@ -6,9 +6,9 @@ import "github.com/bobboyms/storage-engine/pkg/pagestore"
 // Externamente é um `int64` (compatível com o tipo usado pelo B+ tree
 // como `dataPtr`). Internamente, empacota (PageID, SlotID):
 //
-//   bits 63:    0 (sinal — sempre positivo pra RecordIDs válidos)
-//   bits 62-16: PageID (47 bits — max 2^47 pages = 1 exabyte com 8KB)
-//   bits 15-0:  SlotID (16 bits — max 65535 slots por page)
+//	bits 63:    0 (sinal — sempre positivo pra RecordIDs válidos)
+//	bits 62-16: PageID (47 bits — max 2^47 pages = 1 exabyte com 8KB)
+//	bits 15-0:  SlotID (16 bits — max 65535 slots por page)
 //
 // Valores especiais:
 //   - NoRecordID (-1): sentinela "sem versão anterior" (compatível com v1)
@@ -29,13 +29,13 @@ const (
 // EncodeRecordID empacota (PageID, SlotID) em um int64.
 // O chamador é responsável por garantir PageID > 0 e SlotID <= MaxSlotID.
 func EncodeRecordID(pageID pagestore.PageID, slotID uint16) int64 {
-	return int64(uint64(pageID)<<slotIDBits | uint64(slotID))
+	return int64(uint64(pageID)<<slotIDBits | uint64(slotID)) //nolint:gosec // bit-pattern packing into signed RecordID is intentional
 }
 
 // DecodeRecordID extrai (PageID, SlotID) de um RecordID produzido por
 // EncodeRecordID. Not valida — passar NoRecordID ou 0 produz resultados
 // sem sentido, é responsabilidade do chamador testar antes.
 func DecodeRecordID(rid int64) (pagestore.PageID, uint16) {
-	u := uint64(rid)
+	u := uint64(rid) //nolint:gosec // inverse of EncodeRecordID; preserves bit pattern
 	return pagestore.PageID(u >> slotIDBits), uint16(u & slotIDMask)
 }

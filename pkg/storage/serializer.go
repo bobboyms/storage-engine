@@ -91,7 +91,7 @@ func SerializeCompensationEntry(originalLSN uint64, originalEntryType uint8, ori
 	binary.LittleEndian.PutUint64(buf[0:8], originalLSN)
 	buf[8] = originalEntryType
 	binary.LittleEndian.PutUint64(buf[9:17], undoNextLSN)
-	binary.LittleEndian.PutUint32(buf[17:21], uint32(len(originalPayload)))
+	binary.LittleEndian.PutUint32(buf[17:21], uint32(len(originalPayload))) //nolint:gosec // payload size bounded by record limits
 	copy(buf[21:], originalPayload)
 	return buf
 }

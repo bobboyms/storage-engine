@@ -38,8 +38,8 @@ func (tr *BTreeV2) splitVarNode(h *pagestore.PageHandle, vp *VariableNodePage) (
 // precisa splitar para concluir a inserção de `key`, e qual seria o
 // comprimento exato da key promovida por esse split.
 //
-// Contrato: `h`/`vp` já estão com latch exclusivo.
-func (tr *BTreeV2) predictSplitVarLocked(h *pagestore.PageHandle, vp *VariableNodePage, key []byte) (bool, int, error) {
+// Contrato: `vp` já está com latch exclusivo.
+func (tr *BTreeV2) predictSplitVarLocked(vp *VariableNodePage, key []byte) (bool, int, error) {
 	if vp.IsLeaf() {
 		if vp.CanLeafInsertVar(key) {
 			return false, 0, nil
@@ -59,7 +59,7 @@ func (tr *BTreeV2) predictSplitVarLocked(h *pagestore.PageHandle, vp *VariableNo
 		return false, 0, err
 	}
 
-	childWillSplit, childPromotedLen, err := tr.predictSplitVarLocked(childH, childVP, key)
+	childWillSplit, childPromotedLen, err := tr.predictSplitVarLocked(childVP, key)
 	if err != nil {
 		return false, 0, err
 	}
@@ -89,7 +89,7 @@ func (tr *BTreeV2) ensureRootSafeForInsertVar(key []byte) (*pagestore.PageHandle
 		return nil, nil, err
 	}
 
-	rootWillSplit, _, err := tr.predictSplitVarLocked(rootH, rootVP, key)
+	rootWillSplit, _, err := tr.predictSplitVarLocked(rootVP, key)
 	if err != nil {
 		rootH.Release()
 		tr.metaMu.Unlock()
@@ -200,7 +200,7 @@ func (tr *BTreeV2) descendToLeafForInsertVar(key []byte) (*pagestore.PageHandle,
 			return nil, nil, err
 		}
 
-		childWillSplit, _, err := tr.predictSplitVarLocked(childH, childVP, key)
+		childWillSplit, _, err := tr.predictSplitVarLocked(childVP, key)
 		if err != nil {
 			childH.Release()
 			currH.Release()

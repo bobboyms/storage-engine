@@ -13,9 +13,9 @@ import (
 // Quando o crypto.Cipher subjacente é NoOp, PageCipher também é no-op
 // (sem alocações no caminho quente, sem expansão do body).
 type PageCipher struct {
-	inner   crypto.Cipher
-	noop    bool
-	usable  int // BodySize - overhead
+	inner  crypto.Cipher
+	noop   bool
+	usable int // BodySize - overhead
 }
 
 // NewPageCipher cria um PageCipher. Passe nil para `c` para obter um

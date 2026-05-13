@@ -30,9 +30,6 @@ const (
 	// VariableSlotSize: keyOffset(2) + keyLength(2) + value(8)
 	VariableSlotSize = 12
 
-	// keyFormatFixed é o header.format pro layout original (keys em 8 bytes fixos).
-	keyFormatFixed uint8 = 0
-
 	// keyFormatVariable é o header.format pro layout slotted.
 	keyFormatVariable uint8 = 1
 )
@@ -204,7 +201,7 @@ func (vp *VariableNodePage) readSlot(i int) (keyOffset, keyLength uint16, value 
 	base := vp.slotOffset(i)
 	keyOffset = binary.LittleEndian.Uint16(vp.body[base : base+2])
 	keyLength = binary.LittleEndian.Uint16(vp.body[base+2 : base+4])
-	value = int64(binary.LittleEndian.Uint64(vp.body[base+4 : base+12]))
+	value = int64(binary.LittleEndian.Uint64(vp.body[base+4 : base+12])) //nolint:gosec // inverse of writeSlot
 	return
 }
 
@@ -212,7 +209,7 @@ func (vp *VariableNodePage) writeSlot(i int, keyOffset, keyLength uint16, value 
 	base := vp.slotOffset(i)
 	binary.LittleEndian.PutUint16(vp.body[base:base+2], keyOffset)
 	binary.LittleEndian.PutUint16(vp.body[base+2:base+4], keyLength)
-	binary.LittleEndian.PutUint64(vp.body[base+4:base+12], uint64(value))
+	binary.LittleEndian.PutUint64(vp.body[base+4:base+12], uint64(value)) //nolint:gosec // bit-pattern packing of signed value
 }
 
 // keyBytesAt devolve o byte-slice da key do slot i.
@@ -306,8 +303,8 @@ func (vp *VariableNodePage) LeafInsertVar(key []byte, value int64) error {
 	}
 
 	// Aloca key bytes no fim da região livre.
-	newKeyOffset := vp.freeSpaceEnd() - uint16(len(key))
-	copy(vp.body[newKeyOffset:newKeyOffset+uint16(len(key))], key)
+	newKeyOffset := vp.freeSpaceEnd() - uint16(len(key))           //nolint:gosec // key length bounded by PageSize
+	copy(vp.body[newKeyOffset:newKeyOffset+uint16(len(key))], key) //nolint:gosec // same bound
 
 	// Shift slots [idx..n) pra direita.
 	h := vp.header()
@@ -315,7 +312,7 @@ func (vp *VariableNodePage) LeafInsertVar(key []byte, value int64) error {
 		k, l, v := vp.readSlot(i)
 		vp.writeSlot(i+1, k, l, v)
 	}
-	vp.writeSlot(idx, newKeyOffset, uint16(len(key)), value)
+	vp.writeSlot(idx, newKeyOffset, uint16(len(key)), value) //nolint:gosec // key length bounded by PageSize
 
 	h.numKeys++
 	vp.writeHeader(h)
@@ -409,7 +406,7 @@ func (vp *VariableNodePage) FindChildVar(key []byte) pagestore.PageID {
 		return vp.LeftmostChild()
 	}
 	_, _, child := vp.readSlot(firstGT - 1)
-	return pagestore.PageID(child)
+	return pagestore.PageID(child) //nolint:gosec // child stored as int64, bit-pattern preserved
 }
 
 // InsertSeparatorVar insere (sepKey, childPageID) num internal variable.
@@ -428,15 +425,15 @@ func (vp *VariableNodePage) InsertSeparatorVar(sepKey []byte, child pagestore.Pa
 
 	idx := vp.internalBinarySearchVar(sepKey)
 
-	newKeyOffset := vp.freeSpaceEnd() - uint16(len(sepKey))
-	copy(vp.body[newKeyOffset:newKeyOffset+uint16(len(sepKey))], sepKey)
+	newKeyOffset := vp.freeSpaceEnd() - uint16(len(sepKey))              //nolint:gosec // key length bounded by PageSize
+	copy(vp.body[newKeyOffset:newKeyOffset+uint16(len(sepKey))], sepKey) //nolint:gosec // same bound
 
 	h := vp.header()
 	for i := int(h.numKeys) - 1; i >= idx; i-- {
 		k, l, v := vp.readSlot(i)
 		vp.writeSlot(i+1, k, l, v)
 	}
-	vp.writeSlot(idx, newKeyOffset, uint16(len(sepKey)), int64(child))
+	vp.writeSlot(idx, newKeyOffset, uint16(len(sepKey)), int64(child)) //nolint:gosec // key length bounded by PageSize; child bit-pattern preserved
 
 	h.numKeys++
 	vp.writeHeader(h)
@@ -450,7 +447,7 @@ func (vp *VariableNodePage) InternalAtVar(i int) ([]byte, pagestore.PageID) {
 		panic(fmt.Sprintf("btree/v2: InternalAtVar index %d fora de [0, %d)", i, vp.NumKeys()))
 	}
 	off, length, v := vp.readSlot(i)
-	return vp.body[off : off+length], pagestore.PageID(v)
+	return vp.body[off : off+length], pagestore.PageID(v) //nolint:gosec // v stored as int64, bit-pattern preserved
 }
 
 // splitLeafIntoVar: move metade das keys (pela metade superior dos
@@ -496,7 +493,7 @@ func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	//
 	// Simplicidade primeiro: só atualiza numKeys.
 	selfHdr := vp.header()
-	selfHdr.numKeys = uint16(mid)
+	selfHdr.numKeys = uint16(mid) //nolint:gosec // mid bounded by page slot count
 	vp.writeHeader(selfHdr)
 
 	return sep
@@ -533,7 +530,7 @@ func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte
 
 	// Trunca self.
 	selfHdr := vp.header()
-	selfHdr.numKeys = uint16(mid)
+	selfHdr.numKeys = uint16(mid) //nolint:gosec // mid bounded by page slot count
 	vp.writeHeader(selfHdr)
 
 	return promoted

@@ -106,7 +106,7 @@ func (se *StorageEngine) writeMultiIndexWAL(tableName string, keys map[string]ty
 	entry.Header.Version = 1
 	entry.Header.EntryType = wal.EntryMultiInsert
 	entry.Header.LSN = lsn
-	entry.Header.PayloadLen = uint32(len(payload))
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload, payload...)
 
@@ -123,7 +123,7 @@ func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.
 		providedKeys = map[string]types.Comparable{}
 	}
 
-	bsonDoc, err := JsonToBson(doc)
+	bsonDoc, err := JSONToBson(doc)
 	if err == nil {
 		keys, ok, err := keysFromBSONForAllIndexes(table, bsonDoc)
 		if err != nil {

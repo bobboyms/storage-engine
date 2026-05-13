@@ -20,7 +20,7 @@ func fsyncDir(dirPath string) error {
 	if err != nil {
 		return fmt.Errorf("pagestore: open dir %s: %w", dirPath, err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if err := syncFile(d); err != nil {
 		return fmt.Errorf("pagestore: fsync dir %s: %w", dirPath, err)
 	}

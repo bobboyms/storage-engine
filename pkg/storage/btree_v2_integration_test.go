@@ -194,9 +194,9 @@ func TestBTreeV2_Integration_Varchar(t *testing.T) {
 
 	// Insere algumas entries com emails (variáveis em tamanho)
 	rows := map[string]string{
-		"alice@example.com":                        `{"email":"alice@example.com","nome":"Alice"}`,
-		"bob@b.co":                                 `{"email":"bob@b.co","nome":"Bob"}`,
-		"carlos+longsufix+lista@empresa.com.br":    `{"email":"carlos+longsufix+lista@empresa.com.br","nome":"Carlos"}`,
+		"alice@example.com":                     `{"email":"alice@example.com","nome":"Alice"}`,
+		"bob@b.co":                              `{"email":"bob@b.co","nome":"Bob"}`,
+		"carlos+longsufix+lista@empresa.com.br": `{"email":"carlos+longsufix+lista@empresa.com.br","nome":"Carlos"}`,
 	}
 	for email, doc := range rows {
 		if err := se.Put("contacts", "email", types.VarcharKey(email), doc); err != nil {

@@ -54,9 +54,9 @@ func TestInternalPage_InsertSeparatorAndFindChild(t *testing.T) {
 	}
 
 	cases := []struct {
-		key        uint64
-		wantChild  pagestore.PageID
-		descricao  string
+		key       uint64
+		wantChild pagestore.PageID
+		descricao string
 	}{
 		{0, 100, "key antes de todos os seps → leftmost"},
 		{5, 100, "key ainda < 10 → leftmost"},

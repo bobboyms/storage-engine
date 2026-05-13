@@ -111,7 +111,7 @@ func NewBTreeV2Typed(path string, bufferPoolCapacity int, cipher crypto.Cipher, 
 	}
 
 	if err := tr.loadOrInitMeta(); err != nil {
-		pf.Close()
+		_ = pf.Close()
 		return nil, err
 	}
 
@@ -144,7 +144,7 @@ func NewBTreeV2Varchar(path string, bufferPoolCapacity int, cipher crypto.Cipher
 	}
 
 	if err := tr.loadOrInitMeta(); err != nil {
-		pf.Close()
+		_ = pf.Close()
 		return nil, err
 	}
 

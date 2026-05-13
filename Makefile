@@ -1,4 +1,4 @@
-.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help
+.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix
 
 # Default target
 all: build
@@ -35,6 +35,16 @@ test-stress-race:
 
 test-safety: test-race test-chaos test-faults test-stress-race
 
+# Run static analysis with golangci-lint
+lint:
+	@echo "Running golangci-lint..."
+	@golangci-lint run ./...
+
+# Run golangci-lint and auto-fix what is fixable
+lint-fix:
+	@echo "Running golangci-lint with --fix..."
+	@golangci-lint run --fix ./...
+
 # Run the application
 run: build
 	@./bin/storage-engine
@@ -56,5 +66,7 @@ help:
 	@echo "  make test-stress - Run concurrent stress tests"
 	@echo "  make test-stress-race - Run concurrent stress tests with race detector"
 	@echo "  make test-safety - Run race, chaos, faults, and stress suites"
+	@echo "  make lint    - Run golangci-lint"
+	@echo "  make lint-fix - Run golangci-lint and auto-fix"
 	@echo "  make run     - Build and run the engine"
 	@echo "  make clean   - Remove binaries"

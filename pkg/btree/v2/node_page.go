@@ -110,7 +110,7 @@ type NodePage struct {
 // fallback quando testes de NodePage not se importam com semântica de
 // codec (só querem testar mecânica do data structure).
 func defaultCompareFn(a, b uint64) int {
-	ai, bi := int64(a), int64(b)
+	ai, bi := int64(a), int64(b) //nolint:gosec // bit-pattern preserving cast
 	if ai < bi {
 		return -1
 	}
@@ -203,7 +203,7 @@ func (np *NodePage) slotOffset(i int) int {
 func (np *NodePage) readLeafSlot(i int) (key uint64, value int64) {
 	base := np.slotOffset(i)
 	key = binary.LittleEndian.Uint64(np.body[base : base+IntKeySize])
-	value = int64(binary.LittleEndian.Uint64(np.body[base+IntKeySize : base+LeafSlotSize]))
+	value = int64(binary.LittleEndian.Uint64(np.body[base+IntKeySize : base+LeafSlotSize])) //nolint:gosec // inverse of writeLeafSlot
 	return
 }
 
@@ -211,7 +211,7 @@ func (np *NodePage) readLeafSlot(i int) (key uint64, value int64) {
 func (np *NodePage) writeLeafSlot(i int, key uint64, value int64) {
 	base := np.slotOffset(i)
 	binary.LittleEndian.PutUint64(np.body[base:base+IntKeySize], key)
-	binary.LittleEndian.PutUint64(np.body[base+IntKeySize:base+LeafSlotSize], uint64(value))
+	binary.LittleEndian.PutUint64(np.body[base+IntKeySize:base+LeafSlotSize], uint64(value)) //nolint:gosec // bit-pattern packing of signed value
 }
 
 // binarySearch devolve (index, achou). Usa np.cmp pra respeitar
@@ -355,13 +355,13 @@ func (np *NodePage) splitLeafInto(other *NodePage) uint64 {
 
 	// Atualiza contadores e sibling link de other
 	otherHdr := other.header()
-	otherHdr.numKeys = uint16(n - mid)
+	otherHdr.numKeys = uint16(n - mid)                   //nolint:gosec // numKeys bounded by page slot count
 	otherHdr.nextLeafPageID = np.header().nextLeafPageID // herda o link
 	other.writeHeader(otherHdr)
 
 	// Trunca self
 	selfHdr := np.header()
-	selfHdr.numKeys = uint16(mid)
+	selfHdr.numKeys = uint16(mid) //nolint:gosec // numKeys bounded by page slot count
 	// self.nextLeafPageID fica intacto aqui — o caller atualiza depois de
 	// conhecer o pageID do `other`.
 	np.writeHeader(selfHdr)
@@ -578,12 +578,12 @@ func (np *NodePage) splitInternalInto(other *NodePage) uint64 {
 	}
 
 	otherHdr := other.header()
-	otherHdr.numKeys = uint16(n - mid - 1)
+	otherHdr.numKeys = uint16(n - mid - 1) //nolint:gosec // numKeys bounded by page slot count
 	other.writeHeader(otherHdr)
 
 	// Trunca self
 	selfHdr := np.header()
-	selfHdr.numKeys = uint16(mid)
+	selfHdr.numKeys = uint16(mid) //nolint:gosec // numKeys bounded by page slot count
 	np.writeHeader(selfHdr)
 
 	return promoted

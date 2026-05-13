@@ -81,13 +81,13 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 	if pf.NumPages() > 1 {
 		// Reabrir: busca última page e continua preenchendo onde parou.
 		if err := w.adoptLastPage(); err != nil {
-			pf.Close()
+			_ = pf.Close()
 			return nil, err
 		}
 	} else {
 		// Novo: aloca primeira page.
 		if err := w.allocateNewPage(); err != nil {
-			pf.Close()
+			_ = pf.Close()
 			return nil, err
 		}
 	}
@@ -158,7 +158,7 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 // necessário. Caller must segurar w.mu.
 func (w *WALWriter) appendBytes(data []byte) error {
 	for len(data) > 0 {
-		spaceInPage := uint16(w.usableBodySize) - w.currentOffset
+		spaceInPage := uint16(w.usableBodySize) - w.currentOffset //nolint:gosec // usableBodySize <= PageSize, fits uint16
 		if spaceInPage == 0 {
 			// Página cheia: flush, aloca nova.
 			if err := w.flushCurrentPageLocked(); err != nil {
@@ -167,10 +167,10 @@ func (w *WALWriter) appendBytes(data []byte) error {
 			if err := w.allocateNewPage(); err != nil {
 				return err
 			}
-			spaceInPage = uint16(w.usableBodySize) - w.currentOffset
+			spaceInPage = uint16(w.usableBodySize) - w.currentOffset //nolint:gosec // usableBodySize <= PageSize
 		}
 
-		take := uint16(len(data))
+		take := uint16(len(data)) //nolint:gosec // clamped to spaceInPage below
 		if take > spaceInPage {
 			take = spaceInPage
 		}

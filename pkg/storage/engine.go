@@ -47,7 +47,6 @@ type StorageEngine struct {
 	runtimeMu     sync.RWMutex
 	degradedErr   error
 	testHooks     storageEngineTestHooks
-	metaMu        sync.RWMutex // Lock apenas para operações de metadados (ListTables, etc)
 	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
 	// Nota: Lock por tabela agora está em Table.mu
 }
@@ -131,7 +130,7 @@ func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var maxLSN uint64
 	for {
@@ -280,7 +279,7 @@ func (se *StorageEngine) readVisibleRecord(tx *Transaction, table *Table, key ty
 				return visibleRecord{}, nil
 			}
 
-			jsonStr, err := BsonToJson(docBytes)
+			jsonStr, err := BSONToJSON(docBytes)
 			if err == nil {
 				return visibleRecord{
 					Document:  jsonStr,
@@ -345,7 +344,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 	// Try convert json to bson for validation and better storage.
 	// If the document contains every indexed field, use the multi-index
 	// write path so updates keep secondary indexes consistent.
-	bsonDoc, err := JsonToBson(document)
+	bsonDoc, err := JSONToBson(document)
 	var bsonData []byte
 	if err == nil {
 		// Verify if the key exists
@@ -405,7 +404,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 			entry.Header.LSN = currentLSN
 
-			entry.Header.PayloadLen = uint32(len(payload))
+			entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by page/record limits
 			entry.Header.CRC32 = wal.CalculateCRC32(payload)
 			entry.Payload = append(entry.Payload, payload...)
 
@@ -614,7 +613,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 
 			entry.Header.LSN = currentLSN
 
-			entry.Header.PayloadLen = uint32(len(payload))
+			entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by page/record limits
 			entry.Header.CRC32 = wal.CalculateCRC32(payload)
 			entry.Payload = append(entry.Payload, payload...)
 
@@ -827,7 +826,7 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	for {
 		entry, err := reader.ReadEntry()

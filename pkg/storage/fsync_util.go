@@ -17,34 +17,34 @@ import (
 //   - Arquivo antigo, se existia no mesmo path, foi substituído atomicamente
 //
 // Padrão: write temp → fsync temp → rename → fsync dir.
-func durableWriteFile(path string, data []byte, perm os.FileMode) error {
+func durableWriteFile(path string, data []byte) error {
 	tmpPath := path + ".tmp"
 
 	// 1. Grava no arquivo temporário
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perm)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("durableWriteFile: open temp: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("durableWriteFile: write: %w", err)
 	}
 
 	// 2. fsync do arquivo temp — garante que os bytes estão no disco
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("durableWriteFile: fsync temp: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("durableWriteFile: close temp: %w", err)
 	}
 
 	// 3. Rename atômico
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("durableWriteFile: rename: %w", err)
 	}
 
@@ -64,7 +64,7 @@ func fsyncDir(dirPath string) error {
 		// usamos apenas Sync read-only. Se fail, propaga o erro.
 		return fmt.Errorf("fsyncDir: open %s: %w", dirPath, err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("fsyncDir: sync %s: %w", dirPath, err)
 	}

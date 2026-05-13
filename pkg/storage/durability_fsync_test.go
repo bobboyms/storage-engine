@@ -21,7 +21,7 @@ func TestDurableWriteFile_AtomicOnRename(t *testing.T) {
 	path := filepath.Join(dir, "data.bin")
 
 	// Primeira write
-	if err := durableWriteFile(path, []byte("v1"), 0644); err != nil {
+	if err := durableWriteFile(path, []byte("v1")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
@@ -30,7 +30,7 @@ func TestDurableWriteFile_AtomicOnRename(t *testing.T) {
 	}
 
 	// Sobrwrite (atomic via rename)
-	if err := durableWriteFile(path, []byte("v2-longer"), 0644); err != nil {
+	if err := durableWriteFile(path, []byte("v2-longer")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = os.ReadFile(path)
@@ -47,7 +47,7 @@ func TestDurableWriteFile_AtomicOnRename(t *testing.T) {
 func TestDurableWriteFile_CleanupTempOnWriteError(t *testing.T) {
 	// Passa um path dentro de diretório que does not exist → Open failure
 	path := filepath.Join(t.TempDir(), "nonexistsnt", "file.bin")
-	err := durableWriteFile(path, []byte("x"), 0644)
+	err := durableWriteFile(path, []byte("x"))
 	if err == nil {
 		t.Fatal("expected erro")
 	}
@@ -63,7 +63,7 @@ func TestDurableWriteFile_HandlesLargeData(t *testing.T) {
 
 	// 1MB de dados — exercita paths de IO maiores
 	data := bytes.Repeat([]byte("x"), 1024*1024)
-	if err := durableWriteFile(path, data, 0644); err != nil {
+	if err := durableWriteFile(path, data); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +86,7 @@ func TestDurableWrite_NoTempLeftoverOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 5; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("file-%d.bin", i))
-		if err := durableWriteFile(path, []byte("ok"), 0644); err != nil {
+		if err := durableWriteFile(path, []byte("ok")); err != nil {
 			t.Fatal(err)
 		}
 	}

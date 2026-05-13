@@ -69,15 +69,15 @@ type KeyCodec interface {
 type IntKeyCodec struct{}
 
 func (IntKeyCodec) Encode(k types.Comparable) uint64 {
-	return uint64(int64(k.(types.IntKey)))
+	return uint64(int64(k.(types.IntKey))) //nolint:gosec // preserve bit pattern int64 → uint64
 }
 
 func (IntKeyCodec) Decode(u uint64) types.Comparable {
-	return types.IntKey(int64(u))
+	return types.IntKey(int64(u)) //nolint:gosec // preserve bit pattern uint64 → int64
 }
 
 func (IntKeyCodec) Compare(a, b uint64) int {
-	ai, bi := int64(a), int64(b)
+	ai, bi := int64(a), int64(b) //nolint:gosec // bit-pattern preserving cast for signed comparison
 	if ai < bi {
 		return -1
 	}
@@ -152,11 +152,11 @@ func (DateKeyCodec) Encode(k types.Comparable) uint64 {
 }
 
 func (DateKeyCodec) Decode(u uint64) types.Comparable {
-	return types.DateKey(time.Unix(0, int64(u)))
+	return types.DateKey(time.Unix(0, int64(u))) //nolint:gosec // UnixNano bit pattern round-trip
 }
 
 func (DateKeyCodec) Compare(a, b uint64) int {
-	ai, bi := int64(a), int64(b)
+	ai, bi := int64(a), int64(b) //nolint:gosec // bit-pattern preserving cast for signed comparison
 	if ai < bi {
 		return -1
 	}

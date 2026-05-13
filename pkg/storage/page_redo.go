@@ -26,7 +26,7 @@ func serializePageRedoPayload(path string, pageID pagestore.PageID, page *pagest
 		return nil, fmt.Errorf("storage: redo path too long: %d", len(path))
 	}
 	payload := make([]byte, pageRedoPathPrefixSize+len(path)+8+pagestore.PageSize)
-	binary.LittleEndian.PutUint16(payload[0:2], uint16(len(path)))
+	binary.LittleEndian.PutUint16(payload[0:2], uint16(len(path))) //nolint:gosec // path length checked above against 0xFFFF
 	copy(payload[2:2+len(path)], path)
 	offset := 2 + len(path)
 	binary.LittleEndian.PutUint64(payload[offset:offset+8], uint64(pageID))
@@ -113,7 +113,7 @@ func (se *StorageEngine) writePageRedoRecord(path string, pageID pagestore.PageI
 	entry.Header.Version = wal.WALVersion
 	entry.Header.EntryType = wal.EntryPageRedo
 	entry.Header.LSN = hdr.PageLSN
-	entry.Header.PayloadLen = uint32(len(payload))
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by PageSize
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload[:0], payload...)
 

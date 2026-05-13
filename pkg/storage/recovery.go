@@ -30,7 +30,7 @@ func findLastCheckpointLSNWithCipher(walPath string, cipher crypto.Cipher) (uint
 	if err != nil {
 		return 0, false, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	var lastCheckpointLSN uint64
 	found := false
@@ -136,7 +136,7 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	for count := 0; ; count++ {
 		entry, err := reader.ReadEntry()
@@ -457,11 +457,4 @@ func (se *StorageEngine) redoPageEntry(entry *wal.WALEntry, targets map[string]p
 		return false, nil
 	}
 	return target.ApplyPageRedo(pageID, page, entry.Header.LSN)
-}
-func cloneKeys(src map[string]uint64) map[string]uint64 {
-	dst := make(map[string]uint64, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

@@ -141,7 +141,7 @@ func (r *WALReader) ReadEntry() (*WALEntry, error) {
 	// 5. Constrói entry (copia payload pra not compartilhar buffer interno)
 	entry := AcquireEntry()
 	entry.Header = header
-	if uint32(cap(entry.Payload)) < header.PayloadLen {
+	if uint32(cap(entry.Payload)) < header.PayloadLen { //nolint:gosec // cap is non-negative
 		entry.Payload = make([]byte, header.PayloadLen)
 	} else {
 		entry.Payload = entry.Payload[:header.PayloadLen]

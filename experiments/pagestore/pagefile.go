@@ -36,8 +36,8 @@ type PageFile struct {
 	file   *os.File
 	cipher crypto.Cipher
 
-	mu      sync.Mutex // serializa writes; reads usam pread via ReadAt
-	nextID  atomic.Uint64
+	mu       sync.Mutex // serializa writes; reads usam pread via ReadAt
+	nextID   atomic.Uint64
 	numPages atomic.Uint64
 }
 

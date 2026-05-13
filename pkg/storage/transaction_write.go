@@ -261,7 +261,7 @@ func (tx *WriteTransaction) Commit() (err error) {
 				payload, err = SerializeDocumentEntry(op.tableName, op.indexName, op.key, nil)
 			} else {
 				// Convert doc to bytes (BSON conversion logic duplicated from Put)
-				bsonDoc, errBson := JsonToBson(op.document)
+				bsonDoc, errBson := JSONToBson(op.document)
 				var bsonData []byte
 				if errBson == nil {
 					bsonData, _ = MarshalBson(bsonDoc)
@@ -282,7 +282,7 @@ func (tx *WriteTransaction) Commit() (err error) {
 			entry.Header.EntryType = op.opType
 			entry.Header.LSN = opLSN
 			payload = wrapTxPayload(tx.txID, payload)
-			entry.Header.PayloadLen = uint32(len(payload))
+			entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
 			entry.Header.CRC32 = wal.CalculateCRC32(payload)
 			entry.Payload = append(entry.Payload, payload...)
 
@@ -476,7 +476,7 @@ func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {
 	entry.Header.EntryType = typeID
 	entry.Header.LSN = lsn
 	entry.Payload = append(entry.Payload, wrapTxPayload(tx.txID, nil)...)
-	entry.Header.PayloadLen = uint32(len(entry.Payload))
+	entry.Header.PayloadLen = uint32(len(entry.Payload)) //nolint:gosec // payload size bounded by tx marker size
 	entry.Header.CRC32 = wal.CalculateCRC32(entry.Payload)
 
 	if tx.engine.WAL == nil {
@@ -594,7 +594,7 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 }
 
 func (tx *WriteTransaction) opDocumentBytes(op writeOp) ([]byte, error) {
-	bsonDoc, errBson := JsonToBson(op.document)
+	bsonDoc, errBson := JSONToBson(op.document)
 	if errBson == nil {
 		bsonData, err := MarshalBson(bsonDoc)
 		if err != nil {

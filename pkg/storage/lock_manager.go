@@ -69,66 +69,64 @@ func NewLockManager(cfg LockManagerConfig) *LockManager {
 }
 
 func (lm *LockManager) Acquire(txID uint64, resource string) error {
-	for {
-		lm.mu.Lock()
+	lm.mu.Lock()
 
-		if err := lm.abortedTxs[txID]; err != nil {
-			lm.mu.Unlock()
-			return err
-		}
-
-		state := lm.ensureResourceLocked(resource)
-		if state.holder == 0 || state.holder == txID {
-			state.holder = txID
-			lm.recordHeldResourceLocked(txID, resource)
-			lm.mu.Unlock()
-			return nil
-		}
-
-		waiter := &lockWaiter{
-			txID:     txID,
-			resource: resource,
-			result:   make(chan error, 1),
-		}
-		state.waiters = append(state.waiters, waiter)
-		lm.waitingByTx[txID] = waiter
-
-		if cycle := lm.findDeadlockCycleLocked(txID); len(cycle) > 0 {
-			victim := chooseDeadlockVictim(cycle)
-			lm.abortTransactionLocked(victim, &DeadlockError{
-				VictimTxID: victim,
-				Cycle:      slices.Clone(cycle),
-			})
-		}
-
-		if waiter.done {
-			lm.mu.Unlock()
-			return <-waiter.result
-		}
-
+	if err := lm.abortedTxs[txID]; err != nil {
 		lm.mu.Unlock()
-
-		timer := time.NewTimer(lm.waitTimeout)
-		select {
-		case err := <-waiter.result:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return err
-		case <-timer.C:
-		}
-
-		lm.mu.Lock()
-		if waiter.done {
-			lm.mu.Unlock()
-			return <-waiter.result
-		}
-		lm.removeWaiterLocked(waiter)
-		delete(lm.waitingByTx, txID)
-		waiter.done = true
-		lm.mu.Unlock()
-		return ErrLockWaitTimeout
+		return err
 	}
+
+	state := lm.ensureResourceLocked(resource)
+	if state.holder == 0 || state.holder == txID {
+		state.holder = txID
+		lm.recordHeldResourceLocked(txID, resource)
+		lm.mu.Unlock()
+		return nil
+	}
+
+	waiter := &lockWaiter{
+		txID:     txID,
+		resource: resource,
+		result:   make(chan error, 1),
+	}
+	state.waiters = append(state.waiters, waiter)
+	lm.waitingByTx[txID] = waiter
+
+	if cycle := lm.findDeadlockCycleLocked(txID); len(cycle) > 0 {
+		victim := chooseDeadlockVictim(cycle)
+		lm.abortTransactionLocked(victim, &DeadlockError{
+			VictimTxID: victim,
+			Cycle:      slices.Clone(cycle),
+		})
+	}
+
+	if waiter.done {
+		lm.mu.Unlock()
+		return <-waiter.result
+	}
+
+	lm.mu.Unlock()
+
+	timer := time.NewTimer(lm.waitTimeout)
+	select {
+	case err := <-waiter.result:
+		if !timer.Stop() {
+			<-timer.C
+		}
+		return err
+	case <-timer.C:
+	}
+
+	lm.mu.Lock()
+	if waiter.done {
+		lm.mu.Unlock()
+		return <-waiter.result
+	}
+	lm.removeWaiterLocked(waiter)
+	delete(lm.waitingByTx, txID)
+	waiter.done = true
+	lm.mu.Unlock()
+	return ErrLockWaitTimeout
 }
 
 func (lm *LockManager) Release(txID uint64, resource string) {

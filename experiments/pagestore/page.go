@@ -17,8 +17,8 @@ const (
 	HeaderSize = 32
 	BodySize   = PageSize - HeaderSize // 8160
 
-	MagicV1    = 0x50414745 // ASCII "PAGE"
-	VersionV1  = 1
+	MagicV1     = 0x50414745 // ASCII "PAGE"
+	VersionV1   = 1
 	PageInvalid = ^uint64(0)
 )
 

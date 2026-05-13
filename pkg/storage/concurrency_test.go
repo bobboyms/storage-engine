@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -111,12 +112,9 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		if !found {
 			t.Errorf("Key %d missing concurrently", i)
 		}
-		expected := fmt.Sprintf("\"val-%d\"", i)                // JSON string format
-		if doc != expected && doc != fmt.Sprintf("val-%d", i) { // Fallback check
-			// Se o JSON conversion acontecer ou nao, dependendo do teste anterior
-			// Mas como usamos JsonToBson no Put, e string simples failure, ele vira raw bytes.
-			// O Get tenta BsonToJson, failure, retorna raw string.
-			// Então must ser "val-X"
+		expected := fmt.Sprintf("\"val-%d\"", i)
+		if doc != expected && doc != fmt.Sprintf("val-%d", i) {
+			t.Errorf("Key %d: unexpected doc %q (expected %q or raw val-%d)", i, doc, expected, i)
 		}
 	}
 }

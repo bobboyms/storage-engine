@@ -378,7 +378,7 @@ func copyFileWithHash(src, dst string, flag int) (int64, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	info, err := in.Stat()
 	if err != nil {
@@ -442,7 +442,7 @@ func hashExistingFile(path string) (int64, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	info, err := in.Stat()
 	if err != nil {
@@ -474,7 +474,7 @@ func writeBackupManifest(backupDir string, manifest *BackupManifest) error {
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
@@ -503,6 +503,6 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }

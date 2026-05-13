@@ -113,7 +113,7 @@ func (se *StorageEngine) collectLoserUndoTasks(walPath string, cipher crypto.Cip
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	tasks := make([]undoTask, 0)
 	for count := 0; ; count++ {
@@ -173,7 +173,7 @@ func (se *StorageEngine) writeCompensationLogRecord(txID uint64, clr compensatio
 	entry.Header.Version = txAwareWALVersion
 	entry.Header.EntryType = wal.EntryCLR
 	entry.Header.LSN = lsn
-	entry.Header.PayloadLen = uint32(len(payload))
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload, payload...)
 
@@ -197,7 +197,7 @@ func (se *StorageEngine) writeTxAbortMarker(txID uint64) error {
 	entry.Header.Version = txAwareWALVersion
 	entry.Header.EntryType = wal.EntryAbort
 	entry.Header.LSN = lsn
-	entry.Header.PayloadLen = uint32(len(payload))
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload, payload...)
 
@@ -458,7 +458,7 @@ func keysFromStoredDocument(table *Table, docBytes []byte) (map[string]types.Com
 			return keys, nil
 		}
 	}
-	bsonDoc, err := JsonToBson(string(docBytes))
+	bsonDoc, err := JSONToBson(string(docBytes))
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package storage
 import (
 	"path/filepath"
 	"testing"
+
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )

@@ -274,7 +274,7 @@ func TestTable_LockCoverage(t *testing.T) {
 	table, _ := mgr.GetTableByName("users")
 
 	table.Lock()
-	table.Unlock()
+	table.Unlock() //nolint:staticcheck // intentional coverage of Lock/Unlock methods
 
 	indices := table.GetIndices()
 	if len(indices) != 1 {

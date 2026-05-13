@@ -1,0 +1,77 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - gocyclo
+    - gosec
+    - revive
+    - unconvert
+    - unparam
+    - prealloc
+    - copyloopvar
+
+  settings:
+    gocyclo:
+      # Storage engine recovery (ARIES-style) and B-tree fix-up functions are
+      # inherently complex; this threshold flags genuine inflation beyond domain need.
+      min-complexity: 35
+    gosec:
+      excludes:
+        - G104 # duplicates errcheck
+        - G304 # file path from variable (common in storage engines)
+        - G404 # weak rand acceptable for tests/jitter
+    revive:
+      rules:
+        - name: var-naming
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - gocyclo
+          - unparam
+      - path: tests/(chaos|faults|stress)/
+        linters:
+          - errcheck
+          - gosec
+          - gocyclo
+          - unparam
+          - revive
+      - path: examples/
+        linters:
+          - errcheck
+          - gosec
+          - gocyclo
+          - unparam
+          - revive
+          - unused
+      - path: experiments/
+        linters:
+          - errcheck
+          - gosec
+          - gocyclo
+          - unparam
+          - revive
+          - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

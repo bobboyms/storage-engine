@@ -190,8 +190,9 @@ func TestDeserializeDocumentEntry_Error(t *testing.T) {
 }
 
 type customKey struct{}
+
 func (c customKey) Compare(other types.Comparable) int { return 0 }
-func (c customKey) String() string { return "" }
+func (c customKey) String() string                     { return "" }
 
 func TestSerializeDocumentEntry_UnsupportedKey(t *testing.T) {
 	_, err := SerializeDocumentEntry("t", "i", customKey{}, []byte{})
@@ -202,11 +203,21 @@ func TestSerializeDocumentEntry_UnsupportedKey(t *testing.T) {
 
 func TestKey_Oneof_Coverage(t *testing.T) {
 	k := &Key{Value: &Key_IntValue{IntValue: 10}}
-	if k.GetStringValue() != "" { t.Error("Should be empty") }
-	if k.GetBoolValue() != false { t.Error("Should be false") }
-	if k.GetFloatValue() != 0 { t.Error("Should be 0") }
-	if k.GetDateValue() != 0 { t.Error("Should be 0") }
+	if k.GetStringValue() != "" {
+		t.Error("Should be empty")
+	}
+	if k.GetBoolValue() != false {
+		t.Error("Should be false")
+	}
+	if k.GetFloatValue() != 0 {
+		t.Error("Should be 0")
+	}
+	if k.GetDateValue() != 0 {
+		t.Error("Should be 0")
+	}
 
 	k = &Key{Value: &Key_StringValue{StringValue: "s"}}
-	if k.GetIntValue() != 0 { t.Error("Should be 0") }
+	if k.GetIntValue() != 0 {
+		t.Error("Should be 0")
+	}
 }

@@ -1,12 +1,13 @@
 package storage_test
 
 import (
-	"github.com/bobboyms/storage-engine/pkg/storage"
-	"github.com/bobboyms/storage-engine/pkg/types"
-	"github.com/bobboyms/storage-engine/pkg/wal"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bobboyms/storage-engine/pkg/storage"
+	"github.com/bobboyms/storage-engine/pkg/types"
+	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 func TestEngine_GetAndDel(t *testing.T) {

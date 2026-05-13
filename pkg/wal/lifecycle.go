@@ -96,7 +96,7 @@ func fsyncDir(path string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
 
@@ -111,7 +111,7 @@ func scanSegmentRange(path string, cipher crypto.Cipher) (segmentRange, error) {
 	if err != nil {
 		return segmentRange{}, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	result := segmentRange{path: path}
 	for {
@@ -197,7 +197,7 @@ func archiveSegment(path, archiveDir string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	info, err := src.Stat()
 	if err != nil {
@@ -210,11 +210,11 @@ func archiveSegment(path, archiveDir string) error {
 		return err
 	}
 	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	if err := out.Close(); err != nil {
@@ -268,7 +268,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	info, err := in.Stat()
 	if err != nil {
 		return err
@@ -278,11 +278,11 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	return out.Close()

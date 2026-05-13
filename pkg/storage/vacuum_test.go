@@ -2,10 +2,11 @@ package storage
 
 import (
 	"fmt"
-	"github.com/bobboyms/storage-engine/pkg/types"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 func TestVacuum_TombstoneReclamation(t *testing.T) {

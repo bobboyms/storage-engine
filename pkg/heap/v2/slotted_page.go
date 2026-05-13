@@ -51,14 +51,14 @@ func encodeRecordHeader(h *RecordHeader, buf []byte) {
 	}
 	binary.LittleEndian.PutUint64(buf[1:9], h.CreateLSN)
 	binary.LittleEndian.PutUint64(buf[9:17], h.DeleteLSN)
-	binary.LittleEndian.PutUint64(buf[17:25], uint64(h.PrevRecordID))
+	binary.LittleEndian.PutUint64(buf[17:25], uint64(h.PrevRecordID)) //nolint:gosec // bit-pattern packing of signed RecordID
 }
 
 func decodeRecordHeader(h *RecordHeader, buf []byte) {
 	h.Valid = buf[0] == 1
 	h.CreateLSN = binary.LittleEndian.Uint64(buf[1:9])
 	h.DeleteLSN = binary.LittleEndian.Uint64(buf[9:17])
-	h.PrevRecordID = int64(binary.LittleEndian.Uint64(buf[17:25]))
+	h.PrevRecordID = int64(binary.LittleEndian.Uint64(buf[17:25])) //nolint:gosec // inverse of encode
 }
 
 // slottedHeader é a visão decodificada do cabeçalho no body da page.
@@ -271,7 +271,7 @@ func (sp *SlottedPage) Compact(minLSN uint64) (int, error) {
 	// Reescreve a região de records num buffer temporário, depois copia
 	// de volta. Evita copias sobrepostas (que corromperiam dados).
 	tmp := make([]byte, len(sp.body))
-	currentPos := uint16(len(sp.body))
+	currentPos := uint16(len(sp.body)) //nolint:gosec // sp.body length bounded by PageSize (fits in uint16)
 	// Empacota do maior slotID pro menor — preserva "newer=deeper".
 	for i := len(survivors) - 1; i >= 0; i-- {
 		s := survivors[i]

@@ -3,12 +3,14 @@ package storage
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
+	"time"
+
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
-	"time"
 )
 
 func TestWriteTransaction_Commit(t *testing.T) {
@@ -70,10 +72,8 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	if !found {
 		t.Errorf("User not found after commit")
 	}
-	// Fallback verification if JSON parsing differs
-	if val != userDoc {
-		// Just check if it contains Alice
-		// As mock implementation might return raw bytes depending on JsonToBson result
+	if !strings.Contains(val, `"Alice"`) || !strings.Contains(val, `"id"`) {
+		t.Errorf("User doc missing expected fields: got %q", val)
 	}
 
 	_, found, _ = se.Get("orders", "id", types.IntKey(100))

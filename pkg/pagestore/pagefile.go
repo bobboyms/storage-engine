@@ -56,18 +56,18 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	_, statErr := os.Stat(path)
 	creating := os.IsNotExist(statErr)
 
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
 	}
 
 	stat, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if stat.Size()%PageSize != 0 {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("pagestore: file size %d is not a multiple of PageSize %d", stat.Size(), PageSize)
 	}
 
@@ -76,7 +76,7 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 	// NewPageFile retornar.
 	if creating {
 		if err := fsyncDir(filepath.Dir(path)); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("pagestore: fsync dir after create: %w", err)
 		}
 	}
@@ -89,7 +89,7 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 
 	// PageID 0 é reservado (InvalidPageID). O próximo a alocar é o que
 	// corresponde ao fim do arquivo (ou 1 se estiver empty).
-	n := uint64(stat.Size() / PageSize)
+	n := uint64(stat.Size() / PageSize) //nolint:gosec // file size is non-negative
 	if n == 0 {
 		n = 1 // reserva o slot 0
 	}
@@ -164,7 +164,7 @@ func (pf *PageFile) WritePage(pageID PageID, p *Page) error {
 	hdr.Checksum = checksum(disk[HeaderSize:])
 	hdr.Encode(disk[:HeaderSize])
 
-	offset := int64(pageID) * PageSize
+	offset := int64(pageID) * PageSize //nolint:gosec // pageID bounded by file size; offset fits int64
 	if _, err := pf.file.WriteAt(disk[:], offset); err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (pf *PageFile) ReadPage(pageID PageID) (*Page, error) {
 	}
 
 	var page Page
-	offset := int64(pageID) * PageSize
+	offset := int64(pageID) * PageSize //nolint:gosec // pageID bounded by file size; offset fits int64
 	if _, err := pf.file.ReadAt(page[:], offset); err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package storage_test
 import (
 	"path/filepath"
 	"testing"
+
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -47,8 +48,8 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	}
 
 	// 2. Verify in both indices
-	valId, found, _ := se.Get("users", "id", types.IntKey(1))
-	if !found || valId == "" {
+	valID, found, _ := se.Get("users", "id", types.IntKey(1))
+	if !found || valID == "" {
 		t.Errorf("Document not found in primary index")
 	}
 
@@ -57,8 +58,8 @@ func TestInsertRow_FullFlow(t *testing.T) {
 		t.Errorf("Document not found in secondary index")
 	}
 
-	if valId != valEmail {
-		t.Errorf("Different results from indices: %s vs %s", valId, valEmail)
+	if valID != valEmail {
+		t.Errorf("Different results from indices: %s vs %s", valID, valEmail)
 	}
 
 	// 3. Duplicate Key check (Primary Key)

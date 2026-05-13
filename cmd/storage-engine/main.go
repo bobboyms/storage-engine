@@ -9,8 +9,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// JsonToBson converts uma string JSON generic para um documento bson.M
-func JsonToBson(jsonStr string) (bson.M, error) {
+// JSONToBson converts uma string JSON generic para um documento bson.M
+func JSONToBson(jsonStr string) (bson.M, error) {
 	var doc bson.M
 
 	// true = Canonical (estrito), false = Relaxed
@@ -25,7 +25,7 @@ func JsonToBson(jsonStr string) (bson.M, error) {
 
 func main() {
 	// Example de um JSON generic com mixed and nested types
-	inputJson := `
+	inputJSON := `
 	{
 		"nome": "Produto X",
 		"preco": 99.90,
@@ -38,7 +38,7 @@ func main() {
 	}`
 
 	// Executa a conversion
-	bsonDoc, err := JsonToBson(inputJson)
+	bsonDoc, err := JSONToBson(inputJSON)
 	if err != nil {
 		log.Fatal(err)
 	}
