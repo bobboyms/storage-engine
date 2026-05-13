@@ -6,11 +6,11 @@ import (
 	"slices"
 
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
+	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/crypto"
 	v2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type undoTask struct {
@@ -347,7 +347,7 @@ func (se *StorageEngine) undoMultiInsertEntry(originalLSN uint64, payload []byte
 	if err != nil {
 		return err
 	}
-	oldKeys, err := keysFromStoredDocument(table, prevDoc)
+	oldKeys, err := keysFromStoredDocument(se.codec, table, prevDoc)
 	if err != nil {
 		return err
 	}
@@ -448,9 +448,9 @@ func removeIndexKeyIfMatchesWithLSN(index *Index, key types.Comparable, expected
 	return removeIndexKeyWithLSN(index, key, lsn)
 }
 
-func keysFromStoredDocument(table *Table, docBytes []byte) (map[string]types.Comparable, error) {
-	if bsonDoc, err := UnmarshalBson(docBytes); err == nil {
-		keys, ok, keysErr := keysFromBSONForIndexes(table.GetIndicesUnsafe(), bsonDoc)
+func keysFromStoredDocument(c codec.Codec, table *Table, docBytes []byte) (map[string]types.Comparable, error) {
+	if doc, err := c.Open(docBytes); err == nil {
+		keys, ok, keysErr := keysFromCodecDocForIndexes(table.GetIndicesUnsafe(), doc)
 		if keysErr != nil {
 			return nil, keysErr
 		}
@@ -458,11 +458,11 @@ func keysFromStoredDocument(table *Table, docBytes []byte) (map[string]types.Com
 			return keys, nil
 		}
 	}
-	bsonDoc, err := JSONToBson(string(docBytes))
+	doc, err := c.Parse(string(docBytes))
 	if err != nil {
 		return nil, err
 	}
-	keys, ok, err := keysFromBSONForIndexes(table.GetIndicesUnsafe(), bsonDoc)
+	keys, ok, err := keysFromCodecDocForIndexes(table.GetIndicesUnsafe(), doc)
 	if err != nil {
 		return nil, err
 	}
@@ -470,19 +470,4 @@ func keysFromStoredDocument(table *Table, docBytes []byte) (map[string]types.Com
 		return nil, fmt.Errorf("storage: stored document missing indexed fields")
 	}
 	return keys, nil
-}
-
-func keysFromBSONForIndexes(indexes []*Index, bsonDoc bson.D) (map[string]types.Comparable, bool, error) {
-	keys := make(map[string]types.Comparable)
-	for _, idx := range indexes {
-		key, err := GetValueFromBson(bsonDoc, idx.Name)
-		if err != nil {
-			return nil, false, nil
-		}
-		if err := validateKeyForIndex(idx, key); err != nil {
-			return nil, false, err
-		}
-		keys[idx.Name] = key
-	}
-	return keys, true, nil
 }

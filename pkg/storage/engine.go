@@ -11,6 +11,8 @@ import (
 
 	"github.com/bobboyms/storage-engine/pkg/btree"
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
+	"github.com/bobboyms/storage-engine/pkg/codec"
+	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/crypto"
 	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/heap"
@@ -51,6 +53,7 @@ type StorageEngine struct {
 	opMu          sync.RWMutex // Escritas usam RLock; backup online usa Lock para snapshot consistente
 	logger        *slog.Logger
 	listener      EventListener
+	codec         codec.Codec
 	counters      engineCounters
 	// Nota: Lock por tabela agora está em Table.mu
 }
@@ -122,6 +125,11 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 		logger = discardLogger()
 	}
 
+	docCodec := opts.Codec
+	if docCodec == nil {
+		docCodec = bsoncodec.New()
+	}
+
 	se := &StorageEngine{
 		TableMetaData: tableMetaData,
 		WAL:           walWriter,
@@ -131,6 +139,7 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 		TxRegistry:    NewTransactionRegistry(),
 		logger:        logger,
 		listener:      opts.Listener,
+		codec:         docCodec,
 	}
 	se.LockManager = NewLockManager(LockManagerConfig{
 		OnDeadlock: func(ev DeadlockEvent) {
@@ -326,13 +335,14 @@ func (se *StorageEngine) readVisibleRecord(tx *Transaction, table *Table, key ty
 				return visibleRecord{}, nil
 			}
 
-			jsonStr, err := BSONToJSON(docBytes)
-			if err == nil {
-				return visibleRecord{
-					Document:  jsonStr,
-					Found:     true,
-					CreateLSN: header.CreateLSN,
-				}, nil
+			if se.codec != nil {
+				if jsonStr, err := se.codec.DecodeToText(docBytes); err == nil {
+					return visibleRecord{
+						Document:  jsonStr,
+						Found:     true,
+						CreateLSN: header.CreateLSN,
+					}, nil
+				}
 			}
 			return visibleRecord{
 				Document:  string(docBytes),
@@ -388,21 +398,22 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	// Try convert json to bson for validation and better storage.
-	// If the document contains every indexed field, use the multi-index
-	// write path so updates keep secondary indexes consistent.
-	bsonDoc, err := JSONToBson(document)
-	var bsonData []byte
-	if err == nil {
-		// Verify if the key exists
-		exists, keyType := DoesTheKeyExist(bsonDoc, indexName)
+	// Try parse the document with the configured codec for validation and
+	// canonical on-disk encoding. If the document contains every indexed
+	// field, use the multi-index write path so updates keep secondary
+	// indexes consistent.
+	parsedDoc, parseErr := se.codec.Parse(document)
+	var encodedDoc []byte
+	if parseErr == nil {
+		extracted, exists, kerr := parsedDoc.Key(indexName)
+		if kerr != nil {
+			return kerr
+		}
 		if !exists {
-			return &errors.IndexNotFoundError{
-				Name: indexName,
-			}
+			return &errors.IndexNotFoundError{Name: indexName}
 		}
 
-		// Verify if the key type is valid
+		keyType := getTypeFromKey(extracted)
 		if keyType != index.Type {
 			return &errors.InvalidKeyTypeError{
 				Name:     indexName,
@@ -410,10 +421,9 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 			}
 		}
 
-		//Serialize bson to bytes
-		bsonData, _ = MarshalBson(bsonDoc)
+		encodedDoc, _ = parsedDoc.Bytes()
 
-		if keys, ok, err := keysFromBSONForAllIndexes(table, bsonDoc); err != nil {
+		if keys, ok, err := keysFromCodecDocForAllIndexes(table, parsedDoc); err != nil {
 			return err
 		} else if ok {
 			docKey := keys[indexName]
@@ -424,7 +434,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		}
 	} else {
 		// Fallback to raw bytes
-		bsonData = []byte(document)
+		encodedDoc = []byte(document)
 	}
 
 	resource, err := lockResourceForKey(tableName, indexName, key)
@@ -439,7 +449,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 
 		// 1. Write Ahead Log
 		if se.WAL != nil {
-			payload, err := SerializeDocumentEntry(tableName, indexName, key, bsonData)
+			payload, err := SerializeDocumentEntry(tableName, indexName, key, encodedDoc)
 			if err != nil {
 				return err
 			}
@@ -475,7 +485,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 			// Write to Heap (dentro do Lock da folha - safe mas aumenta latência do lock)
 			// TODO: Otimização futura - Se heap write for lento, refatorar.
 			// Mas como é append-only bufio, must ser rápido.
-			offset, err := table.Heap.Write(bsonData, currentLSN, prevOffset)
+			offset, err := table.Heap.Write(encodedDoc, currentLSN, prevOffset)
 			if err != nil {
 				return 0, fmt.Errorf("heap write failed: %w", err)
 			}

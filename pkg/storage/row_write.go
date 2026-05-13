@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
+	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type indexUpdateUndo struct {
@@ -34,7 +34,7 @@ func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKe
 		return err
 	}
 
-	bsonData, keys, err := prepareRowDocument(table, doc, providedKeys)
+	bsonData, keys, err := prepareRowDocument(se.codec, table, doc, providedKeys)
 	if err != nil {
 		return err
 	}
@@ -118,14 +118,14 @@ func (se *StorageEngine) writeMultiIndexWAL(tableName string, keys map[string]ty
 	return nil
 }
 
-func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.Comparable) ([]byte, map[string]types.Comparable, error) {
+func prepareRowDocument(c codec.Codec, table *Table, doc string, providedKeys map[string]types.Comparable) ([]byte, map[string]types.Comparable, error) {
 	if providedKeys == nil {
 		providedKeys = map[string]types.Comparable{}
 	}
 
-	bsonDoc, err := JSONToBson(doc)
+	parsedDoc, err := c.Parse(doc)
 	if err == nil {
-		keys, ok, err := keysFromBSONForAllIndexes(table, bsonDoc)
+		keys, ok, err := keysFromCodecDocForAllIndexes(table, parsedDoc)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -141,7 +141,7 @@ func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.
 				return nil, nil, fmt.Errorf("storage: key informada %s=%v diverge do documento (%v)", name, provided, derived)
 			}
 		}
-		bsonData, err := MarshalBson(bsonDoc)
+		bsonData, err := parsedDoc.Bytes()
 		if err != nil {
 			return nil, nil, err
 		}
@@ -167,11 +167,18 @@ func prepareRowDocument(table *Table, doc string, providedKeys map[string]types.
 	return []byte(doc), keys, nil
 }
 
-func keysFromBSONForAllIndexes(table *Table, bsonDoc bson.D) (map[string]types.Comparable, bool, error) {
+func keysFromCodecDocForAllIndexes(table *Table, doc codec.Document) (map[string]types.Comparable, bool, error) {
+	return keysFromCodecDocForIndexes(table.GetIndices(), doc)
+}
+
+func keysFromCodecDocForIndexes(indexes []*Index, doc codec.Document) (map[string]types.Comparable, bool, error) {
 	keys := make(map[string]types.Comparable)
-	for _, idx := range table.GetIndices() {
-		key, err := GetValueFromBson(bsonDoc, idx.Name)
+	for _, idx := range indexes {
+		key, ok, err := doc.Key(idx.Name)
 		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
 			return nil, false, nil
 		}
 		if err := validateKeyForIndex(idx, key); err != nil {

@@ -4,6 +4,8 @@ import (
 	"io"
 	"log/slog"
 	"sync/atomic"
+
+	"github.com/bobboyms/storage-engine/pkg/codec"
 )
 
 // EventListener receives notifications about significant engine activity.
@@ -51,7 +53,8 @@ type LockWaitTimeoutEvent struct {
 }
 
 // Options configures pluggable engine behavior. Zero value is valid:
-// logging is discarded and no listener callbacks fire.
+// logging is discarded, no listener callbacks fire, and documents are
+// encoded with the default BSON codec.
 type Options struct {
 	// Logger receives structured engine events. Defaults to a logger
 	// that discards all output.
@@ -59,6 +62,11 @@ type Options struct {
 
 	// Listener receives lifecycle callbacks. Zero value disables them.
 	Listener EventListener
+
+	// Codec encodes/decodes documents stored by the engine. When nil,
+	// bsoncodec.New() is used so the engine keeps its historical
+	// JSON-in / BSON-on-disk behavior.
+	Codec codec.Codec
 }
 
 // Stats is a point-in-time snapshot of cumulative engine counters.

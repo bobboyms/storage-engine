@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/bobboyms/storage-engine/pkg/codec"
 	storageerrors "github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -260,14 +261,7 @@ func (tx *WriteTransaction) Commit() (err error) {
 			if op.opType == wal.EntryDelete {
 				payload, err = SerializeDocumentEntry(op.tableName, op.indexName, op.key, nil)
 			} else {
-				// Convert doc to bytes (BSON conversion logic duplicated from Put)
-				bsonDoc, errBson := JSONToBson(op.document)
-				var bsonData []byte
-				if errBson == nil {
-					bsonData, _ = MarshalBson(bsonDoc)
-				} else {
-					bsonData = []byte(op.document)
-				}
+				bsonData := encodeDocumentOrRaw(tx.engine.codec, op.document)
 				payload, err = SerializeDocumentEntry(op.tableName, op.indexName, op.key, bsonData)
 			}
 
@@ -561,10 +555,7 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 			return err
 		}
 	} else {
-		bsonData, err := tx.opDocumentBytes(op)
-		if err != nil {
-			return err
-		}
+		bsonData := tx.opDocumentBytes(op)
 
 		err = index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
 			prevOffset := int64(-1)
@@ -593,16 +584,22 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 	return nil
 }
 
-func (tx *WriteTransaction) opDocumentBytes(op writeOp) ([]byte, error) {
-	bsonDoc, errBson := JSONToBson(op.document)
-	if errBson == nil {
-		bsonData, err := MarshalBson(bsonDoc)
-		if err != nil {
-			return nil, err
+func (tx *WriteTransaction) opDocumentBytes(op writeOp) []byte {
+	return encodeDocumentOrRaw(tx.engine.codec, op.document)
+}
+
+// encodeDocumentOrRaw encodes `doc` using the supplied codec, falling back to
+// the raw bytes of the string when the codec cannot parse it (e.g. legacy
+// non-JSON payloads). The fallback mirrors historical engine behavior.
+func encodeDocumentOrRaw(c codec.Codec, doc string) []byte {
+	if c != nil {
+		if parsed, err := c.Parse(doc); err == nil {
+			if raw, err := parsed.Bytes(); err == nil {
+				return raw
+			}
 		}
-		return bsonData, nil
 	}
-	return []byte(op.document), nil
+	return []byte(doc)
 }
 
 func withPostCommitStage(info postCommitApplyInfo, stage postCommitApplyStage) postCommitApplyInfo {
