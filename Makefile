@@ -1,4 +1,4 @@
-.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix vuln
+.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix vuln tidy-check
 
 # Default target
 all: build
@@ -35,8 +35,14 @@ test-stress-race:
 
 test-safety: test-race test-chaos test-faults test-stress-race
 
-# Run static analysis with golangci-lint
-lint:
+# Verify go.mod / go.sum are tidy (no unused or missing module entries).
+# Fails with a diff if `go mod tidy` would change anything.
+tidy-check:
+	@echo "Checking go.mod/go.sum are tidy..."
+	@go mod tidy -diff
+
+# Run static analysis with golangci-lint (after verifying module tidiness)
+lint: tidy-check
 	@echo "Running golangci-lint..."
 	@golangci-lint run ./...
 
@@ -72,8 +78,9 @@ help:
 	@echo "  make test-stress - Run concurrent stress tests"
 	@echo "  make test-stress-race - Run concurrent stress tests with race detector"
 	@echo "  make test-safety - Run race, chaos, faults, and stress suites"
-	@echo "  make lint    - Run golangci-lint"
+	@echo "  make lint    - Run go mod tidy check + golangci-lint"
 	@echo "  make lint-fix - Run golangci-lint and auto-fix"
+	@echo "  make tidy-check - Fail if go.mod/go.sum need 'go mod tidy'"
 	@echo "  make vuln    - Scan for known vulnerabilities (govulncheck)"
 	@echo "  make run     - Build and run the engine"
 	@echo "  make clean   - Remove binaries"

@@ -139,6 +139,7 @@ make test-safety
 
 The CI in `.github/workflows/ci.yml` runs:
 
+- `go mod tidy -diff` (job `lint`, fails the build if `go.mod`/`go.sum` are not tidy).
 - `golangci-lint` (job `lint`, pinned to v2.11.4 against `.golangci.yml`).
 - `govulncheck ./...` (job `vuln`).
 - `go vet ./...`
@@ -158,13 +159,13 @@ Use the CI as a reference for required commands when the changed area touches th
 Before marking any task as complete, run both checks and fix every reported issue. A task is not done while either check reports findings.
 
 ```bash
-make lint    # golangci-lint run ./...
+make lint    # go mod tidy -diff + golangci-lint run ./...
 make vuln    # govulncheck ./...
 ```
 
 Rules:
 
-- `make lint` must report `0 issues`. Do not silence findings with broad `//nolint` to make them disappear; only suppress with `//nolint:<linter> // <reason>` when the conversion or pattern is genuinely intentional (e.g., bit-pattern packing in binary codecs, bounds enforced by surrounding invariants).
+- `make lint` must report `0 issues` and the `tidy-check` step must produce no diff. Run `go mod tidy` and commit the resulting `go.mod`/`go.sum` whenever it does. Do not silence golangci-lint findings with broad `//nolint` to make them disappear; only suppress with `//nolint:<linter> // <reason>` when the conversion or pattern is genuinely intentional (e.g., bit-pattern packing in binary codecs, bounds enforced by surrounding invariants).
 - `make vuln` must exit `0`. If `govulncheck` reports a reachable vulnerability ("Your code is affected by N vulnerabilities" with N > 0), upgrade the affected module/Go version or refactor to avoid the vulnerable call before finishing.
 - If a finding seems wrong, document the reasoning in code (comment or justified `//nolint`); do not loosen `.golangci.yml` thresholds to bypass a real issue.
 
