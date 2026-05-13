@@ -139,6 +139,8 @@ make test-safety
 
 The CI in `.github/workflows/ci.yml` runs:
 
+- `golangci-lint` (job `lint`, pinned to v2.11.4 against `.golangci.yml`).
+- `govulncheck ./...` (job `vuln`).
 - `go vet ./...`
 - `go build ./...`
 - `go test ./...`
@@ -147,7 +149,42 @@ The CI in `.github/workflows/ci.yml` runs:
 - `go test ./tests/stress -tags stress -race -count=1 -v`
 - fault tests with the `faults` tag, including WAL, heap, BTree, ENOSPC, and fsync.
 
+`.github/workflows/codeql.yml` runs CodeQL (`security-and-quality` query suite) on push/PR to `main` and weekly on Mondays at 06:00 UTC. Findings appear under the repository's Code scanning alerts.
+
 Use the CI as a reference for required commands when the changed area touches these subsystems.
+
+## Mandatory Static Analysis and Security Scans
+
+Before marking any task as complete, run both checks and fix every reported issue. A task is not done while either check reports findings.
+
+```bash
+make lint    # golangci-lint run ./...
+make vuln    # govulncheck ./...
+```
+
+Rules:
+
+- `make lint` must report `0 issues`. Do not silence findings with broad `//nolint` to make them disappear; only suppress with `//nolint:<linter> // <reason>` when the conversion or pattern is genuinely intentional (e.g., bit-pattern packing in binary codecs, bounds enforced by surrounding invariants).
+- `make vuln` must exit `0`. If `govulncheck` reports a reachable vulnerability ("Your code is affected by N vulnerabilities" with N > 0), upgrade the affected module/Go version or refactor to avoid the vulnerable call before finishing.
+- If a finding seems wrong, document the reasoning in code (comment or justified `//nolint`); do not loosen `.golangci.yml` thresholds to bypass a real issue.
+
+CodeQL runs in CI; it is not required locally but its alerts are blocking the same way.
+
+## Commit Guidelines
+
+Only commit when the user explicitly asks for it. When committing:
+
+- Run `make lint` and `make vuln` first; both must pass. If either fails, fix the issues and re-run before committing.
+- Stage files by explicit path, not `git add -A` / `git add .`.
+- Never commit secrets, credentials, or large binaries.
+- Use a HEREDOC for the commit message to preserve formatting.
+- Subject line: short, imperative, focused on the "why" of the change.
+- Body: bullets or short paragraphs describing intent and notable trade-offs.
+- Always include the `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` trailer when the change was assistant-driven.
+- Never amend an existing commit unless the user explicitly asks; create a new commit instead, especially after pre-commit hook failures.
+- Never use `--no-verify` or skip hooks.
+- Do not push to the remote unless the user explicitly asks.
+- When a pre-commit hook rewrites files, re-stage and create a new commit; do not amend.
 
 ## Editing Rules
 
@@ -171,6 +208,8 @@ When completing an implementation task, report:
 - Post-Refactor command and result.
 - Coverage command.
 - Final total coverage.
+- `make lint` result (must be `0 issues`).
+- `make vuln` result (must report `0` vulnerabilities affecting the code).
 - Which specialized suites were run or why they were not necessary.
 
 If a command cannot run due to environment limitations, state that explicitly and include the exact command that should be run.
