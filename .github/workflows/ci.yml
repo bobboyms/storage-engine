@@ -57,8 +57,22 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Unit tests
-        run: go test ./...
+      - name: Unit tests with coverage
+        run: go test ./... -coverprofile=coverage.out
+
+      - name: Enforce coverage gate (>= 70%)
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/{print $NF}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 70.0) { print "Coverage " t "% is below the 70% minimum"; exit 1 } }'
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          if-no-files-found: ignore
 
       - name: Race tests
         run: go test ./pkg/... -race
