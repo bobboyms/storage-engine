@@ -694,72 +694,29 @@ func (tr *BTreeV2) updateRootLocked(newRootPageID pagestore.PageID) error {
 
 // ScanAll percorre todas as keys da tree em ordem crescente.
 func (tr *BTreeV2) ScanAll(fn func(key types.Comparable, value int64) error) error {
-	if tr.isVariable {
-		return tr.scanLockedVar(nil, nil, fn)
-	}
-	return tr.scanLocked(nil, nil, fn)
+	return tr.scanWithCursor(nil, nil, fn)
 }
 
 // Scan percorre [start, end] inclusive.
 func (tr *BTreeV2) Scan(start, end types.Comparable, fn func(key types.Comparable, value int64) error) error {
-	if tr.isVariable {
-		sEnc := tr.varCodec.Encode(start)
-		eEnc := tr.varCodec.Encode(end)
-		return tr.scanLockedVar(sEnc, eEnc, fn)
-	}
-	sEnc := tr.codec.Encode(start)
-	eEnc := tr.codec.Encode(end)
-	return tr.scanLocked(&sEnc, &eEnc, fn)
+	return tr.scanWithCursor(start, end, fn)
 }
 
-func (tr *BTreeV2) scanLocked(start, end *uint64, fn func(key types.Comparable, value int64) error) error {
-	var startLeaf pagestore.PageID
-	var err error
-	if start != nil {
-		startLeaf, err = tr.findLeafForKey(*start)
-	} else {
-		startLeaf, err = tr.findLeftmostLeaf()
-	}
+// scanWithCursor is the shared callback-style scan implementation. It is
+// thin glue over the public Cursor so legacy callers keep their callback
+// semantics while the new code path streams through the cursor directly.
+func (tr *BTreeV2) scanWithCursor(start, end types.Comparable, fn func(key types.Comparable, value int64) error) error {
+	cur, err := tr.NewCursor(start, end)
 	if err != nil {
 		return err
 	}
-
-	currentLeaf := startLeaf
-	for currentLeaf != pagestore.InvalidPageID {
-		h, err := tr.bp.Fetch(currentLeaf)
-		if err != nil {
-			return err
+	defer func() { _ = cur.Close() }()
+	for cur.Next() {
+		if cbErr := fn(cur.Key(), cur.Value()); cbErr != nil {
+			return cbErr
 		}
-
-		np, err := OpenNodePage(h.Page(), tr.maxBodySize, tr.codec.Compare)
-		if err != nil {
-			h.Release()
-			return err
-		}
-
-		n := np.NumKeys()
-		for i := 0; i < n; i++ {
-			k, v := np.LeafAt(i)
-
-			if start != nil && tr.codec.Compare(k, *start) < 0 {
-				continue
-			}
-			if end != nil && tr.codec.Compare(k, *end) > 0 {
-				h.Release()
-				return nil
-			}
-
-			if cbErr := fn(tr.codec.Decode(k), v); cbErr != nil {
-				h.Release()
-				return cbErr
-			}
-		}
-
-		nextLeaf := np.NextLeafPageID()
-		h.Release()
-		currentLeaf = nextLeaf
 	}
-	return nil
+	return cur.Err()
 }
 
 func (tr *BTreeV2) findLeafForKey(encKey uint64) (pagestore.PageID, error) {

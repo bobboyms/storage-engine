@@ -4,11 +4,54 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bobboyms/storage-engine/pkg/query"
+	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+var docCodec = bsoncodec.New()
+
+func decodeDoc(raw []byte) string {
+	if raw == nil {
+		return ""
+	}
+	text, err := docCodec.DecodeToText(raw)
+	if err != nil {
+		return string(raw)
+	}
+	return text
+}
+
+func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool) {
+	raw, found, err := engine.GetBytes(table, idx, key)
+	if err != nil || !found {
+		return "", false
+	}
+	return decodeDoc(raw), true
+}
+
+func scanEqual(engine *storage.StorageEngine, table, idx string, key types.Comparable) []string {
+	return collectRange(engine, table, idx, key, key)
+}
+
+func collectRange(engine *storage.StorageEngine, table, idx string, lo, hi types.Comparable) []string {
+	it, err := engine.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	if err != nil {
+		fmt.Printf("iterator error: %v\n", err)
+		return nil
+	}
+	defer it.Close()
+	var out []string
+	for it.Next() {
+		out = append(out, decodeDoc(it.Value()))
+	}
+	return out
+}
+
+func collectAtLeast(engine *storage.StorageEngine, table, idx string, lo types.Comparable) []string {
+	return collectRange(engine, table, idx, lo, nil)
+}
 
 /*
 EXEMPLO: Múltiplos Índices
@@ -85,8 +128,7 @@ func main() {
 	fmt.Println("\n=== Busca por Índice Primário (id) ===")
 
 	// O(log n) - Busca direta na B+Tree
-	doc, found, _ := engine.Get("employees", "id", types.IntKey(3))
-	if found {
+	if doc, found := fetchDoc(engine, "employees", "id", types.IntKey(3)); found {
 		fmt.Printf("ID=3: %s\n", doc)
 	}
 
@@ -96,8 +138,7 @@ func main() {
 	fmt.Println("\n=== Busca por Índice Secundário (email) ===")
 
 	// Também O(log n) graças ao index
-	doc, found, _ = engine.Get("employees", "email", types.VarcharKey("grace@company.com"))
-	if found {
+	if doc, found := fetchDoc(engine, "employees", "email", types.VarcharKey("grace@company.com")); found {
 		fmt.Printf("Email='grace@company.com': %s\n", doc)
 	}
 
@@ -108,15 +149,13 @@ func main() {
 
 	// Buscar todos do Engineering usando scan
 	fmt.Println("Funcionários do Engineering:")
-	results, _ := engine.Scan("employees", "department", query.Equal(types.VarcharKey("Engineering")))
-	for _, r := range results {
+	for _, r := range scanEqual(engine, "employees", "department", types.VarcharKey("Engineering")) {
 		fmt.Printf("  %s\n", r)
 	}
 
 	// Buscar todos de Sales
 	fmt.Println("\nFuncionários de Sales:")
-	results, _ = engine.Scan("employees", "department", query.Equal(types.VarcharKey("Sales")))
-	for _, r := range results {
+	for _, r := range scanEqual(engine, "employees", "department", types.VarcharKey("Sales")) {
 		fmt.Printf("  %s\n", r)
 	}
 
@@ -127,18 +166,13 @@ func main() {
 
 	// Funcionários com salário >= 80000
 	fmt.Println("Salário >= $80,000:")
-	results, _ = engine.Scan("employees", "salary", query.GreaterOrEqual(types.FloatKey(80000.00)))
-	for _, r := range results {
+	for _, r := range collectAtLeast(engine, "employees", "salary", types.FloatKey(80000.00)) {
 		fmt.Printf("  %s\n", r)
 	}
 
 	// Funcionários com salário entre 70000 e 90000
 	fmt.Println("\nSalário entre $70,000 e $90,000:")
-	results, _ = engine.Scan("employees", "salary", query.Between(
-		types.FloatKey(70000.00),
-		types.FloatKey(90000.00),
-	))
-	for _, r := range results {
+	for _, r := range collectRange(engine, "employees", "salary", types.FloatKey(70000.00), types.FloatKey(90000.00)) {
 		fmt.Printf("  %s\n", r)
 	}
 
@@ -215,7 +249,7 @@ Quando NÃO criar index secundário?
 		fmt.Println("✓ Bob promovido: salário atualizado para $95,000")
 
 		// Verificar
-		doc, _, _ := engine.Get("employees", "id", types.IntKey(2))
+		doc, _ := fetchDoc(engine, "employees", "id", types.IntKey(2))
 		fmt.Printf("  Verificação: %s\n", doc)
 	}
 

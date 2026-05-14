@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	enginecrypto "github.com/bobboyms/storage-engine/pkg/crypto"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -67,7 +68,7 @@ func main() {
 		return
 	}
 
-	doc, found, err := se.Get(tableName, indexName, types.VarcharKey(secretEmail))
+	doc, found, err := legacydoc.Fetch(se, tableName, indexName, types.VarcharKey(secretEmail))
 	if err != nil || !found {
 		_ = se.Close()
 		fmt.Printf("error lendo documento before do reopen: found=%v err=%v\n", found, err)
@@ -102,7 +103,7 @@ func main() {
 	}
 	defer reopened.Close()
 
-	recovered, found, err := reopened.Get(tableName, indexName, types.VarcharKey(secretEmail))
+	recovered, found, err := legacydoc.Fetch(reopened, tableName, indexName, types.VarcharKey(secretEmail))
 	if err != nil || !found {
 		fmt.Printf("error lendo apos reopen: found=%v err=%v\n", found, err)
 		return

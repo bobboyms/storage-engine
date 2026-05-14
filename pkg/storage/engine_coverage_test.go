@@ -52,7 +52,7 @@ func TestRecover_WALOnly(t *testing.T) {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
-	val, found, _ := se2.Get("users", "id", types.IntKey(1))
+	val, found, _ := getDocStringExt(t, se2, "users", "id", types.IntKey(1))
 	if !found || val != "one" {
 		t.Errorf("Expected one, got %v", val)
 	}
@@ -279,7 +279,7 @@ func TestRecover_IgnoresLegacyCheckpointFile(t *testing.T) {
 		t.Fatalf("Recover should ignore legacy .chk files, got: %v", err)
 	}
 
-	if _, found, err := se2.Get("users", "id", types.IntKey(1)); err != nil {
+	if _, found, err := getDocStringExt(t, se2, "users", "id", types.IntKey(1)); err != nil {
 		t.Fatalf("Get failed: %v", err)
 	} else if !found {
 		t.Fatal("expected recovered key after WAL-only recovery")

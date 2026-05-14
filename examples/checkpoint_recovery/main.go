@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -70,7 +71,7 @@ func main() {
 	// Verificar data before do "crash"
 	fmt.Println("\nDados before do crash:")
 	for i := int64(1); i <= 5; i++ {
-		doc, found, _ := engine.Get("users", "id", types.IntKey(i))
+		doc, found, _ := legacydoc.Fetch(engine, "users", "id", types.IntKey(i))
 		if found {
 			fmt.Printf("  User %d: %s\n", i, doc)
 		}
@@ -155,7 +156,7 @@ func main() {
 
 	fmt.Println("\nDados reais recuperados:")
 	for i := int64(1); i <= 8; i++ {
-		doc, found, _ := engine.Get("users", "id", types.IntKey(i))
+		doc, found, _ := legacydoc.Fetch(engine, "users", "id", types.IntKey(i))
 		if found {
 			fmt.Printf("  ✓ User %d: %s\n", i, doc)
 		} else {

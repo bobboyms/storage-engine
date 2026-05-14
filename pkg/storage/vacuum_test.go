@@ -117,7 +117,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 	if _, found, _ := idx.Tree.Get(types.IntKey(1)); !found {
 		t.Error("Vacuum v2 should keep key 1 indexed even after reclaiming the slot")
 	}
-	if _, found, _ := se.Get("users", "id", types.IntKey(1)); found {
+	if _, found, _ := getDocString(t, se, "users", "id", types.IntKey(1)); found {
 		t.Error("Vacuum should have made key 1 unreachable via engine.Get")
 	}
 	if _, found, _ := idx.Tree.Get(types.IntKey(3)); !found {

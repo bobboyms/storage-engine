@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -107,7 +108,7 @@ func main() {
 					id = 1
 				}
 
-				_, found, err := tx.Get("products", "id", types.IntKey(id))
+				_, found, err := legacydoc.FetchTx(tx, "products", "id", types.IntKey(id))
 				if err != nil {
 					atomic.AddInt64(&readsFail, 1)
 				} else if found {
@@ -158,7 +159,7 @@ func main() {
 				if id <= 0 {
 					id = 1
 				}
-				if _, found, _ := tx.Get("products", "id", types.IntKey(id)); found {
+				if _, found, _ := legacydoc.FetchTx(tx, "products", "id", types.IntKey(id)); found {
 					atomic.AddInt64(&mixedReads, 1)
 				}
 			}
@@ -193,12 +194,12 @@ func main() {
 	time.Sleep(time.Millisecond * 50)
 
 	// tx1 ainda deve ver "v1" (Snapshot Isolation)
-	doc1, _, _ := tx1.Get("products", "id", types.IntKey(99999))
+	doc1, _, _ := legacydoc.FetchTx(tx1, "products", "id", types.IntKey(99999))
 	fmt.Printf("Transação TX1 (snapshot antigo) vê: %s\n", doc1)
 
 	// Nova transação deve ver "v2"
 	tx2 := engine.BeginRead()
-	doc2, _, _ := tx2.Get("products", "id", types.IntKey(99999))
+	doc2, _, _ := legacydoc.FetchTx(tx2, "products", "id", types.IntKey(99999))
 	fmt.Printf("Transação TX2 (snapshot novo) vê: %s\n", doc2)
 
 	// ========================================

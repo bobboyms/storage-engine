@@ -105,7 +105,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	// Verify all keys exist
 	totalKeys := numRoutine * numInserts
 	for i := 0; i < totalKeys; i++ {
-		doc, found, err := se2.Get("concurrent_table", "id", types.IntKey(i))
+		doc, found, err := getDocString(t, se2, "concurrent_table", "id", types.IntKey(i))
 		if err != nil {
 			t.Errorf("Get(%d) error: %v", i, err)
 		}
@@ -196,7 +196,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
 			// Ignora erros de key not encontrada (podem not ter sido inseridas ainda)
-			se.Get("users", "id", types.IntKey(i))
+			getDocString(t, se, "users", "id", types.IntKey(i))
 			time.Sleep(500 * time.Microsecond)
 		}
 	}()
@@ -207,7 +207,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < numInserts; i++ {
 			// Ignora erros de key not encontrada (podem not ter sido inseridas ainda)
-			se.Get("orders", "id", types.IntKey(i))
+			getDocString(t, se, "orders", "id", types.IntKey(i))
 			time.Sleep(500 * time.Microsecond)
 		}
 	}()
@@ -217,8 +217,8 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 
 	// Verifica integridade dos dados
 	for i := 0; i < numInserts; i++ {
-		_, foundUser, _ := se.Get("users", "id", types.IntKey(i))
-		_, foundOrder, _ := se.Get("orders", "id", types.IntKey(i))
+		_, foundUser, _ := getDocString(t, se, "users", "id", types.IntKey(i))
+		_, foundOrder, _ := getDocString(t, se, "orders", "id", types.IntKey(i))
 
 		if !foundUser {
 			t.Errorf("User %d not found", i)
@@ -293,7 +293,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 		for i := 0; i < numOps; i++ {
 			// Read from keys 25-49 which are NOT being deleted
 			key := 25 + (i % 25)
-			_, found, err := se.Get("mixed_ops", "id", types.IntKey(key))
+			_, found, err := getDocString(t, se, "mixed_ops", "id", types.IntKey(key))
 			if err != nil {
 				errChan <- fmt.Errorf("read error key %d: %w", key, err)
 			}

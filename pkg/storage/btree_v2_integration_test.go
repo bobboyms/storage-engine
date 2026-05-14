@@ -74,7 +74,7 @@ func TestBTreeV2_Integration_BasicCRUD(t *testing.T) {
 	}
 
 	// GET — exercita index.Tree.Get (v2)
-	doc, found, err := se.Get("users", "id", types.IntKey(1))
+	doc, found, err := getDocStringExt(t, se, "users", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("Get 1: found=%v err=%v", found, err)
 	}
@@ -86,7 +86,7 @@ func TestBTreeV2_Integration_BasicCRUD(t *testing.T) {
 	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"nome":"alice-updated"}`); err != nil {
 		t.Fatalf("Update 1: %v", err)
 	}
-	doc, _, _ = se.Get("users", "id", types.IntKey(1))
+	doc, _, _ = getDocStringExt(t, se, "users", "id", types.IntKey(1))
 	if doc != `{"id":1,"nome":"alice-updated"}` {
 		t.Fatalf("update not refletiu: %q", doc)
 	}
@@ -142,7 +142,7 @@ func TestEngine_AutoScanWALForMaxLSN(t *testing.T) {
 
 	// SEM chamar Recover: todos os 5 records mustm ser visible
 	for i := int64(1); i <= 5; i++ {
-		doc, found, err := se2.Get("t", "id", types.IntKey(i))
+		doc, found, err := getDocStringExt(t, se2, "t", "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get(%d): %v", i, err)
 		}
@@ -206,7 +206,7 @@ func TestBTreeV2_Integration_Varchar(t *testing.T) {
 
 	// Get de cada
 	for email, wantDoc := range rows {
-		doc, found, err := se.Get("contacts", "email", types.VarcharKey(email))
+		doc, found, err := getDocStringExt(t, se, "contacts", "email", types.VarcharKey(email))
 		if err != nil || !found {
 			t.Fatalf("Get %q: found=%v err=%v", email, found, err)
 		}
@@ -220,7 +220,7 @@ func TestBTreeV2_Integration_Varchar(t *testing.T) {
 		`{"email":"bob@b.co","nome":"Bob Updated"}`); err != nil {
 		t.Fatal(err)
 	}
-	doc, _, _ := se.Get("contacts", "email", types.VarcharKey("bob@b.co"))
+	doc, _, _ := getDocStringExt(t, se, "contacts", "email", types.VarcharKey("bob@b.co"))
 	if doc != `{"email":"bob@b.co","nome":"Bob Updated"}` {
 		t.Fatalf("Update not refletiu: %q", doc)
 	}
@@ -260,19 +260,19 @@ func TestBTreeV2_Integration_MVCC(t *testing.T) {
 	se.Put("mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":3}`)
 
 	// txA vê v1 (snapshot antes dos updates)
-	doc, found, _ := txA.Get("mvcc_btv2", "id", types.IntKey(1))
+	doc, found, _ := getDocStringExtTx(t, txA, "mvcc_btv2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":1}` {
 		t.Errorf("txA expected v1, got found=%v doc=%q", found, doc)
 	}
 
 	// txB vê v2
-	doc, found, _ = txB.Get("mvcc_btv2", "id", types.IntKey(1))
+	doc, found, _ = getDocStringExtTx(t, txB, "mvcc_btv2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":2}` {
 		t.Errorf("txB expected v2, got found=%v doc=%q", found, doc)
 	}
 
 	// Engine novo snapshot vê v3
-	doc, found, _ = se.Get("mvcc_btv2", "id", types.IntKey(1))
+	doc, found, _ = getDocStringExt(t, se, "mvcc_btv2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":3}` {
 		t.Errorf("engine expected v3, got found=%v doc=%q", found, doc)
 	}
@@ -342,7 +342,7 @@ func TestBTreeV2_Integration_ReopenWithTDE(t *testing.T) {
 	// auto-scan do WAL pra avançar o lsnTracker. Records persistidos ficam
 	// imediatamente visible pra novos snapshots.
 
-	doc, found, _ := se2.Get("t", "id", types.IntKey(42))
+	doc, found, _ := getDocStringExt(t, se2, "t", "id", types.IntKey(42))
 	if !found {
 		t.Fatal("key 42 disappeared after reopen")
 	}

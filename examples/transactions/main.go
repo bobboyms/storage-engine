@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -55,7 +56,7 @@ func main() {
 	fmt.Println("  3 operações adicionadas ao buffer da transação")
 
 	// Verificar que os data AINDA NÃO estão visíveis
-	_, found, _ := engine.Get("accounts", "id", types.IntKey(1))
+	_, found, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(1))
 	fmt.Printf("  Antes do commit - Alice existe? %v\n", found)
 
 	// Commit - persiste atomicamente todas as operações
@@ -67,7 +68,7 @@ func main() {
 	}
 
 	// Agora os data estão visíveis
-	doc, found, _ := engine.Get("accounts", "id", types.IntKey(1))
+	doc, found, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(1))
 	if found {
 		fmt.Printf("  Após commit - Alice: %s\n", doc)
 	}
@@ -78,7 +79,7 @@ func main() {
 	fmt.Println("\n=== Cenário 2: Transação com Rollback ===")
 
 	// Estado inicial
-	docBefore, _, _ := engine.Get("accounts", "id", types.IntKey(2))
+	docBefore, _, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(2))
 	fmt.Printf("Estado inicial de Bob: %s\n", docBefore)
 
 	// Iniciar transação de atualização
@@ -96,10 +97,10 @@ func main() {
 	fmt.Println("  ✓ Rollback realizado")
 
 	// Verificar que nada mudou
-	docAfter, _, _ := engine.Get("accounts", "id", types.IntKey(2))
+	docAfter, _, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(2))
 	fmt.Printf("Estado de Bob after rollback: %s\n", docAfter)
 
-	_, found3, _ := engine.Get("accounts", "id", types.IntKey(3))
+	_, found3, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(3))
 	fmt.Printf("Carol ainda existe? %v\n", found3)
 
 	// ========================================
@@ -110,7 +111,7 @@ func main() {
 	// Ler saldos atuais
 	fmt.Println("Saldos before da transferência:")
 	for i := int64(1); i <= 3; i++ {
-		doc, _, _ := engine.Get("accounts", "id", types.IntKey(i))
+		doc, _, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(i))
 		fmt.Printf("  Conta %d: %s\n", i, doc)
 	}
 
@@ -133,7 +134,7 @@ func main() {
 	// Verificar resultado
 	fmt.Println("\nSaldos after a transferência:")
 	for i := int64(1); i <= 3; i++ {
-		doc, _, _ := engine.Get("accounts", "id", types.IntKey(i))
+		doc, _, _ := legacydoc.Fetch(engine, "accounts", "id", types.IntKey(i))
 		fmt.Printf("  Conta %d: %s\n", i, doc)
 	}
 
@@ -171,11 +172,11 @@ func main() {
 	}
 
 	// Verificar
-	doc, _, _ = engine.Get("accounts", "id", types.IntKey(100))
+	doc, _, _ = legacydoc.Fetch(engine, "accounts", "id", types.IntKey(100))
 	fmt.Printf("  Empresa: %s\n", doc)
-	doc, _, _ = engine.Get("accounts", "id", types.IntKey(101))
+	doc, _, _ = legacydoc.Fetch(engine, "accounts", "id", types.IntKey(101))
 	fmt.Printf("  Fornecedor: %s\n", doc)
-	doc, _, _ = engine.Get("transactions", "id", types.IntKey(1))
+	doc, _, _ = legacydoc.Fetch(engine, "transactions", "id", types.IntKey(1))
 	fmt.Printf("  Log: %s\n", doc)
 
 	// ========================================

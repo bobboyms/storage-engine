@@ -98,13 +98,13 @@ func TestRecovery_ExplicitTransaction_CommitsWinnersAndDropsLosers(t *testing.T)
 		t.Fatalf("recover: %v", err)
 	}
 
-	if _, found, err := se.Get("users", "id", types.IntKey(1)); err != nil {
+	if _, found, err := getDocString(t, se, "users", "id", types.IntKey(1)); err != nil {
 		t.Fatalf("get committed tx key: %v", err)
 	} else if !found {
 		t.Fatalf("committed transaction key missing after recovery")
 	}
 
-	if _, found, err := se.Get("users", "id", types.IntKey(2)); err != nil {
+	if _, found, err := getDocString(t, se, "users", "id", types.IntKey(2)); err != nil {
 		t.Fatalf("get loser tx key: %v", err)
 	} else if found {
 		t.Fatalf("loser transaction key should not be visible after recovery")

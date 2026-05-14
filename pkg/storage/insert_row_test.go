@@ -48,12 +48,12 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	}
 
 	// 2. Verify in both indices
-	valID, found, _ := se.Get("users", "id", types.IntKey(1))
+	valID, found, _ := getDocStringExt(t, se, "users", "id", types.IntKey(1))
 	if !found || valID == "" {
 		t.Errorf("Document not found in primary index")
 	}
 
-	valEmail, found, _ := se.Get("users", "email", types.VarcharKey("test@example.com"))
+	valEmail, found, _ := getDocStringExt(t, se, "users", "email", types.VarcharKey("test@example.com"))
 	if !found || valEmail == "" {
 		t.Errorf("Document not found in secondary index")
 	}
@@ -109,7 +109,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
-	valRec, found, _ := se2.Get("users", "email", types.VarcharKey("test@example.com"))
+	valRec, found, _ := getDocStringExt(t, se2, "users", "email", types.VarcharKey("test@example.com"))
 	if !found || valRec == "" {
 		t.Errorf("Recovered document not found in index")
 	}

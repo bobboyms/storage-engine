@@ -17,7 +17,6 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	v2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
-	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 	"github.com/google/uuid"
@@ -253,6 +252,13 @@ type Transaction struct {
 	SnapshotLSN uint64
 	Level       IsolationLevel
 	engine      *StorageEngine
+
+	// iterMu guards iterators. NewIterator registers the handle here so
+	// Transaction.Close can force-close anything the caller forgot —
+	// otherwise a forgotten Close would leave a B+ tree leaf pinned with
+	// its read latch held, blocking writers on that leaf.
+	iterMu    sync.Mutex
+	iterators []*storageIterator
 }
 
 type visibleRecord struct {
@@ -276,9 +282,35 @@ func (se *StorageEngine) BeginTransaction(level IsolationLevel) *Transaction {
 	return tx
 }
 
-// Close marks the transaction as finished and unregisters it
+// Close marks the transaction as finished and unregisters it. It also
+// force-closes any iterators the caller forgot to close so their pinned
+// B+ tree leaves are released back to the buffer pool.
 func (tx *Transaction) Close() {
+	tx.iterMu.Lock()
+	pending := tx.iterators
+	tx.iterators = nil
+	tx.iterMu.Unlock()
+	for _, it := range pending {
+		_ = it.Close()
+	}
 	tx.engine.TxRegistry.Unregister(tx)
+}
+
+func (tx *Transaction) trackIterator(it *storageIterator) {
+	tx.iterMu.Lock()
+	tx.iterators = append(tx.iterators, it)
+	tx.iterMu.Unlock()
+}
+
+func (tx *Transaction) untrackIterator(it *storageIterator) {
+	tx.iterMu.Lock()
+	defer tx.iterMu.Unlock()
+	for i, x := range tx.iterators {
+		if x == it {
+			tx.iterators = append(tx.iterators[:i], tx.iterators[i+1:]...)
+			return
+		}
+	}
 }
 
 // BeginRead inicia uma transação de read (Snapshot) com o padrão Repeatable Read
@@ -344,68 +376,72 @@ func (se *StorageEngine) Close() error {
 	return err
 }
 
-func (se *StorageEngine) readVisibleValue(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (string, bool, error) {
-	record, err := se.readVisibleRecord(tx, table, key, currentOffset)
-	if err != nil {
-		return "", false, err
-	}
-	return record.Document, record.Found, nil
+// visibleRecordRaw is the MVCC-resolved payload as stored on the heap, with
+// no codec transformation applied. Used by the streaming Iterator and by
+// the bytes-returning Get path.
+type visibleRecordRaw struct {
+	Raw       []byte
+	Found     bool
+	CreateLSN uint64
 }
 
-func (se *StorageEngine) readVisibleRecord(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (visibleRecord, error) {
+// readVisibleRecordRaw walks the version chain for `key` starting at
+// `currentOffset` and returns the first version visible to `tx` as raw
+// bytes. Missing / vacuumed / non-visible chains return Found=false.
+func (se *StorageEngine) readVisibleRecordRaw(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (visibleRecordRaw, error) {
 	for currentOffset != -1 {
 		docBytes, header, err := table.Heap.Read(currentOffset)
 		if isChainEndErr(err) {
-			return visibleRecord{}, nil
+			return visibleRecordRaw{}, nil
 		}
 		if err != nil {
-			return visibleRecord{}, fmt.Errorf("heap read failed at key %v: %w", key, err)
+			return visibleRecordRaw{}, fmt.Errorf("heap read failed at key %v: %w", key, err)
 		}
 
 		if tx.IsVisible(header.CreateLSN) {
 			isVisibleVersion := header.Valid || (header.DeleteLSN > tx.SnapshotLSN)
 			if !isVisibleVersion {
-				return visibleRecord{}, nil
+				return visibleRecordRaw{}, nil
 			}
-
-			if se.codec != nil {
-				if jsonStr, err := se.codec.DecodeToText(docBytes); err == nil {
-					return visibleRecord{
-						Document:  jsonStr,
-						Found:     true,
-						CreateLSN: header.CreateLSN,
-					}, nil
-				}
-			}
-			return visibleRecord{
-				Document:  string(docBytes),
-				Found:     true,
-				CreateLSN: header.CreateLSN,
-			}, nil
+			return visibleRecordRaw{Raw: docBytes, Found: true, CreateLSN: header.CreateLSN}, nil
 		}
 		currentOffset = header.PrevRecordID
 	}
-
-	return visibleRecord{}, nil
+	return visibleRecordRaw{}, nil
 }
 
 func (se *StorageEngine) visibleRecordForKey(tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecord, error) {
+	raw, err := se.visibleRecordForKeyRaw(tx, tableName, indexName, key)
+	if err != nil || !raw.Found {
+		return visibleRecord{Found: raw.Found, CreateLSN: raw.CreateLSN}, err
+	}
+	if se.codec != nil {
+		if jsonStr, err := se.codec.DecodeToText(raw.Raw); err == nil {
+			return visibleRecord{Document: jsonStr, Found: true, CreateLSN: raw.CreateLSN}, nil
+		}
+	}
+	return visibleRecord{Document: string(raw.Raw), Found: true, CreateLSN: raw.CreateLSN}, nil
+}
+
+// visibleRecordForKeyRaw resolves the MVCC version for `key` and returns
+// the raw heap bytes. Used by the new bytes-returning Get path.
+func (se *StorageEngine) visibleRecordForKeyRaw(tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
-		return visibleRecord{}, err
+		return visibleRecordRaw{}, err
 	}
 	index, err := table.GetIndex(indexName)
 	if err != nil {
-		return visibleRecord{}, err
+		return visibleRecordRaw{}, err
 	}
 	currentOffset, found, err := index.Tree.Get(key)
 	if err != nil {
-		return visibleRecord{}, fmt.Errorf("tree get: %w", err)
+		return visibleRecordRaw{}, fmt.Errorf("tree get: %w", err)
 	}
 	if !found {
-		return visibleRecord{}, nil
+		return visibleRecordRaw{}, nil
 	}
-	return se.readVisibleRecord(tx, table, key, currentOffset)
+	return se.readVisibleRecordRaw(tx, table, key, currentOffset)
 }
 
 // Put: Insert ou Update com Durabilidade (WAL)
@@ -542,91 +578,36 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 	})
 }
 
-// Get executa uma busca no contexto da transação (Snapshot Isolation)
-func (tx *Transaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+// GetBytes returns the raw heap bytes of the visible version of `key`,
+// bypassing the codec text round-trip. Prefer this over Get for any
+// consumer that does its own decoding (BSON, Protobuf, MessagePack,
+// native structs, etc.).
+func (tx *Transaction) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
 	se := tx.engine
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 
-	// Se Read Committed, atualiza o snapshot antes de começar
 	tx.refreshSnapshot()
 
-	record, err := se.visibleRecordForKey(tx, tableName, indexName, key)
+	rec, err := se.visibleRecordForKeyRaw(tx, tableName, indexName, key)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
-	return record.Document, record.Found, nil
+	if !rec.Found {
+		return nil, false, nil
+	}
+	return rec.Raw, true, nil
 }
 
-// Get wrapper para conveniência (Autocommit / Snapshot instantâneo)
-func (se *StorageEngine) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+// GetBytes is the auto-commit (snapshot-on-call) variant of
+// Transaction.GetBytes.
+func (se *StorageEngine) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
 	tx := se.BeginRead()
-	defer tx.Close() // Autocommit: Release transaction registration
-	return tx.Get(tableName, indexName, key)
-}
-
-// Scan executa uma busca por range no contexto da transação
-func (tx *Transaction) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
-	se := tx.engine
-	se.opMu.RLock()
-	defer se.opMu.RUnlock()
-	if err := se.runtimeReadyError(); err != nil {
-		return nil, err
-	}
-
-	// Se Read Committed, atualiza snapshot
-	tx.refreshSnapshot()
-
-	// Obtém a tabela primeiro (sem lock)
-	table, err := se.TableMetaData.GetTableByName(tableName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Lock-Free Scan: Cursor thread-safe cuida dos locks de folha
-
-	results := []string{}
-	// Obtém o index (já temos o lock da tabela)
-	index, err := table.GetIndex(indexName)
-	if err != nil {
-		return results, err
-	}
-	if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-		var scanErr error
-		visit := func(key types.Comparable, currentOffset int64) error {
-			if condition != nil && !condition.Matches(key) {
-				return nil
-			}
-
-			visibleVal, foundVisible, err := se.readVisibleValue(tx, table, key, currentOffset)
-			if err != nil {
-				return err
-			}
-			if foundVisible {
-				results = append(results, visibleVal)
-			}
-			return nil
-		}
-
-		if condition != nil {
-			switch condition.Operator {
-			case query.OpEqual:
-				scanErr = treeV2.Scan(condition.Value, condition.Value, visit)
-			case query.OpBetween:
-				scanErr = treeV2.Scan(condition.Value, condition.ValueEnd, visit)
-			default:
-				scanErr = treeV2.ScanAll(visit)
-			}
-		} else {
-			scanErr = treeV2.ScanAll(visit)
-		}
-		return results, scanErr
-	}
-
-	return results, fmt.Errorf("Scan: index %s uses unsupported type %T", indexName, index.Tree)
+	defer tx.Close()
+	return tx.GetBytes(tableName, indexName, key)
 }
 
 // InsertRow insere uma nova linha e atualiza todos os indexs da tabela.
@@ -642,18 +623,6 @@ func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string
 // para uma versão not visible a snapshots novos.
 func (se *StorageEngine) UpsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
 	return se.writeRow(tableName, doc, keys, false)
-}
-
-// Scan wrapper para conveniência
-func (se *StorageEngine) Scan(tableName string, indexName string, condition *query.ScanCondition) ([]string, error) {
-	tx := se.BeginRead()
-	defer tx.Close()
-	return tx.Scan(tableName, indexName, condition)
-}
-
-// RangeScan: Wrapper de conveniência para BETWEEN (mantido para compatibilidade)
-func (se *StorageEngine) RangeScan(tableName string, indexName string, start, end types.Comparable) ([]string, error) {
-	return se.Scan(tableName, indexName, query.Between(start, end))
 }
 
 // Delete: Remove (DELETE FROM WHERE id = x)

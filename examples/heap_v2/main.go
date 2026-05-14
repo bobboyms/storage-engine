@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -89,7 +90,7 @@ func main() {
 	// 3. GET: lê cada um pelo id
 	// ─────────────────────────────────────────────────────────────
 	for _, d := range docs {
-		doc, found, err := se.Get("users", "id", types.IntKey(d.id))
+		doc, found, err := legacydoc.Fetch(se, "users", "id", types.IntKey(d.id))
 		if err != nil {
 			fmt.Printf("error get id=%d: %v\n", d.id, err)
 			return
@@ -109,7 +110,7 @@ func main() {
 		fmt.Printf("error update: %v\n", err)
 		return
 	}
-	doc, _, _ := se.Get("users", "id", types.IntKey(1))
+	doc, _, _ := legacydoc.Fetch(se, "users", "id", types.IntKey(1))
 	fmt.Printf("✓ Após update, id=1: %s\n", doc)
 
 	// ─────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ func main() {
 	}
 
 	// Vacuum not deveria afetar read de linhas vivas
-	doc, found, _ := se.Get("users", "id", types.IntKey(2))
+	doc, found, _ := legacydoc.Fetch(se, "users", "id", types.IntKey(2))
 	if !found || doc == "" {
 		fmt.Printf("inesperado: id=2 sumiu after vacuum\n")
 		return

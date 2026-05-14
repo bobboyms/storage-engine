@@ -128,7 +128,7 @@ func TestTDEProduction_EncryptsHeapAutoIndexAndWALAndReopens(t *testing.T) {
 	se2, _ := openTDEAccountsEngine(t, heapPath, walPath, keyStorePath, masterKey)
 	defer se2.Close()
 
-	got, found, err := se2.Get("accounts", "email", types.VarcharKey(secretKey))
+	got, found, err := getDocStringExt(t, se2, "accounts", "email", types.VarcharKey(secretKey))
 	if err != nil {
 		t.Fatalf("Get after reopen: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestTDEProduction_EncryptedWALRecoveryAfterCrash(t *testing.T) {
 	recovered, _ := openTDEAccountsEngine(t, heapPath, walPath, keyStorePath, masterKey)
 	defer recovered.Close()
 
-	got, found, err := recovered.Get("accounts", "email", types.VarcharKey(secretKey))
+	got, found, err := getDocStringExt(t, recovered, "accounts", "email", types.VarcharKey(secretKey))
 	if err != nil {
 		t.Fatalf("Get after encrypted WAL recovery: %v", err)
 	}

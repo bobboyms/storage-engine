@@ -50,7 +50,7 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	}
 
 	// GET (exercita B+ tree lookup + Heap.Read)
-	doc, found, err := se.Get("users_v2", "id", types.IntKey(1))
+	doc, found, err := getDocStringExt(t, se, "users_v2", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("Get 1: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 		t.Fatal("doc 1 empty")
 	}
 
-	doc, found, _ = se.Get("users_v2", "id", types.IntKey(2))
+	doc, found, _ = getDocStringExt(t, se, "users_v2", "id", types.IntKey(2))
 	if !found || doc == "" {
 		t.Fatal("key 2 should exist com content")
 	}
@@ -72,7 +72,7 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	}
 
 	// Leitura retorna a nova versão
-	doc, _, _ = se.Get("users_v2", "id", types.IntKey(1))
+	doc, _, _ = getDocStringExt(t, se, "users_v2", "id", types.IntKey(1))
 	if doc != `{"id":1,"name":"alice-updated"}` {
 		t.Fatalf("update not refletiu: doc=%q", doc)
 	}
@@ -119,17 +119,17 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	}
 
 	// tx1 should not ver key 2 (isolation)
-	if _, found, _ := tx1.Get("mvcc_v2", "id", types.IntKey(2)); found {
+	if _, found, _ := getDocStringExtTx(t, tx1, "mvcc_v2", "id", types.IntKey(2)); found {
 		t.Error("tx1 not should ver key 2 (snapshot isolation failed em v2)")
 	}
 
 	// tx1 must ver key 1
-	if _, found, _ := tx1.Get("mvcc_v2", "id", types.IntKey(1)); !found {
+	if _, found, _ := getDocStringExtTx(t, tx1, "mvcc_v2", "id", types.IntKey(1)); !found {
 		t.Error("tx1 should ver key 1 em v2")
 	}
 
 	// Engine (novo snapshot) vê tudo
-	if _, found, _ := se.Get("mvcc_v2", "id", types.IntKey(2)); !found {
+	if _, found, _ := getDocStringExt(t, se, "mvcc_v2", "id", types.IntKey(2)); !found {
 		t.Error("engine should ver key 2 em v2")
 	}
 }
@@ -173,10 +173,10 @@ func TestHeapV2_Integration_EngineVacuum(t *testing.T) {
 	}
 
 	// Após vacuum, linhas ainda mustm estar acessíveis (not eram tombstones)
-	if _, found, _ := se.Get("vac_v2", "id", types.IntKey(1)); !found {
+	if _, found, _ := getDocStringExt(t, se, "vac_v2", "id", types.IntKey(1)); !found {
 		t.Error("key 1 disappeared after vacuum sem tombstones")
 	}
-	if _, found, _ := se.Get("vac_v2", "id", types.IntKey(2)); !found {
+	if _, found, _ := getDocStringExt(t, se, "vac_v2", "id", types.IntKey(2)); !found {
 		t.Error("key 2 disappeared after vacuum sem tombstones")
 	}
 }
@@ -215,19 +215,19 @@ func TestHeapV2_Integration_MVCC_UpdateChain(t *testing.T) {
 	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":3}`)
 
 	// txA must ver v1
-	doc, found, _ := txA.Get("chain_v2", "id", types.IntKey(1))
+	doc, found, _ := getDocStringExtTx(t, txA, "chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":1}` {
 		t.Errorf("txA expected v1, got found=%v doc=%q", found, doc)
 	}
 
 	// txB must ver v2
-	doc, found, _ = txB.Get("chain_v2", "id", types.IntKey(1))
+	doc, found, _ = getDocStringExtTx(t, txB, "chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":2}` {
 		t.Errorf("txB expected v2, got found=%v doc=%q", found, doc)
 	}
 
 	// Engine novo snapshot must ver v3
-	doc, found, _ = se.Get("chain_v2", "id", types.IntKey(1))
+	doc, found, _ = getDocStringExt(t, se, "chain_v2", "id", types.IntKey(1))
 	if !found || doc != `{"id":1,"v":3}` {
 		t.Errorf("engine expected v3, got found=%v doc=%q", found, doc)
 	}

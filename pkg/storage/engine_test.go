@@ -33,7 +33,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Test Get on empty
-	_, found, err := se.Get("users", "id", types.IntKey(10))
+	_, found, err := getDocStringExt(t, se, "users", "id", types.IntKey(10))
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Test Get found
-	gotDoc, found, err := se.Get("users", "id", types.IntKey(10))
+	gotDoc, found, err := getDocStringExt(t, se, "users", "id", types.IntKey(10))
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Verify deleted
-	_, found, _ = se.Get("users", "id", types.IntKey(10))
+	_, found, _ = getDocStringExt(t, se, "users", "id", types.IntKey(10))
 	if found {
 		t.Error("Expected found=false after deletion")
 	}
@@ -165,25 +165,25 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 
 	// Verify Data
 	// 10: Updated
-	val, found, _ := se2.Get("test", "id", types.IntKey(10))
+	val, found, _ := getDocStringExt(t, se2, "test", "id", types.IntKey(10))
 	if !found || val != "val_10_updated" {
 		t.Errorf("Expected key 10 to be 'val_10_updated', got %q found=%v", val, found)
 	}
 
 	// 20: Deleted
-	_, found, _ = se2.Get("test", "id", types.IntKey(20))
+	_, found, _ = getDocStringExt(t, se2, "test", "id", types.IntKey(20))
 	if found {
 		t.Error("Expected key 20 to be deleted")
 	}
 
 	// 30: From WAL
-	val, found, _ = se2.Get("test", "id", types.IntKey(30))
+	val, found, _ = getDocStringExt(t, se2, "test", "id", types.IntKey(30))
 	if !found || val != "val_30" {
 		t.Errorf("Expected key 30 to be 'val_30', got %q found=%v", val, found)
 	}
 
 	// 40: From WAL
-	val, found, _ = se2.Get("test", "id", types.IntKey(40))
+	val, found, _ = getDocStringExt(t, se2, "test", "id", types.IntKey(40))
 	if !found || val != "val_40" {
 		t.Errorf("Expected key 40 to be 'val_40', got %q found=%v", val, found)
 	}
@@ -209,7 +209,7 @@ func TestEngine_ReadCommitted(t *testing.T) {
 	se.Put("users", "id", types.IntKey(1), "v1")
 
 	tx := se.BeginTransaction(storage.ReadCommitted)
-	val, found, _ := tx.Get("users", "id", types.IntKey(1))
+	val, found, _ := getDocStringExtTx(t, tx, "users", "id", types.IntKey(1))
 	if !found || val != "v1" {
 		t.Errorf("Expected v1, got %v", val)
 	}
@@ -218,7 +218,7 @@ func TestEngine_ReadCommitted(t *testing.T) {
 	se.Put("users", "id", types.IntKey(1), "v2")
 
 	// ReadCommitted should see v2 because it refreshes snapshot
-	val, _, _ = tx.Get("users", "id", types.IntKey(1))
+	val, _, _ = getDocStringExtTx(t, tx, "users", "id", types.IntKey(1))
 	if val != "v2" {
 		t.Errorf("ReadCommitted should see v2, got %v", val)
 	}
@@ -305,7 +305,7 @@ func TestEngine_RecoverDelete(t *testing.T) {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
-	_, found, _ := se2.Get("users", "id", types.IntKey(1))
+	_, found, _ := getDocStringExt(t, se2, "users", "id", types.IntKey(1))
 	if found {
 		t.Error("Expected key 1 to be deleted after recovery")
 	}
@@ -327,12 +327,12 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	// Actually Put on engine is a separate transaction.
 
 	// Scan on tx (snapshot state)
-	resultsTx, _ := tx.Scan("users", "id", nil)
+	resultsTx, _ := scanRangeDocsExtTx(t, tx, "users", "id", nil, nil)
 	if len(resultsTx) != 1 {
 		t.Errorf("Snapshot tx should only see 1 record, got %d", len(resultsTx))
 	}
 
-	results, _ := se.Scan("users", "id", nil)
+	results, _ := scanAllDocsExt(t, se, "users", "id")
 	if len(results) != 2 {
 		t.Errorf("Expected 2 visible records, got %d", len(results))
 	}
@@ -341,7 +341,7 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	se.Put("users", "id", types.IntKey(3), "v3")
 
 	// tx2 should not see v3 yet? No, Put on engine is committed immediately.
-	results2, _ := tx2.Scan("users", "id", nil)
+	results2, _ := scanRangeDocsExtTx(t, tx2, "users", "id", nil, nil)
 	// count should be 2 because v3 was added AFTER tx2 started (Snapshot)
 	count := 0
 	for _, doc := range results2 {

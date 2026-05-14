@@ -122,7 +122,7 @@ func countVersionChain(t *testing.T, se *StorageEngine, tableName, indexName str
 func requireDocumentVisible(t *testing.T, se *StorageEngine, tableName string, key int, want string) {
 	t.Helper()
 
-	got, found, err := se.Get(tableName, "id", types.IntKey(key))
+	got, found, err := getDocString(t, se, tableName, "id", types.IntKey(key))
 	if err != nil {
 		t.Fatalf("Get(%d): %v", key, err)
 	}

@@ -62,6 +62,13 @@ linters:
           - unparam
           - revive
           - unused
+      # Examples intentionally exercise the legacy Get / Scan wrappers so
+      # users can still cargo-cult them while the new Iterator / GetBytes
+      # API stabilises. See examples/iterator for the new API.
+      - path: examples/
+        text: "SA1019:.*Get is deprecated"
+        linters:
+          - staticcheck
       - path: experiments/
         linters:
           - errcheck

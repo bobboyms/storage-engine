@@ -84,7 +84,7 @@ func TestStorageEngine_Durability(t *testing.T) {
 	}
 
 	// 5. Verifica se dados voltaram
-	doc, found, err := se2.Get(tableName, "id", types.IntKey(1))
+	doc, found, err := getDocString(t, se2, tableName, "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Error("Key 1 not found after recovery")
 	} else {
@@ -93,7 +93,7 @@ func TestStorageEngine_Durability(t *testing.T) {
 		}
 	}
 
-	res, err := se2.RangeScan(tableName, "id", types.IntKey(2), types.IntKey(2))
+	res, err := scanRangeDocs(t, se2, tableName, "id", types.IntKey(2), types.IntKey(2))
 	if err != nil || len(res) != 1 || res[0] != doc2 {
 		t.Errorf("Value for key 2 mismatch in scan. Got %v, want [%s]", res, doc2)
 	}

@@ -88,7 +88,7 @@ func TestRecovery_CrashMidWrite_RecoversAllCommittedWrites(t *testing.T) {
 
 	// FASE 3: valida — TODOS os N writes mustm estar visible
 	for i := 1; i <= N; i++ {
-		doc, found, err := se2.Get("t", "id", types.IntKey(int64(i)))
+		doc, found, err := getDocStringExt(t, se2, "t", "id", types.IntKey(int64(i)))
 		if err != nil {
 			t.Fatalf("Get %d pós-recovery: %v", i, err)
 		}
@@ -149,7 +149,7 @@ func TestRecovery_IdempotentMultipleCalls(t *testing.T) {
 
 	// Todas as keys mustm estar visible exatamente uma vez
 	for i := 1; i <= 10; i++ {
-		doc, found, _ := se2.Get("t", "id", types.IntKey(int64(i)))
+		doc, found, _ := getDocStringExt(t, se2, "t", "id", types.IntKey(int64(i)))
 		if !found {
 			t.Errorf("key %d missing", i)
 		}
@@ -207,7 +207,7 @@ func TestRecovery_WithoutRecoverDataIsLost(t *testing.T) {
 	// do ponto de vista do engine, mesmo que o WAL tenha tudo.
 	lost := 0
 	for i := 1; i <= 5; i++ {
-		_, found, _ := se2.Get("t", "id", types.IntKey(int64(i)))
+		_, found, _ := getDocStringExt(t, se2, "t", "id", types.IntKey(int64(i)))
 		if !found {
 			lost++
 		}
@@ -264,7 +264,7 @@ func TestProductionStorageEngine_AutoRecovery(t *testing.T) {
 
 	// Todas as 50 keys mustm estar visible sem chamar nada extra
 	for i := 1; i <= 50; i++ {
-		doc, found, _ := se2.Get("t", "id", types.IntKey(int64(i)))
+		doc, found, _ := getDocStringExt(t, se2, "t", "id", types.IntKey(int64(i)))
 		if !found {
 			t.Errorf("key %d MISSING after NewProductionStorageEngine — auto-recovery failed", i)
 			continue
@@ -317,7 +317,7 @@ func TestRecovery_EmptyWAL(t *testing.T) {
 	if err := se.Put("t", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatal(err)
 	}
-	_, found, _ := se.Get("t", "id", types.IntKey(1))
+	_, found, _ := getDocStringExt(t, se, "t", "id", types.IntKey(1))
 	if !found {
 		t.Fatal("Put after Recover em WAL empty not funcionou")
 	}

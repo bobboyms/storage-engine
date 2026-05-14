@@ -55,7 +55,7 @@ func TestWriteTransaction_Commit(t *testing.T) {
 
 	// Verify NOT visible before commit (Isolation)
 	// Using standard Get (which reads from committed state)
-	if _, found, _ := se.Get("users", "id", types.IntKey(1)); found {
+	if _, found, _ := getDocString(t, se, "users", "id", types.IntKey(1)); found {
 		t.Errorf("User should not be visible before commit")
 	}
 
@@ -65,7 +65,7 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	}
 
 	// Verify visible AFTER commit
-	val, found, err := se.Get("users", "id", types.IntKey(1))
+	val, found, err := getDocString(t, se, "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Errorf("Get user failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestWriteTransaction_Commit(t *testing.T) {
 		t.Errorf("User doc missing expected fields: got %q", val)
 	}
 
-	_, found, _ = se.Get("orders", "id", types.IntKey(100))
+	_, found, _ = getDocString(t, se, "orders", "id", types.IntKey(100))
 	if !found {
 		t.Errorf("Order not found after commit")
 	}
@@ -119,7 +119,7 @@ func TestWriteTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify data is NOT present
-	_, found, _ := se.Get("users", "id", types.IntKey(1))
+	_, found, _ := getDocString(t, se, "users", "id", types.IntKey(1))
 	if found {
 		t.Errorf("User found after rollback")
 	}
@@ -168,7 +168,7 @@ func TestWriteTransaction_Delete(t *testing.T) {
 	}
 
 	// Verify deleted
-	_, found, _ := se.Get("users", "id", types.IntKey(1))
+	_, found, _ := getDocString(t, se, "users", "id", types.IntKey(1))
 	if found {
 		t.Errorf("User should be deleted")
 	}
@@ -570,7 +570,7 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 		gotErr   error
 	)
 	go func() {
-		gotDoc, gotFound, gotErr = se.Get("users", "id", types.IntKey(1))
+		gotDoc, gotFound, gotErr = getDocString(t, se, "users", "id", types.IntKey(1))
 		close(getDone)
 	}()
 
@@ -605,7 +605,7 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 	recovered := openEngine(t, true)
 	defer recovered.Close()
 
-	doc1, found1, err := recovered.Get("users", "id", types.IntKey(1))
+	doc1, found1, err := getDocString(t, recovered, "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("recovered get key1: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 		t.Fatalf("recovered key1 mismatch: found=%v doc=%q", found1, doc1)
 	}
 
-	doc2, found2, err := recovered.Get("users", "id", types.IntKey(2))
+	doc2, found2, err := getDocString(t, recovered, "users", "id", types.IntKey(2))
 	if err != nil {
 		t.Fatalf("recovered get key2: %v", err)
 	}

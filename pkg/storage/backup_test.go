@@ -124,7 +124,7 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 	defer restored.Close()
 
 	for i := int64(1); i <= 5; i++ {
-		got, ok, err := restored.Get("accounts", "id", types.IntKey(i))
+		got, ok, err := getDocString(t, restored, "accounts", "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get restored %d: %v", i, err)
 		}
@@ -132,7 +132,7 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 			t.Fatalf("record %d ausente no restore: ok=%v got=%s", i, ok, got)
 		}
 	}
-	if got, ok, err := restored.Get("accounts", "id", types.IntKey(6)); err != nil {
+	if got, ok, err := getDocString(t, restored, "accounts", "id", types.IntKey(6)); err != nil {
 		t.Fatalf("Get post-backup: %v", err)
 	} else if ok {
 		t.Fatalf("restore incluiu write posterior ao backup: %s", got)

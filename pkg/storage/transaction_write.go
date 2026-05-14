@@ -163,35 +163,43 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 	return nil
 }
 
-func (tx *WriteTransaction) Get(tableName string, indexName string, key types.Comparable) (string, bool, error) {
+// GetBytes returns the raw heap bytes visible to this write transaction,
+// honoring its read view and any pending writes already staged in the
+// transaction. Pending Put operations are returned as their encoded
+// canonical form (via the engine's codec); pending Deletes report
+// found=false.
+func (tx *WriteTransaction) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
 	if err := tx.ensureWritableLocked(); err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 
 	resource, err := lockResourceForKey(tableName, indexName, key)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	if idx, ok := tx.pending[resource]; ok {
 		op := tx.writeSet[idx]
 		if op.opType == wal.EntryDelete {
-			return "", false, nil
+			return nil, false, nil
 		}
-		return op.document, true, nil
+		return encodeDocumentOrRaw(tx.engine.codec, op.document), true, nil
 	}
 
-	record, err := tx.readCommittedRecordLocked(tableName, indexName, key)
+	record, err := tx.readCommittedRecordRawLocked(tableName, indexName, key)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	tx.readSet[resource] = readObservation{
 		found:     record.Found,
 		createLSN: record.CreateLSN,
 	}
-	return record.Document, record.Found, nil
+	if !record.Found {
+		return nil, false, nil
+	}
+	return record.Raw, true, nil
 }
 
 // Commit persists all operations atomically
@@ -425,19 +433,19 @@ func (tx *WriteTransaction) lockManagerAbortErrorLocked() error {
 	return nil
 }
 
-func (tx *WriteTransaction) readCommittedRecordLocked(tableName string, indexName string, key types.Comparable) (visibleRecord, error) {
+func (tx *WriteTransaction) readCommittedRecordRawLocked(tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
 	se := tx.engine
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
-		return visibleRecord{}, err
+		return visibleRecordRaw{}, err
 	}
 
 	if tx.readView == nil {
-		return visibleRecord{}, fmt.Errorf("transaction already finished")
+		return visibleRecordRaw{}, fmt.Errorf("transaction already finished")
 	}
 	tx.readView.refreshSnapshot()
-	return se.visibleRecordForKey(tx.readView, tableName, indexName, key)
+	return se.visibleRecordForKeyRaw(tx.readView, tableName, indexName, key)
 }
 
 func (tx *WriteTransaction) currentCommittedObservationLocked(tableName string, indexName string, key types.Comparable) (readObservation, error) {

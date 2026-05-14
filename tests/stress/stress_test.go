@@ -13,11 +13,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobboyms/storage-engine/pkg/query"
+	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+var stressCodec = bsoncodec.New()
+
+func fetchDocText(t testing.TB, se *storage.StorageEngine, key int) (string, bool) {
+	t.Helper()
+	raw, found, err := se.GetBytes("t", "id", types.IntKey(int64(key)))
+	if err != nil {
+		t.Fatalf("GetBytes %d: %v", key, err)
+	}
+	if !found {
+		return "", false
+	}
+	text, err := stressCodec.DecodeToText(raw)
+	if err != nil {
+		t.Fatalf("DecodeToText %d: %v", key, err)
+	}
+	return text, true
+}
 
 type dbPaths struct {
 	walPath   string
@@ -139,7 +157,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
 				key := int64(rand.Intn(int(nextKey.Load()) + 1))
-				if _, _, err := se.Get("t", "id", types.IntKey(key)); err != nil {
+				if _, _, err := se.GetBytes("t", "id", types.IntKey(key)); err != nil {
 					errs <- fmt.Errorf("get %d: %w", key, err)
 				}
 			}
@@ -152,8 +170,20 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 		for time.Now().Before(deadline) {
 			start := rand.Intn(500)
 			end := start + rand.Intn(100)
-			if _, err := se.Scan("t", "id", query.Between(types.IntKey(int64(start)), types.IntKey(int64(end)))); err != nil {
-				errs <- fmt.Errorf("scan %d-%d: %w", start, end, err)
+			it, err := se.NewIterator("t", "id", storage.IterOptions{
+				Lower: types.IntKey(int64(start)),
+				Upper: types.IntKey(int64(end)),
+			})
+			if err != nil {
+				errs <- fmt.Errorf("scan %d-%d new: %w", start, end, err)
+				continue
+			}
+			for it.Next() {
+			}
+			scanErr := it.Err()
+			_ = it.Close()
+			if scanErr != nil {
+				errs <- fmt.Errorf("scan %d-%d: %w", start, end, scanErr)
 			}
 		}
 	}()
@@ -214,10 +244,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 	oracleMu.Lock()
 	defer oracleMu.Unlock()
 	for key, doc := range inserted {
-		got, found, err := se.Get("t", "id", types.IntKey(int64(key)))
-		if err != nil {
-			t.Fatalf("post-recovery get inserted %d: %v", key, err)
-		}
+		got, found := fetchDocText(t, se, key)
 		if !found {
 			t.Fatalf("post-recovery inserted key %d missing", key)
 		}
@@ -226,11 +253,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 		}
 	}
 	for key := range deleted {
-		_, found, err := se.Get("t", "id", types.IntKey(int64(key)))
-		if err != nil {
-			t.Fatalf("post-recovery get deleted %d: %v", key, err)
-		}
-		if found {
+		if _, found := fetchDocText(t, se, key); found {
 			t.Fatalf("post-recovery deleted seed key %d is still visible", key)
 		}
 	}
@@ -269,10 +292,7 @@ func TestStressReopenLoop(t *testing.T) {
 	se := openEngine(t, p)
 	defer se.Close()
 	for key, doc := range want {
-		got, found, err := se.Get("t", "id", types.IntKey(int64(key)))
-		if err != nil {
-			t.Fatalf("final get %d: %v", key, err)
-		}
+		got, found := fetchDocText(t, se, key)
 		if !found {
 			t.Fatalf("final key %d missing", key)
 		}

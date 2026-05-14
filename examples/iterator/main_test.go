@@ -11,7 +11,6 @@ func TestMainSmoke(t *testing.T) {
 
 func runInTempDir(t *testing.T, fn func()) {
 	t.Helper()
-
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -25,6 +24,5 @@ func runInTempDir(t *testing.T, fn func()) {
 			t.Fatalf("restore cwd: %v", err)
 		}
 	}()
-
 	fn()
 }

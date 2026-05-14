@@ -59,7 +59,7 @@ func TestFuzzyCheckpoint_Basic(t *testing.T) {
 
 	// Dados ainda acessíveis after checkpoint.
 	for i := 1; i <= 10; i++ {
-		_, found, err := se.Get("users", "id", types.IntKey(i))
+		_, found, err := getDocString(t, se, "users", "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get %d: %v", i, err)
 		}
@@ -195,7 +195,7 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 
 	// Todas as inserts (1-8) mustm estar visible after recovery.
 	for i := 1; i <= 8; i++ {
-		_, found, err := se2.Get(tableName, "id", types.IntKey(i))
+		_, found, err := getDocString(t, se2, tableName, "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get %d after recovery: %v", i, err)
 		}
@@ -302,7 +302,7 @@ func TestFuzzyCheckpoint_RotatesAndTruncatesWALSafely(t *testing.T) {
 	recovered := open(t)
 	defer recovered.Close()
 	for i := 1; i <= 6; i++ {
-		_, found, err := recovered.Get(tableName, "id", types.IntKey(i))
+		_, found, err := getDocString(t, recovered, tableName, "id", types.IntKey(i))
 		if err != nil {
 			t.Fatalf("Get %d: %v", i, err)
 		}

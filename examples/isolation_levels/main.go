@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -68,7 +69,7 @@ func main() {
 	fmt.Println("TX1 iniciada (RepeatableRead)")
 
 	// Ler saldo de Alice
-	doc, _, _ := tx1.Get("accounts", "id", types.IntKey(1))
+	doc, _, _ := legacydoc.FetchTx(tx1, "accounts", "id", types.IntKey(1))
 	fmt.Printf("TX1 - Primeira read de Alice: %s\n", doc)
 
 	// Simular outra transação que modifica o saldo
@@ -79,12 +80,12 @@ func main() {
 	time.Sleep(time.Millisecond * 10)
 
 	// TX1 ainda deve ver o valor antigo (snapshot isolation)
-	doc, _, _ = tx1.Get("accounts", "id", types.IntKey(1))
+	doc, _, _ = legacydoc.FetchTx(tx1, "accounts", "id", types.IntKey(1))
 	fmt.Printf("TX1 - Segunda read de Alice (after update externo): %s\n", doc)
 
 	// Nova transação deve ver o valor novo
 	tx2 := engine.BeginTransaction(storage.RepeatableRead)
-	doc, _, _ = tx2.Get("accounts", "id", types.IntKey(1))
+	doc, _, _ = legacydoc.FetchTx(tx2, "accounts", "id", types.IntKey(1))
 	fmt.Printf("TX2 (nova) - Lê Alice: %s\n", doc)
 
 	fmt.Println("\n→ RepeatableRead: TX1 vê o mesmo valor nas duas reads")
@@ -103,7 +104,7 @@ func main() {
 	fmt.Println("TX3 iniciada (ReadCommitted)")
 
 	// Primeira read
-	doc, _, _ = tx3.Get("accounts", "id", types.IntKey(1))
+	doc, _, _ = legacydoc.FetchTx(tx3, "accounts", "id", types.IntKey(1))
 	fmt.Printf("TX3 - Primeira read de Alice: %s\n", doc)
 
 	// Outra transação modifica
@@ -112,7 +113,7 @@ func main() {
 	time.Sleep(time.Millisecond * 10)
 
 	// TX3 deve ver o valor NOVO (read committed refresha o snapshot)
-	doc, _, _ = tx3.Get("accounts", "id", types.IntKey(1))
+	doc, _, _ = legacydoc.FetchTx(tx3, "accounts", "id", types.IntKey(1))
 	fmt.Printf("TX3 - Segunda read de Alice (after update externo): %s\n", doc)
 
 	fmt.Println("\n→ ReadCommitted: TX3 vê o valor atualizado na segunda read")
@@ -131,7 +132,7 @@ func main() {
 	fmt.Println("\nTX4: Calculando saldo total (RepeatableRead)")
 	tx4 := engine.BeginTransaction(storage.RepeatableRead)
 
-	docAlice, _, _ := tx4.Get("accounts", "id", types.IntKey(1))
+	docAlice, _, _ := legacydoc.FetchTx(tx4, "accounts", "id", types.IntKey(1))
 	fmt.Printf("  Leu Alice: %s\n", docAlice)
 
 	// Simular transferência during a read
@@ -140,7 +141,7 @@ func main() {
 	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2500, "owner": "Bob"}`)
 	time.Sleep(time.Millisecond * 10)
 
-	docBob, _, _ := tx4.Get("accounts", "id", types.IntKey(2))
+	docBob, _, _ := legacydoc.FetchTx(tx4, "accounts", "id", types.IntKey(2))
 	fmt.Printf("  Leu Bob: %s\n", docBob)
 
 	fmt.Println("\n→ Com RepeatableRead, TX4 vê estado CONSISTENTE:")

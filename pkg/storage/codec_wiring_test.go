@@ -72,18 +72,22 @@ func TestEngineUsesCodecFromOptions(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	val, found, err := se.Get("users", "id", types.IntKey(1))
+	raw, found, err := se.GetBytes("users", "id", types.IntKey(1))
 	if err != nil || !found {
-		t.Fatalf("Get: found=%v err=%v", found, err)
+		t.Fatalf("GetBytes: found=%v err=%v", found, err)
 	}
-	if val == "" {
-		t.Fatal("expected non-empty document")
+	if len(raw) == 0 {
+		t.Fatal("expected non-empty document bytes")
 	}
 
 	if rec.parseCalls.Load() == 0 {
 		t.Fatal("expected codec.Parse to be called during Put")
 	}
-	if rec.decodeCalls.Load() == 0 {
-		t.Fatal("expected codec.DecodeToText to be called during Get")
+	// Reads now bypass the codec entirely (GetBytes returns raw heap
+	// bytes), so we don't assert anything on decodeCalls. Sanity-check
+	// the bytes round-trip through the recording codec to prove they
+	// were the canonical form the codec produced on Put.
+	if text, err := rec.DecodeToText(raw); err != nil || text == "" {
+		t.Fatalf("recorded codec failed to decode stored bytes: %v / %q", err, text)
 	}
 }

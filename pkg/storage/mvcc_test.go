@@ -54,7 +54,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	}
 
 	// 4. Tx1 Reads Key 2 -> Should NOT see it (Created at LSN 2 > Snapshot LSN 1)
-	_, found, err := tx1.Get("mvcc_test", "id", types.IntKey(2))
+	_, found, err := getDocStringExtTx(t, tx1, "mvcc_test", "id", types.IntKey(2))
 	if err != nil {
 		t.Fatalf("Tx1 Get error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	}
 
 	// 5. Normal Get (Implicit Tx/New Snapshot) -> Should see Key 2
-	_, found, err = se.Get("mvcc_test", "id", types.IntKey(2))
+	_, found, err = getDocStringExt(t, se, "mvcc_test", "id", types.IntKey(2))
 	if err != nil {
 		t.Fatalf("Engine Get error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	}
 
 	// 6. Tx1 Reads Key 1 -> Should see it
-	_, found, err = tx1.Get("mvcc_test", "id", types.IntKey(1))
+	_, found, err = getDocStringExtTx(t, tx1, "mvcc_test", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("Tx1 Get Key 1 error: %v", err)
 	}
@@ -112,13 +112,13 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	}
 
 	// 5. Tx Should see v1
-	val, found, _ := tx.Get("mvcc_update", "id", types.IntKey(1))
+	val, found, _ := getDocStringExtTx(t, tx, "mvcc_update", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"v1"}` {
 		t.Errorf("Tx expected v1, got %v (found=%v)", val, found)
 	}
 
 	// 6. Engine (New Tx) Should see v3
-	val, found, _ = se.Get("mvcc_update", "id", types.IntKey(1))
+	val, found, _ = getDocStringExt(t, se, "mvcc_update", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"v3"}` {
 		t.Errorf("Engine expected v3, got %v", val)
 	}
@@ -148,7 +148,7 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	se.Del("mvcc_del", "id", types.IntKey(1))
 
 	// 4. Tx Should see "exist" (DeleteLSN 2 > Snapshot 1)
-	val, found, _ := tx.Get("mvcc_del", "id", types.IntKey(1))
+	val, found, _ := getDocStringExtTx(t, tx, "mvcc_del", "id", types.IntKey(1))
 	if !found {
 		t.Error("Tx should still see deleted record")
 	}
@@ -157,7 +157,7 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	}
 
 	// 5. Engine Should NOT see it
-	_, found, _ = se.Get("mvcc_del", "id", types.IntKey(1))
+	_, found, _ = getDocStringExt(t, se, "mvcc_del", "id", types.IntKey(1))
 	if found {
 		t.Error("Engine should NOT find deleted record")
 	}
@@ -190,7 +190,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	}
 
 	// Tx1 Get -> Should see "initial" (Old Version)
-	val, found, _ := txRR.Get("iso_test", "id", types.IntKey(1))
+	val, found, _ := getDocStringExtTx(t, txRR, "iso_test", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"initial"}` {
 		t.Errorf("RR expected 'initial', got %v", val)
 	}
@@ -200,7 +200,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	txRC := se.BeginTransaction(storage.ReadCommitted)
 
 	// Tx2 Get -> Should see "updated" (Current)
-	val, found, _ = txRC.Get("iso_test", "id", types.IntKey(1))
+	val, found, _ = getDocStringExtTx(t, txRC, "iso_test", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"updated"}` {
 		t.Errorf("RC expected 'updated', got %v", val)
 	}
@@ -211,13 +211,13 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	}
 
 	// TxRC Get AGAIN -> Should refresh snapshot and see "updated_again"
-	val, found, _ = txRC.Get("iso_test", "id", types.IntKey(1))
+	val, found, _ = getDocStringExtTx(t, txRC, "iso_test", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"updated_again"}` {
 		t.Errorf("RC expected 'updated_again' after refresh, got %v", val)
 	}
 
 	// TxRR Get AGAIN -> Should STILL see "initial"
-	val, found, _ = txRR.Get("iso_test", "id", types.IntKey(1))
+	val, found, _ = getDocStringExtTx(t, txRR, "iso_test", "id", types.IntKey(1))
 	if !found || val != `{"id":1,"val":"initial"}` {
 		t.Errorf("RR expected 'initial' (unchanged), got %v", val)
 	}

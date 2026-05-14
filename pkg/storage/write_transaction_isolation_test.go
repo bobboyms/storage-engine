@@ -50,7 +50,7 @@ func TestWriteTransaction_ReadsOwnPendingWrites(t *testing.T) {
 		t.Fatalf("tx put: %v", err)
 	}
 
-	doc, found, err := tx.Get("accounts", "id", types.IntKey(1))
+	doc, found, err := getDocStringWTx(t, tx, "accounts", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("tx get own pending write: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestWriteTransaction_ReadsOwnPendingWrites(t *testing.T) {
 		t.Fatalf("tx delete own pending write: %v", err)
 	}
 
-	doc, found, err = tx.Get("accounts", "id", types.IntKey(1))
+	doc, found, err = getDocStringWTx(t, tx, "accounts", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("tx get own pending delete: %v", err)
 	}
@@ -82,11 +82,11 @@ func TestWriteTransaction_PreventsLostUpdateAfterStaleRead(t *testing.T) {
 	tx1 := se.BeginWriteTransactionWithIsolation(RepeatableRead)
 	tx2 := se.BeginWriteTransactionWithIsolation(RepeatableRead)
 
-	doc, found, err := tx1.Get("accounts", "id", types.IntKey(1))
+	doc, found, err := getDocStringWTx(t, tx1, "accounts", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"balance":100}` {
 		t.Fatalf("tx1 initial read: found=%v doc=%q err=%v", found, doc, err)
 	}
-	doc, found, err = tx2.Get("accounts", "id", types.IntKey(1))
+	doc, found, err = getDocStringWTx(t, tx2, "accounts", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"balance":100}` {
 		t.Fatalf("tx2 initial read: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -103,7 +103,7 @@ func TestWriteTransaction_PreventsLostUpdateAfterStaleRead(t *testing.T) {
 		t.Fatalf("expected serialization conflict, got %v", err)
 	}
 
-	doc, found, err = se.Get("accounts", "id", types.IntKey(1))
+	doc, found, err = getDocString(t, se, "accounts", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"balance":150}` {
 		t.Fatalf("final state mismatch: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -123,19 +123,19 @@ func TestWriteTransaction_RepeatableReadStillAllowsWriteSkew(t *testing.T) {
 	tx1 := se.BeginWriteTransactionWithIsolation(RepeatableRead)
 	tx2 := se.BeginWriteTransactionWithIsolation(RepeatableRead)
 
-	doc1a, found, err := tx1.Get("shifts", "id", types.IntKey(1))
+	doc1a, found, err := getDocStringWTx(t, tx1, "shifts", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("tx1 read row1: found=%v err=%v", found, err)
 	}
-	doc1b, found, err := tx1.Get("shifts", "id", types.IntKey(2))
+	doc1b, found, err := getDocStringWTx(t, tx1, "shifts", "id", types.IntKey(2))
 	if err != nil || !found {
 		t.Fatalf("tx1 read row2: found=%v err=%v", found, err)
 	}
-	doc2a, found, err := tx2.Get("shifts", "id", types.IntKey(1))
+	doc2a, found, err := getDocStringWTx(t, tx2, "shifts", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("tx2 read row1: found=%v err=%v", found, err)
 	}
-	doc2b, found, err := tx2.Get("shifts", "id", types.IntKey(2))
+	doc2b, found, err := getDocStringWTx(t, tx2, "shifts", "id", types.IntKey(2))
 	if err != nil || !found {
 		t.Fatalf("tx2 read row2: found=%v err=%v", found, err)
 	}
@@ -161,11 +161,11 @@ func TestWriteTransaction_RepeatableReadStillAllowsWriteSkew(t *testing.T) {
 		t.Fatalf("tx2 commit: %v", err)
 	}
 
-	doc1a, found, err = se.Get("shifts", "id", types.IntKey(1))
+	doc1a, found, err = getDocString(t, se, "shifts", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("final get row1: found=%v err=%v", found, err)
 	}
-	doc1b, found, err = se.Get("shifts", "id", types.IntKey(2))
+	doc1b, found, err = getDocString(t, se, "shifts", "id", types.IntKey(2))
 	if err != nil || !found {
 		t.Fatalf("final get row2: found=%v err=%v", found, err)
 	}

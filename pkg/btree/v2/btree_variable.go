@@ -2,7 +2,6 @@ package v2
 
 import (
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
-	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // Este arquivo contém os helpers de insert/get/scan específicos pro
@@ -366,60 +365,6 @@ func (tr *BTreeV2) getLockedVar(encKey []byte) (int64, bool, error) {
 		h.Release()
 		pageID = nextPageID
 	}
-}
-
-// scanLockedVar itera todas ou range. `start`/`end` nil = sem limite.
-func (tr *BTreeV2) scanLockedVar(start, end []byte, fn func(key types.Comparable, value int64) error) error {
-	var startLeaf pagestore.PageID
-	var err error
-	if start != nil {
-		startLeaf, err = tr.findLeafForKeyVar(start)
-	} else {
-		startLeaf, err = tr.findLeftmostLeafVar()
-	}
-	if err != nil {
-		return err
-	}
-
-	currentLeaf := startLeaf
-	for currentLeaf != pagestore.InvalidPageID {
-		h, err := tr.bp.Fetch(currentLeaf)
-		if err != nil {
-			return err
-		}
-		vp, err := OpenVariableNodePage(h.Page(), tr.maxBodySize, tr.varCodec.Compare)
-		if err != nil {
-			h.Release()
-			return err
-		}
-
-		n := vp.NumKeys()
-		for i := 0; i < n; i++ {
-			k, v := vp.LeafAtVar(i)
-
-			if start != nil && tr.varCodec.Compare(k, start) < 0 {
-				continue
-			}
-			if end != nil && tr.varCodec.Compare(k, end) > 0 {
-				h.Release()
-				return nil
-			}
-
-			// Cópia da key — o body da page pode mudar after release.
-			keyCopy := make([]byte, len(k))
-			copy(keyCopy, k)
-
-			if cbErr := fn(tr.varCodec.Decode(keyCopy), v); cbErr != nil {
-				h.Release()
-				return cbErr
-			}
-		}
-
-		nextLeaf := vp.NextLeafPageID()
-		h.Release()
-		currentLeaf = nextLeaf
-	}
-	return nil
 }
 
 func (tr *BTreeV2) findLeafForKeyVar(encKey []byte) (pagestore.PageID, error) {

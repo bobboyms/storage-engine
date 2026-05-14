@@ -4,10 +4,25 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+var docCodec = bsoncodec.New()
+
+func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool, error) {
+	raw, found, err := engine.GetBytes(table, idx, key)
+	if err != nil || !found {
+		return "", found, err
+	}
+	text, decErr := docCodec.DecodeToText(raw)
+	if decErr != nil {
+		return string(raw), true, nil
+	}
+	return text, true, nil
+}
 
 /*
 EXEMPLO: Operações CRUD Básicas
@@ -109,7 +124,7 @@ func main() {
 	fmt.Println("\n=== GET (Read) ===")
 
 	// Buscar pelo index primário (id)
-	doc, found, err := engine.Get("products", "id", types.IntKey(2))
+	doc, found, err := fetchDoc(engine, "products", "id", types.IntKey(2))
 	if err != nil {
 		fmt.Printf("Erro ao buscar: %v\n", err)
 	} else if found {
@@ -119,7 +134,7 @@ func main() {
 	}
 
 	// Buscar pelo index secundário (name)
-	doc, found, err = engine.Get("products", "name", types.VarcharKey("Laptop"))
+	doc, found, err = fetchDoc(engine, "products", "name", types.VarcharKey("Laptop"))
 	if err != nil {
 		fmt.Printf("Erro ao buscar: %v\n", err)
 	} else if found {
@@ -129,7 +144,7 @@ func main() {
 	}
 
 	// Buscar key inexistente
-	_, found, _ = engine.Get("products", "id", types.IntKey(999))
+	_, found, _ = fetchDoc(engine, "products", "id", types.IntKey(999))
 	fmt.Printf("Produto ID=999 existe? %v\n", found)
 
 	// ========================================
@@ -145,7 +160,7 @@ func main() {
 	}
 
 	// Verificar atualização
-	doc, _, _ = engine.Get("products", "id", types.IntKey(1))
+	doc, _, _ = fetchDoc(engine, "products", "id", types.IntKey(1))
 	fmt.Printf("Produto ID=1 atualizado: %s\n", doc)
 
 	// ========================================
@@ -162,7 +177,7 @@ func main() {
 	}
 
 	// Tentar buscar item deletado
-	_, found, _ = engine.Get("products", "id", types.IntKey(4))
+	_, found, _ = fetchDoc(engine, "products", "id", types.IntKey(4))
 	fmt.Printf("Produto ID=4 existe after delete? %v\n", found)
 
 	// Tentar deletar item inexistente
@@ -174,7 +189,7 @@ func main() {
 	// ========================================
 	fmt.Println("\n=== Estado Final ===")
 	for i := int64(1); i <= 4; i++ {
-		doc, found, _ := engine.Get("products", "id", types.IntKey(i))
+		doc, found, _ := fetchDoc(engine, "products", "id", types.IntKey(i))
 		if found {
 			fmt.Printf("ID=%d: %s\n", i, doc)
 		} else {

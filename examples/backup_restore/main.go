@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -90,7 +91,7 @@ func main() {
 	defer source.Close()
 
 	for i := int64(1); i <= 3; i++ {
-		doc, found, err := restored.Get(tableName, indexName, types.IntKey(i))
+		doc, found, err := legacydoc.Fetch(restored, tableName, indexName, types.IntKey(i))
 		if err != nil {
 			fmt.Printf("error lendo documento restaurado %d: %v\n", i, err)
 			return
@@ -102,7 +103,7 @@ func main() {
 		fmt.Printf("Documento restaurado %d: %s\n", i, doc)
 	}
 
-	_, found, err := restored.Get(tableName, indexName, types.IntKey(99))
+	_, found, err := legacydoc.Fetch(restored, tableName, indexName, types.IntKey(99))
 	if err != nil {
 		fmt.Printf("error lendo documento pos-backup no restore: %v\n", err)
 		return

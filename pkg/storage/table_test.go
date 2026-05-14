@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/errors"
-	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -230,7 +229,7 @@ func TestTableManager_Integration(t *testing.T) {
 	}
 
 	// Verifica busca
-	results, err := se.Scan("users", "id", query.Equal(types.IntKey(1)))
+	results, err := scanRangeDocsExt(t, se, "users", "id", types.IntKey(1), types.IntKey(1))
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}

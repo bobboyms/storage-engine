@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bobboyms/storage-engine/examples/internal/legacydoc"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
@@ -150,13 +151,13 @@ func main() {
 	})
 
 	// Buscar pelo index primário
-	result, found, _ := engine5.Get("users", "id", types.IntKey(100))
+	result, found, _ := legacydoc.Fetch(engine5, "users", "id", types.IntKey(100))
 	if found {
 		fmt.Printf("Busca por ID=100: %s\n", result)
 	}
 
 	// Buscar pelo index secundário
-	result, found, _ = engine5.Get("users", "email", types.VarcharKey("test@example.com"))
+	result, found, _ = legacydoc.Fetch(engine5, "users", "email", types.VarcharKey("test@example.com"))
 	if found {
 		fmt.Printf("Busca por email: %s\n", result)
 	}

@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bobboyms/storage-engine/pkg/query"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -49,7 +48,7 @@ func TestIsolation_DirtyReadPrevented(t *testing.T) {
 
 	txRC := se.BeginTransaction(ReadCommitted)
 	defer txRC.Close()
-	_, found, err := txRC.Get("items", "id", types.IntKey(1))
+	_, found, err := getDocStringTx(t, txRC, "items", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("read committed get: %v", err)
 	}
@@ -59,7 +58,7 @@ func TestIsolation_DirtyReadPrevented(t *testing.T) {
 
 	txRR := se.BeginTransaction(RepeatableRead)
 	defer txRR.Close()
-	_, found, err = txRR.Get("items", "id", types.IntKey(1))
+	_, found, err = getDocStringTx(t, txRR, "items", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("repeatable read get: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestIsolation_ReadCommittedAllowsNonRepeatableRead(t *testing.T) {
 	tx := se.BeginTransaction(ReadCommitted)
 	defer tx.Close()
 
-	doc, found, err := tx.Get("items", "id", types.IntKey(1))
+	doc, found, err := getDocStringTx(t, tx, "items", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"value":"v1"}` {
 		t.Fatalf("first read: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -88,7 +87,7 @@ func TestIsolation_ReadCommittedAllowsNonRepeatableRead(t *testing.T) {
 		t.Fatalf("concurrent update: %v", err)
 	}
 
-	doc, found, err = tx.Get("items", "id", types.IntKey(1))
+	doc, found, err = getDocStringTx(t, tx, "items", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"value":"v2"}` {
 		t.Fatalf("second read: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -105,7 +104,7 @@ func TestIsolation_RepeatableReadPreventsNonRepeatableRead(t *testing.T) {
 	tx := se.BeginTransaction(RepeatableRead)
 	defer tx.Close()
 
-	doc, found, err := tx.Get("items", "id", types.IntKey(1))
+	doc, found, err := getDocStringTx(t, tx, "items", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"value":"v1"}` {
 		t.Fatalf("first read: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -114,7 +113,7 @@ func TestIsolation_RepeatableReadPreventsNonRepeatableRead(t *testing.T) {
 		t.Fatalf("concurrent update: %v", err)
 	}
 
-	doc, found, err = tx.Get("items", "id", types.IntKey(1))
+	doc, found, err = getDocStringTx(t, tx, "items", "id", types.IntKey(1))
 	if err != nil || !found || doc != `{"id":1,"value":"v1"}` {
 		t.Fatalf("second read should stay on snapshot: found=%v doc=%q err=%v", found, doc, err)
 	}
@@ -134,7 +133,7 @@ func TestIsolation_ReadCommittedAllowsPhantom(t *testing.T) {
 	tx := se.BeginTransaction(ReadCommitted)
 	defer tx.Close()
 
-	rows, err := tx.Scan("items", "id", query.Between(types.IntKey(1), types.IntKey(10)))
+	rows, err := scanRangeDocsTx(t, tx, "items", "id", types.IntKey(1), types.IntKey(10))
 	if err != nil {
 		t.Fatalf("first scan: %v", err)
 	}
@@ -146,7 +145,7 @@ func TestIsolation_ReadCommittedAllowsPhantom(t *testing.T) {
 		t.Fatalf("concurrent insert: %v", err)
 	}
 
-	rows, err = tx.Scan("items", "id", query.Between(types.IntKey(1), types.IntKey(10)))
+	rows, err = scanRangeDocsTx(t, tx, "items", "id", types.IntKey(1), types.IntKey(10))
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
 	}
@@ -169,7 +168,7 @@ func TestIsolation_RepeatableReadPreventsPhantomRead(t *testing.T) {
 	tx := se.BeginTransaction(RepeatableRead)
 	defer tx.Close()
 
-	rows, err := tx.Scan("items", "id", query.Between(types.IntKey(1), types.IntKey(10)))
+	rows, err := scanRangeDocsTx(t, tx, "items", "id", types.IntKey(1), types.IntKey(10))
 	if err != nil {
 		t.Fatalf("first scan: %v", err)
 	}
@@ -181,7 +180,7 @@ func TestIsolation_RepeatableReadPreventsPhantomRead(t *testing.T) {
 		t.Fatalf("concurrent insert: %v", err)
 	}
 
-	rows, err = tx.Scan("items", "id", query.Between(types.IntKey(1), types.IntKey(10)))
+	rows, err = scanRangeDocsTx(t, tx, "items", "id", types.IntKey(1), types.IntKey(10))
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
 	}

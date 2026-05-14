@@ -149,14 +149,14 @@ func TestFaultHeapPageCorruptionRecoveredFromWAL(t *testing.T) {
 	}
 	defer se.Close()
 
-	doc, found, err := se.Get("t", "id", types.IntKey(1))
+	raw, found, err := se.GetBytes("t", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("expected WAL-based heap recovery, got read error: %v", err)
 	}
 	if !found {
 		t.Fatal("expected heap page corruption to be repaired from WAL")
 	}
-	if doc == "" {
+	if len(raw) == 0 {
 		t.Fatal("expected recovered document payload after heap page repair")
 	}
 }
@@ -212,7 +212,7 @@ func TestFaultBTreePageCorruptionDetectedOnOpenOrRead(t *testing.T) {
 		}
 		se, engineErr := storage.NewProductionStorageEngine(tm, ww)
 		if engineErr == nil {
-			_, _, engineErr = se.Get("t", "id", types.IntKey(1))
+			_, _, engineErr = se.GetBytes("t", "id", types.IntKey(1))
 			_ = se.Close()
 		} else {
 			_ = ww.Close()

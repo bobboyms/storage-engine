@@ -166,12 +166,12 @@ func TestRecovery_UndoLoserTransactionAcrossPages(t *testing.T) {
 	requireDocumentVisible(t, recovered, "users", 1, `{"id":1,"name":"before-update"}`)
 	requireDocumentVisible(t, recovered, "users", 2, `{"id":2,"name":"before-delete"}`)
 
-	if _, found, err := recovered.Get("users", "id", types.IntKey(100)); err != nil {
+	if _, found, err := getDocString(t, recovered, "users", "id", types.IntKey(100)); err != nil {
 		t.Fatalf("Get loser insert 100: %v", err)
 	} else if found {
 		t.Fatalf("loser insert key 100 should have been undone")
 	}
-	if _, found, err := recovered.Get("users", "id", types.IntKey(101)); err != nil {
+	if _, found, err := getDocString(t, recovered, "users", "id", types.IntKey(101)); err != nil {
 		t.Fatalf("Get loser insert 101: %v", err)
 	} else if found {
 		t.Fatalf("loser insert key 101 should have been undone")
@@ -247,12 +247,12 @@ func TestRecovery_UndoLoserMultiIndexUpdateRestoresSecondaryIndexes(t *testing.T
 	defer recovered.Close()
 
 	requireDocumentVisible(t, recovered, "users", 1, `{"id":1,"email":"before@example.com","name":"Before"}`)
-	if _, found, err := recovered.Get("users", "email", types.VarcharKey("before@example.com")); err != nil {
+	if _, found, err := getDocString(t, recovered, "users", "email", types.VarcharKey("before@example.com")); err != nil {
 		t.Fatalf("Get old email: %v", err)
 	} else if !found {
 		t.Fatalf("old secondary key should have been restored")
 	}
-	if _, found, err := recovered.Get("users", "email", types.VarcharKey("after@example.com")); err != nil {
+	if _, found, err := getDocString(t, recovered, "users", "email", types.VarcharKey("after@example.com")); err != nil {
 		t.Fatalf("Get new email: %v", err)
 	} else if found {
 		t.Fatalf("new secondary key from loser update should have been undone")
@@ -345,7 +345,7 @@ func TestRecovery_CrashDuringUndoRemainsRecoverable(t *testing.T) {
 
 	requireDocumentVisible(t, recovered, "users", 1, `{"id":1,"name":"before-update"}`)
 	requireDocumentVisible(t, recovered, "users", 2, `{"id":2,"name":"before-delete"}`)
-	if _, found, err := recovered.Get("users", "id", types.IntKey(3)); err != nil {
+	if _, found, err := getDocString(t, recovered, "users", "id", types.IntKey(3)); err != nil {
 		t.Fatalf("Get loser insert 3: %v", err)
 	} else if found {
 		t.Fatalf("loser insert key 3 should have been undone after recovery-of-recovery")

@@ -78,7 +78,7 @@ func TestWriteTransaction_DeadlockVictimReleasesLocks(t *testing.T) {
 		t.Fatalf("expected tx2 commit to report deadlock victim, got %v", err)
 	}
 
-	doc, found, err := se.Get("users", "id", types.IntKey(1))
+	doc, found, err := getDocString(t, se, "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("get key1: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestWriteTransaction_DeadlockVictimReleasesLocks(t *testing.T) {
 		t.Fatalf("unexpected key1 state: found=%v doc=%q", found, doc)
 	}
 
-	doc, found, err = se.Get("users", "id", types.IntKey(2))
+	doc, found, err = getDocString(t, se, "users", "id", types.IntKey(2))
 	if err != nil {
 		t.Fatalf("get key2: %v", err)
 	}

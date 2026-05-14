@@ -56,17 +56,17 @@ func TestUpsertRowMaintainsSecondaryIndexesWhenIndexedFieldChanges(t *testing.T)
 		t.Fatalf("UpsertRow: %v", err)
 	}
 
-	got, found, err := se.Get("users", "id", types.IntKey(1))
+	got, found, err := getDocStringExt(t, se, "users", "id", types.IntKey(1))
 	if err != nil || !found || got != `{"id":1,"email":"new@example.com","name":"Alice Updated"}` {
 		t.Fatalf("primary lookup: found=%v got=%q err=%v", found, got, err)
 	}
 
-	got, found, err = se.Get("users", "email", types.VarcharKey("new@example.com"))
+	got, found, err = getDocStringExt(t, se, "users", "email", types.VarcharKey("new@example.com"))
 	if err != nil || !found || got != `{"id":1,"email":"new@example.com","name":"Alice Updated"}` {
 		t.Fatalf("new secondary lookup: found=%v got=%q err=%v", found, got, err)
 	}
 
-	if got, found, err = se.Get("users", "email", types.VarcharKey("old@example.com")); err != nil || found {
+	if got, found, err = getDocStringExt(t, se, "users", "email", types.VarcharKey("old@example.com")); err != nil || found {
 		t.Fatalf("old secondary key should not be visible: found=%v got=%q err=%v", found, got, err)
 	}
 }
@@ -82,10 +82,10 @@ func TestPutWithFullJSONMaintainsAllIndexes(t *testing.T) {
 		t.Fatalf("Put update: %v", err)
 	}
 
-	if _, found, err := se.Get("users", "email", types.VarcharKey("one@example.com")); err != nil || found {
+	if _, found, err := getDocStringExt(t, se, "users", "email", types.VarcharKey("one@example.com")); err != nil || found {
 		t.Fatalf("old email should not be visible after Put update: found=%v err=%v", found, err)
 	}
-	got, found, err := se.Get("users", "email", types.VarcharKey("two@example.com"))
+	got, found, err := getDocStringExt(t, se, "users", "email", types.VarcharKey("two@example.com"))
 	if err != nil || !found || got != `{"id":7,"email":"two@example.com","name":"Two"}` {
 		t.Fatalf("new email lookup: found=%v got=%q err=%v", found, got, err)
 	}
@@ -116,7 +116,7 @@ func TestInsertRowDuplicatePrimaryKeyRace(t *testing.T) {
 	if successes != 1 {
 		t.Fatalf("expected exactly one successful insert, got %d", successes)
 	}
-	got, found, err := se.Get("users", "id", types.IntKey(99))
+	got, found, err := getDocStringExt(t, se, "users", "id", types.IntKey(99))
 	if err != nil || !found || got == "" {
 		t.Fatalf("inserted row missing: found=%v got=%q err=%v", found, got, err)
 	}
@@ -172,10 +172,10 @@ func TestMultiIndexUpsertRecoveryMaintainsChangedSecondaryKey(t *testing.T) {
 	recovered := open(t)
 	defer recovered.Close()
 
-	if _, found, err := recovered.Get("users", "email", types.VarcharKey("before@example.com")); err != nil || found {
+	if _, found, err := getDocStringExt(t, recovered, "users", "email", types.VarcharKey("before@example.com")); err != nil || found {
 		t.Fatalf("old secondary key visible after recovery: found=%v err=%v", found, err)
 	}
-	got, found, err := recovered.Get("users", "email", types.VarcharKey("after@example.com"))
+	got, found, err := getDocStringExt(t, recovered, "users", "email", types.VarcharKey("after@example.com"))
 	if err != nil || !found || got != `{"id":5,"email":"after@example.com","name":"After"}` {
 		t.Fatalf("new secondary key after recovery: found=%v got=%q err=%v", found, got, err)
 	}

@@ -13,10 +13,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+var chaosCodec = bsoncodec.New()
+
+func fetchDocText(t testing.TB, se *storage.StorageEngine, key int) (string, bool, error) {
+	raw, found, err := se.GetBytes("t", "id", types.IntKey(int64(key)))
+	if err != nil || !found {
+		return "", found, err
+	}
+	text, decErr := chaosCodec.DecodeToText(raw)
+	if decErr != nil {
+		return string(raw), true, nil
+	}
+	return text, true, nil
+}
 
 type dbPaths struct {
 	dir       string
@@ -168,7 +183,7 @@ func TestChaosKill9CommittedWritesRecover(t *testing.T) {
 	defer se.Close()
 
 	for key, doc := range want {
-		got, found, err := se.Get("t", "id", types.IntKey(int64(key)))
+		got, found, err := fetchDocText(t, se, key)
 		if err != nil {
 			t.Fatalf("get key %d after crash recovery: %v", key, err)
 		}
@@ -242,7 +257,7 @@ func TestChaosRepeatedReopenRecovery(t *testing.T) {
 	se := openEngine(t, p)
 	defer se.Close()
 	for key, doc := range want {
-		got, found, err := se.Get("t", "id", types.IntKey(int64(key)))
+		got, found, err := fetchDocText(t, se, key)
 		if err != nil {
 			t.Fatalf("final get %d: %v", key, err)
 		}
