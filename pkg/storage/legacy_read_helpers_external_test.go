@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
@@ -27,7 +28,7 @@ func externalLegacyDecode(t testing.TB, raw []byte) string {
 
 func getDocStringExt(t testing.TB, se *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool, error) {
 	t.Helper()
-	raw, found, err := se.GetBytes(table, idx, key)
+	raw, found, err := se.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -36,7 +37,7 @@ func getDocStringExt(t testing.TB, se *storage.StorageEngine, table, idx string,
 
 func getDocStringExtTx(t testing.TB, tx *storage.Transaction, table, idx string, key types.Comparable) (string, bool, error) {
 	t.Helper()
-	raw, found, err := tx.GetBytes(table, idx, key)
+	raw, found, err := tx.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -50,7 +51,7 @@ func scanAllDocsExt(t testing.TB, se *storage.StorageEngine, table, idx string) 
 
 func scanRangeDocsExt(t testing.TB, se *storage.StorageEngine, table, idx string, lo, hi types.Comparable) ([]string, error) {
 	t.Helper()
-	it, err := se.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	it, err := se.NewIterator(context.Background(), table, idx, storage.IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +65,7 @@ func scanRangeDocsExt(t testing.TB, se *storage.StorageEngine, table, idx string
 
 func scanRangeDocsExtTx(t testing.TB, tx *storage.Transaction, table, idx string, lo, hi types.Comparable) ([]string, error) {
 	t.Helper()
-	it, err := tx.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	it, err := tx.NewIterator(context.Background(), table, idx, storage.IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		return nil, err
 	}

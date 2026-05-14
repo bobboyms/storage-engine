@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 
 	// 1. Setup initial state (LSN 1)
 	// Put increments LSN. Initial LSN is 0. Put -> 1.
-	err = se.Put("mvcc_test", "id", types.IntKey(1), `{"id":1}`)
+	err = se.Put(context.Background(), "mvcc_test", "id", types.IntKey(1), `{"id":1}`)
 	if err != nil {
 		t.Fatalf("Put 1 failed: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestMVCC_SnapshotRead(t *testing.T) {
 	tx1 := se.BeginRead()
 
 	// 3. Perform a write that advances LSN (LSN 2)
-	err = se.Put("mvcc_test", "id", types.IntKey(2), `{"id":2}`)
+	err = se.Put(context.Background(), "mvcc_test", "id", types.IntKey(2), `{"id":2}`)
 	if err != nil {
 		t.Fatalf("Put 2 failed: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	defer se.Close()
 
 	// 1. Insert Initial (LSN 1)
-	if err := se.Put("mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v1"}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v1"}`); err != nil {
 		t.Fatalf("Put 1 failed: %v", err)
 	}
 
@@ -102,12 +103,12 @@ func TestMVCC_Update_TimeTravel(t *testing.T) {
 	tx := se.BeginRead()
 
 	// 3. Update (LSN 2)
-	if err := se.Put("mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v2"}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v2"}`); err != nil {
 		t.Fatalf("Put 2 failed: %v", err)
 	}
 
 	// 4. Update Again (LSN 3)
-	if err := se.Put("mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v3"}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_update", "id", types.IntKey(1), `{"id":1,"val":"v3"}`); err != nil {
 		t.Fatalf("Put 3 failed: %v", err)
 	}
 
@@ -137,7 +138,7 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	defer se.Close()
 
 	// 1. Insert (LSN 1)
-	if err := se.Put("mvcc_del", "id", types.IntKey(1), `{"id":1,"val":"exist"}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_del", "id", types.IntKey(1), `{"id":1,"val":"exist"}`); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
@@ -145,7 +146,7 @@ func TestMVCC_Delete_TimeTravel(t *testing.T) {
 	tx := se.BeginRead()
 
 	// 3. Delete (LSN 2)
-	se.Del("mvcc_del", "id", types.IntKey(1))
+	se.Del(context.Background(), "mvcc_del", "id", types.IntKey(1))
 
 	// 4. Tx Should see "exist" (DeleteLSN 2 > Snapshot 1)
 	val, found, _ := getDocStringExtTx(t, tx, "mvcc_del", "id", types.IntKey(1))
@@ -176,7 +177,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	defer se.Close()
 
 	// Initial Insert (LSN 1)
-	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"initial"}`); err != nil {
+	if err := se.Put(context.Background(), "iso_test", "id", types.IntKey(1), `{"id":1,"val":"initial"}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,7 +186,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	txRR := se.BeginTransaction(storage.RepeatableRead)
 
 	// Update (LSN 2)
-	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated"}`); err != nil {
+	if err := se.Put(context.Background(), "iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated"}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,7 +207,7 @@ func TestMVCC_IsolationLevels(t *testing.T) {
 	}
 
 	// Update Again (LSN 3)
-	if err := se.Put("iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated_again"}`); err != nil {
+	if err := se.Put(context.Background(), "iso_test", "id", types.IntKey(1), `{"id":1,"val":"updated_again"}`); err != nil {
 		t.Fatal(err)
 	}
 

@@ -26,6 +26,7 @@ package storage
 // mantém CreateCheckpoint para compatibilidade e uso em testes.
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -35,39 +36,44 @@ import (
 	v2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
 )
 
-// FuzzyCheckpoint executa um checkpoint not-bloqueante e grava um record
-// de checkpoint no WAL, permitindo que recovery pule entradas anteriores
-// ao beginLSN.
-func (se *StorageEngine) FuzzyCheckpoint() error {
+// FuzzyCheckpoint runs a non-blocking checkpoint and writes a
+// checkpoint record to the WAL, letting recovery skip entries older
+// than beginLSN.
+//
+// Cancellation: ctx is honored up to and including WAL.Sync. Once Sync
+// returns, the dirty-page flush + checkpoint WAL record are part of the
+// durability path and proceed regardless of ctx.
+func (se *StorageEngine) FuzzyCheckpoint(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
 		return err
 	}
 
-	return se.fuzzyCheckpointLocked()
+	return se.fuzzyCheckpointLocked(ctx)
 }
 
-func (se *StorageEngine) fuzzyCheckpointLocked() error {
+func (se *StorageEngine) fuzzyCheckpointLocked(ctx context.Context) error {
 	if se.WAL == nil {
-		// Sem WAL there is no recovery, checkpoint fuzzy é no-op.
 		return nil
 	}
 
-	// 1. Determina o menor pageLSN ainda sujo. Esse é o ponto seguro de
-	//    redo para o checkpoint, porque qualquer page anterior já está
-	//    durável e qualquer page suja a partir daqui será flushada já.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	beginLSN := se.oldestDirtyPageLSN()
 	if beginLSN == 0 {
 		beginLSN = se.lsnTracker.Current()
 	}
 
-	// 2. Flush do WAL: garante que entradas até beginLSN estão em disco.
 	if err := se.WAL.Sync(); err != nil {
 		return fmt.Errorf("fuzzy checkpoint: sync WAL: %w", err)
 	}
 
-	// 3. Flush das pages sujas — not bloqueia writes (per-frame latch).
 	if err := se.flushAllDirtyPages(); err != nil {
 		return fmt.Errorf("fuzzy checkpoint: flush pages: %w", err)
 	}

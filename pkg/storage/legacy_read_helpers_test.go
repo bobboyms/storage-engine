@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
@@ -28,7 +29,7 @@ func legacyDecode(t testing.TB, raw []byte) string {
 
 func getDocString(t testing.TB, se *StorageEngine, table, idx string, key types.Comparable) (string, bool, error) {
 	t.Helper()
-	raw, found, err := se.GetBytes(table, idx, key)
+	raw, found, err := se.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -37,7 +38,7 @@ func getDocString(t testing.TB, se *StorageEngine, table, idx string, key types.
 
 func getDocStringTx(t testing.TB, tx *Transaction, table, idx string, key types.Comparable) (string, bool, error) {
 	t.Helper()
-	raw, found, err := tx.GetBytes(table, idx, key)
+	raw, found, err := tx.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -46,7 +47,7 @@ func getDocStringTx(t testing.TB, tx *Transaction, table, idx string, key types.
 
 func getDocStringWTx(t testing.TB, tx *WriteTransaction, table, idx string, key types.Comparable) (string, bool, error) {
 	t.Helper()
-	raw, found, err := tx.GetBytes(table, idx, key)
+	raw, found, err := tx.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -55,7 +56,7 @@ func getDocStringWTx(t testing.TB, tx *WriteTransaction, table, idx string, key 
 
 func scanRangeDocs(t testing.TB, se *StorageEngine, table, idx string, lo, hi types.Comparable) ([]string, error) {
 	t.Helper()
-	it, err := se.NewIterator(table, idx, IterOptions{Lower: lo, Upper: hi})
+	it, err := se.NewIterator(context.Background(), table, idx, IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +70,7 @@ func scanRangeDocs(t testing.TB, se *StorageEngine, table, idx string, lo, hi ty
 
 func scanRangeDocsTx(t testing.TB, tx *Transaction, table, idx string, lo, hi types.Comparable) ([]string, error) {
 	t.Helper()
-	it, err := tx.NewIterator(table, idx, IterOptions{Lower: lo, Upper: hi})
+	it, err := tx.NewIterator(context.Background(), table, idx, IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		return nil, err
 	}

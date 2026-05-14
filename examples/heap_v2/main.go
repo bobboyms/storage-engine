@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -79,7 +80,7 @@ func main() {
 	}
 
 	for _, d := range docs {
-		if err := se.Put("users", "id", types.IntKey(d.id), d.json); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(d.id), d.json); err != nil {
 			fmt.Printf("error put id=%d: %v\n", d.id, err)
 			return
 		}
@@ -105,7 +106,7 @@ func main() {
 	// ─────────────────────────────────────────────────────────────
 	// 4. UPDATE: cria nova versão encadeada via MVCC
 	// ─────────────────────────────────────────────────────────────
-	err = se.Put("users", "id", types.IntKey(1), `{"id":1,"nome":"Alice Atualizada","email":"alice+new@example.com"}`)
+	err = se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"nome":"Alice Atualizada","email":"alice+new@example.com"}`)
 	if err != nil {
 		fmt.Printf("error update: %v\n", err)
 		return
@@ -118,7 +119,7 @@ func main() {
 	//    in-place). Note a mensagem "Vacuum v2 completed" que o
 	//    storage engine emite.
 	// ─────────────────────────────────────────────────────────────
-	if err := se.Vacuum("users"); err != nil {
+	if err := se.Vacuum(context.Background(), "users"); err != nil {
 		fmt.Printf("error vacuum: %v\n", err)
 		return
 	}

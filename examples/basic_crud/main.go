@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -13,7 +14,7 @@ import (
 var docCodec = bsoncodec.New()
 
 func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool, error) {
-	raw, found, err := engine.GetBytes(table, idx, key)
+	raw, found, err := engine.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -100,7 +101,7 @@ func main() {
 
 	for _, p := range products {
 		// Put no index primário (id)
-		err := engine.Put("products", "id", types.IntKey(p.id), p.json)
+		err := engine.Put(context.Background(), "products", "id", types.IntKey(p.id), p.json)
 		if err != nil {
 			fmt.Printf("Erro ao inserir produto %d: %v\n", p.id, err)
 			continue
@@ -110,7 +111,7 @@ func main() {
 		// Cada Put() escreve uma cópia completa no heap.
 		// Para 4 produtos com 2 indexs = 8 records no heap (not 4).
 		// Isso é uma limitação do design atual - indexs são independentes.
-		err = engine.Put("products", "name", types.VarcharKey(p.name), p.json)
+		err = engine.Put(context.Background(), "products", "name", types.VarcharKey(p.name), p.json)
 		if err != nil {
 			fmt.Printf("Erro ao indexar nome %s: %v\n", p.name, err)
 		}
@@ -154,7 +155,7 @@ func main() {
 
 	// Atualizar um documento existente (mesmo id sobrescreve)
 	updatedDoc := `{"id": 1, "name": "Laptop Pro", "price": 3500.00, "stock": 5}`
-	err = engine.Put("products", "id", types.IntKey(1), updatedDoc)
+	err = engine.Put(context.Background(), "products", "id", types.IntKey(1), updatedDoc)
 	if err != nil {
 		fmt.Printf("Erro ao atualizar: %v\n", err)
 	}
@@ -169,7 +170,7 @@ func main() {
 	fmt.Println("\n=== DEL (Delete) ===")
 
 	// Remover produto
-	deleted, err := engine.Del("products", "id", types.IntKey(4))
+	deleted, err := engine.Del(context.Background(), "products", "id", types.IntKey(4))
 	if err != nil {
 		fmt.Printf("Erro ao deletar: %v\n", err)
 	} else {
@@ -181,7 +182,7 @@ func main() {
 	fmt.Printf("Produto ID=4 existe after delete? %v\n", found)
 
 	// Tentar deletar item inexistente
-	deleted, _ = engine.Del("products", "id", types.IntKey(999))
+	deleted, _ = engine.Del(context.Background(), "products", "id", types.IntKey(999))
 	fmt.Printf("Produto ID=999 deletado (not existia)? %v\n", deleted)
 
 	// ========================================

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 		keys := map[string]types.Comparable{
 			"id": types.IntKey(i),
 		}
-		if err := se.InsertRow("users", doc, keys); err != nil {
+		if err := se.InsertRow(context.Background(), "users", doc, keys); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -82,15 +83,15 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 
 	// 3. Delete some records
 	// Delete id=1, id=2
-	se.Del("users", "id", types.IntKey(1))
-	se.Del("users", "id", types.IntKey(2))
+	se.Del(context.Background(), "users", "id", types.IntKey(1))
+	se.Del(context.Background(), "users", "id", types.IntKey(2))
 
 	// 4. Run Vacuum -> Should NOT reclaim, because tx is active (and DeleteLSN > tx.SnapshotLSN)
 	// Actually `DeleteLSN` will be larger than `tx.SnapshotLSN`.
 	// `minLSN` = `tx.SnapshotLSN` (since it's oldest).
 	// Condition `DeleteLSN < minLSN` -> `Large < Small` -> False.
 	// So it KEEPS.
-	if err := se.Vacuum("users"); err != nil {
+	if err := se.Vacuum(context.Background(), "users"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +110,7 @@ func TestVacuum_TombstoneReclamation(t *testing.T) {
 	// Now minLSN moves to Current (or MaxUint64 if no active txs).
 	// Condition `DeleteLSN < minLSN` -> `Small < Huge` -> True.
 	// DROP.
-	if err := se.Vacuum("users"); err != nil {
+	if err := se.Vacuum(context.Background(), "users"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,21 +150,21 @@ func TestDeleteAfterVacuumedSlotIsNoop(t *testing.T) {
 	}
 	defer se.Close()
 
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := se.Del("users", "id", types.IntKey(1))
+	deleted, err := se.Del(context.Background(), "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !deleted {
 		t.Fatal("first delete should find the key")
 	}
-	if err := se.Vacuum("users"); err != nil {
+	if err := se.Vacuum(context.Background(), "users"); err != nil {
 		t.Fatal(err)
 	}
 
-	deleted, err = se.Del("users", "id", types.IntKey(1))
+	deleted, err = se.Del(context.Background(), "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("delete after vacuum should be a no-op, got error: %v", err)
 	}

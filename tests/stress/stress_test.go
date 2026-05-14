@@ -3,6 +3,7 @@
 package stress_test
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -23,7 +24,7 @@ var stressCodec = bsoncodec.New()
 
 func fetchDocText(t testing.TB, se *storage.StorageEngine, key int) (string, bool) {
 	t.Helper()
-	raw, found, err := se.GetBytes("t", "id", types.IntKey(int64(key)))
+	raw, found, err := se.GetBytes(context.Background(), "t", "id", types.IntKey(int64(key)))
 	if err != nil {
 		t.Fatalf("GetBytes %d: %v", key, err)
 	}
@@ -105,7 +106,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 
 	for i := 1; i <= 500; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"seed":true}`, i)
-		if err := se.Put("t", "id", types.IntKey(int64(i)), doc); err != nil {
+		if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc); err != nil {
 			t.Fatalf("seed put %d: %v", i, err)
 		}
 	}
@@ -122,7 +123,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 			for time.Now().Before(deadline) {
 				key := int(nextKey.Add(1))
 				doc := fmt.Sprintf(`{"id":%d,"worker":%d}`, key, worker)
-				if err := se.Put("t", "id", types.IntKey(int64(key)), doc); err != nil {
+				if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(key)), doc); err != nil {
 					errs <- fmt.Errorf("put %d: %w", key, err)
 					continue
 				}
@@ -138,7 +139,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 		defer wg.Done()
 		for i := 1; time.Now().Before(deadline); i++ {
 			key := 1 + rand.Intn(500)
-			ok, err := se.Del("t", "id", types.IntKey(int64(key)))
+			ok, err := se.Del(context.Background(), "t", "id", types.IntKey(int64(key)))
 			if err != nil {
 				errs <- fmt.Errorf("delete %d: %w", key, err)
 				continue
@@ -157,7 +158,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 			defer wg.Done()
 			for time.Now().Before(deadline) {
 				key := int64(rand.Intn(int(nextKey.Load()) + 1))
-				if _, _, err := se.GetBytes("t", "id", types.IntKey(key)); err != nil {
+				if _, _, err := se.GetBytes(context.Background(), "t", "id", types.IntKey(key)); err != nil {
 					errs <- fmt.Errorf("get %d: %w", key, err)
 				}
 			}
@@ -170,7 +171,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 		for time.Now().Before(deadline) {
 			start := rand.Intn(500)
 			end := start + rand.Intn(100)
-			it, err := se.NewIterator("t", "id", storage.IterOptions{
+			it, err := se.NewIterator(context.Background(), "t", "id", storage.IterOptions{
 				Lower: types.IntKey(int64(start)),
 				Upper: types.IntKey(int64(end)),
 			})
@@ -198,7 +199,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				if err := se.FuzzyCheckpoint(); err != nil {
+				if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 					errs <- fmt.Errorf("fuzzy checkpoint: %w", err)
 				}
 			}
@@ -215,7 +216,7 @@ func TestStressConcurrentWriteReadDeleteScanCheckpointVacuum(t *testing.T) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				if err := se.Vacuum("t"); err != nil {
+				if err := se.Vacuum(context.Background(), "t"); err != nil {
 					errs <- fmt.Errorf("vacuum: %w", err)
 				}
 			}
@@ -273,12 +274,12 @@ func TestStressReopenLoop(t *testing.T) {
 	for i := 1; i <= loops; i++ {
 		se := openEngine(t, p)
 		doc := fmt.Sprintf(`{"id":%d,"loop":%d}`, i, i)
-		if err := se.Put("t", "id", types.IntKey(int64(i)), doc); err != nil {
+		if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc); err != nil {
 			_ = se.Close()
 			t.Fatalf("loop %d put: %v", i, err)
 		}
 		if i%25 == 0 {
-			if err := se.FuzzyCheckpoint(); err != nil {
+			if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 				_ = se.Close()
 				t.Fatalf("loop %d checkpoint: %v", i, err)
 			}

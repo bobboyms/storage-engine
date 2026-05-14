@@ -6,6 +6,8 @@
 package legacydoc
 
 import (
+	"context"
+
 	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -28,7 +30,7 @@ func Decode(raw []byte) string {
 
 // Fetch wraps StorageEngine.GetBytes + Decode.
 func Fetch(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool, error) {
-	raw, found, err := engine.GetBytes(table, idx, key)
+	raw, found, err := engine.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -37,7 +39,7 @@ func Fetch(engine *storage.StorageEngine, table, idx string, key types.Comparabl
 
 // FetchTx is the transaction-scoped variant.
 func FetchTx(tx *storage.Transaction, table, idx string, key types.Comparable) (string, bool, error) {
-	raw, found, err := tx.GetBytes(table, idx, key)
+	raw, found, err := tx.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -47,7 +49,7 @@ func FetchTx(tx *storage.Transaction, table, idx string, key types.Comparable) (
 // Range drains the iterator scoped to [lo, hi] (inclusive). nil bounds
 // are unbounded.
 func Range(engine *storage.StorageEngine, table, idx string, lo, hi types.Comparable) ([]string, error) {
-	it, err := engine.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	it, err := engine.NewIterator(context.Background(), table, idx, storage.IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		return nil, err
 	}

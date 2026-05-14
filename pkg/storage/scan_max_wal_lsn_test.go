@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,7 +48,7 @@ func TestNewStorageEngine_RejectsMidFileWALCorruption(t *testing.T) {
 		big[i] = 'x'
 	}
 	for i := 1; i <= 32; i++ {
-		if err := se.Put("users", "id", types.IntKey(i), `{"id":`+itoa(i)+`,"blob":"`+string(big)+`"}`); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), `{"id":`+itoa(i)+`,"blob":"`+string(big)+`"}`); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}

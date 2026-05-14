@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestIsolation_DirtyReadPrevented(t *testing.T) {
 	defer se.Close()
 
 	txw := se.BeginWriteTransaction()
-	if err := txw.Put("items", "id", types.IntKey(1), `{"id":1,"value":"pending"}`); err != nil {
+	if err := txw.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"pending"}`); err != nil {
 		t.Fatalf("write tx put: %v", err)
 	}
 
@@ -71,7 +72,7 @@ func TestIsolation_ReadCommittedAllowsNonRepeatableRead(t *testing.T) {
 	se := openAnomalyTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"v1"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"v1"}`); err != nil {
 		t.Fatalf("seed put: %v", err)
 	}
 
@@ -83,7 +84,7 @@ func TestIsolation_ReadCommittedAllowsNonRepeatableRead(t *testing.T) {
 		t.Fatalf("first read: found=%v doc=%q err=%v", found, doc, err)
 	}
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"v2"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"v2"}`); err != nil {
 		t.Fatalf("concurrent update: %v", err)
 	}
 
@@ -97,7 +98,7 @@ func TestIsolation_RepeatableReadPreventsNonRepeatableRead(t *testing.T) {
 	se := openAnomalyTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"v1"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"v1"}`); err != nil {
 		t.Fatalf("seed put: %v", err)
 	}
 
@@ -109,7 +110,7 @@ func TestIsolation_RepeatableReadPreventsNonRepeatableRead(t *testing.T) {
 		t.Fatalf("first read: found=%v doc=%q err=%v", found, doc, err)
 	}
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"v2"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"v2"}`); err != nil {
 		t.Fatalf("concurrent update: %v", err)
 	}
 
@@ -123,10 +124,10 @@ func TestIsolation_ReadCommittedAllowsPhantom(t *testing.T) {
 	se := openAnomalyTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"a"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"a"}`); err != nil {
 		t.Fatalf("seed put 1: %v", err)
 	}
-	if err := se.Put("items", "id", types.IntKey(2), `{"id":2,"value":"b"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(2), `{"id":2,"value":"b"}`); err != nil {
 		t.Fatalf("seed put 2: %v", err)
 	}
 
@@ -141,7 +142,7 @@ func TestIsolation_ReadCommittedAllowsPhantom(t *testing.T) {
 		t.Fatalf("expected 2 rows before phantom, got %d", len(rows))
 	}
 
-	if err := se.Put("items", "id", types.IntKey(3), `{"id":3,"value":"c"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(3), `{"id":3,"value":"c"}`); err != nil {
 		t.Fatalf("concurrent insert: %v", err)
 	}
 
@@ -158,10 +159,10 @@ func TestIsolation_RepeatableReadPreventsPhantomRead(t *testing.T) {
 	se := openAnomalyTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("items", "id", types.IntKey(1), `{"id":1,"value":"a"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(1), `{"id":1,"value":"a"}`); err != nil {
 		t.Fatalf("seed put 1: %v", err)
 	}
-	if err := se.Put("items", "id", types.IntKey(2), `{"id":2,"value":"b"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(2), `{"id":2,"value":"b"}`); err != nil {
 		t.Fatalf("seed put 2: %v", err)
 	}
 
@@ -176,7 +177,7 @@ func TestIsolation_RepeatableReadPreventsPhantomRead(t *testing.T) {
 		t.Fatalf("expected 2 rows before concurrent insert, got %d", len(rows))
 	}
 
-	if err := se.Put("items", "id", types.IntKey(3), `{"id":3,"value":"c"}`); err != nil {
+	if err := se.Put(context.Background(), "items", "id", types.IntKey(3), `{"id":3,"value":"c"}`); err != nil {
 		t.Fatalf("concurrent insert: %v", err)
 	}
 

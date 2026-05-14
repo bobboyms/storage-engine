@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -54,7 +55,7 @@ func TestStatsNextTxID_DoesNotInheritWALMaxLSN(t *testing.T) {
 	// Push the WAL well past LSN 0.
 	for i := 1; i <= 5; i++ {
 		doc := `{"id":` + itoa(i) + `}`
-		if err := se.Put("users", "id", types.IntKey(i), doc); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), doc); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}

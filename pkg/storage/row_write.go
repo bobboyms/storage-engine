@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
@@ -18,17 +19,20 @@ type indexUpdateUndo struct {
 	changed bool
 }
 
-func (se *StorageEngine) writeRow(tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
+func (se *StorageEngine) writeRow(ctx context.Context, tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
 		return err
 	}
 
-	return se.writeRowLocked(tableName, doc, providedKeys, insertOnly)
+	return se.writeRowLocked(ctx, tableName, doc, providedKeys, insertOnly)
 }
 
-func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
+func (se *StorageEngine) writeRowLocked(ctx context.Context, tableName string, doc string, providedKeys map[string]types.Comparable, insertOnly bool) error {
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return err
@@ -44,7 +48,7 @@ func (se *StorageEngine) writeRowLocked(tableName string, doc string, providedKe
 		return err
 	}
 
-	return se.withAutoCommitLocks(resources, func() error {
+	return se.withAutoCommitLocks(ctx, resources, func() error {
 		table.Lock()
 		defer table.Unlock()
 

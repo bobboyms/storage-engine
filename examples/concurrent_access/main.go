@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -65,7 +66,7 @@ func main() {
 				id := int64(writerID*1000 + i)
 				doc := fmt.Sprintf(`{"id": %d, "writer": %d, "seq": %d}`, id, writerID, i)
 
-				err := engine.Put("products", "id", types.IntKey(id), doc)
+				err := engine.Put(context.Background(), "products", "id", types.IntKey(id), doc)
 				if err != nil {
 					atomic.AddInt64(&writesFail, 1)
 				} else {
@@ -140,7 +141,7 @@ func main() {
 			for i := 0; i < 50; i++ {
 				id := int64(10000 + writerID*100 + i)
 				doc := fmt.Sprintf(`{"id": %d, "mixed": true}`, id)
-				if err := engine.Put("products", "id", types.IntKey(id), doc); err == nil {
+				if err := engine.Put(context.Background(), "products", "id", types.IntKey(id), doc); err == nil {
 					atomic.AddInt64(&mixedWrites, 1)
 				}
 				time.Sleep(time.Microsecond * 10) // Simular trabalho
@@ -179,7 +180,7 @@ func main() {
 	fmt.Println("\n=== Teste 4: Snapshot Isolation ===")
 
 	// Inserir valor conhecido
-	engine.Put("products", "id", types.IntKey(99999), `{"id": 99999, "version": "v1"}`)
+	engine.Put(context.Background(), "products", "id", types.IntKey(99999), `{"id": 99999, "version": "v1"}`)
 
 	// Iniciar transação que vê "v1"
 	tx1 := engine.BeginRead()
@@ -187,7 +188,7 @@ func main() {
 	// Outra goroutine atualiza para "v2"
 	go func() {
 		time.Sleep(time.Millisecond * 10)
-		engine.Put("products", "id", types.IntKey(99999), `{"id": 99999, "version": "v2"}`)
+		engine.Put(context.Background(), "products", "id", types.IntKey(99999), `{"id": 99999, "version": "v2"}`)
 	}()
 
 	// Esperar a atualização acontecer

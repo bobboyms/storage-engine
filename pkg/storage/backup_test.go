@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func putAccount(t *testing.T, se *StorageEngine, id int64, email string) {
 	t.Helper()
 
 	doc := fmt.Sprintf(`{"id":%d,"email":%q,"balance":%d}`, id, email, id*10)
-	if err := se.Put("accounts", "id", types.IntKey(id), doc); err != nil {
+	if err := se.Put(context.Background(), "accounts", "id", types.IntKey(id), doc); err != nil {
 		t.Fatalf("Put account %d: %v", id, err)
 	}
 }
@@ -98,7 +99,7 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 	}
 
 	backupDir := filepath.Join(t.TempDir(), "backup")
-	manifest, err := db.engine.BackupOnline(backupDir)
+	manifest, err := db.engine.BackupOnline(context.Background(), backupDir)
 	if err != nil {
 		t.Fatalf("BackupOnline: %v", err)
 	}
@@ -111,12 +112,12 @@ func TestOnlineBackupRestoreRoundTrip(t *testing.T) {
 
 	putAccount(t, db.engine, 6, "after-backup@example.com")
 
-	if _, err := VerifyBackup(backupDir); err != nil {
+	if _, err := VerifyBackup(context.Background(), backupDir); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
 
 	restoreDir := filepath.Join(t.TempDir(), "restore")
-	if _, err := RestoreBackup(backupDir, restoreDir); err != nil {
+	if _, err := RestoreBackup(context.Background(), backupDir, restoreDir); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 
@@ -145,7 +146,7 @@ func TestVerifyBackupDetectsCorruption(t *testing.T) {
 	putAccount(t, db.engine, 1, "corrupt@example.com")
 
 	backupDir := filepath.Join(t.TempDir(), "backup")
-	manifest, err := db.engine.BackupOnline(backupDir)
+	manifest, err := db.engine.BackupOnline(context.Background(), backupDir)
 	if err != nil {
 		t.Fatalf("BackupOnline: %v", err)
 	}
@@ -166,10 +167,10 @@ func TestVerifyBackupDetectsCorruption(t *testing.T) {
 		t.Fatalf("Close corrupt: %v", err)
 	}
 
-	if _, err := VerifyBackup(backupDir); err == nil {
+	if _, err := VerifyBackup(context.Background(), backupDir); err == nil {
 		t.Fatal("VerifyBackup should detectar corruption")
 	}
-	if _, err := RestoreBackup(backupDir, filepath.Join(t.TempDir(), "restore")); err == nil {
+	if _, err := RestoreBackup(context.Background(), backupDir, filepath.Join(t.TempDir(), "restore")); err == nil {
 		t.Fatal("RestoreBackup should rejeitar backup corrupted")
 	}
 }
@@ -192,7 +193,7 @@ func TestOnlineBackupWhileWritesAreRunning(t *testing.T) {
 			}
 			id := atomic.AddInt64(&nextID, 1)
 			doc := fmt.Sprintf(`{"id":%d,"email":"live-%d@example.com","balance":%d}`, id, id, id)
-			if err := db.engine.Put("accounts", "id", types.IntKey(id), doc); err != nil {
+			if err := db.engine.Put(context.Background(), "accounts", "id", types.IntKey(id), doc); err != nil {
 				atomic.AddInt64(&writeErrors, 1)
 				return
 			}
@@ -204,7 +205,7 @@ func TestOnlineBackupWhileWritesAreRunning(t *testing.T) {
 	}
 
 	backupDir := filepath.Join(t.TempDir(), "backup")
-	if _, err := db.engine.BackupOnline(backupDir); err != nil {
+	if _, err := db.engine.BackupOnline(context.Background(), backupDir); err != nil {
 		close(stop)
 		<-done
 		t.Fatalf("BackupOnline com writes concurrent: %v", err)
@@ -215,10 +216,10 @@ func TestOnlineBackupWhileWritesAreRunning(t *testing.T) {
 	if n := atomic.LoadInt64(&writeErrors); n != 0 {
 		t.Fatalf("write goroutine failed %d vez(es)", n)
 	}
-	if _, err := VerifyBackup(backupDir); err != nil {
+	if _, err := VerifyBackup(context.Background(), backupDir); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
-	if _, err := RestoreBackup(backupDir, filepath.Join(t.TempDir(), "restore")); err != nil {
+	if _, err := RestoreBackup(context.Background(), backupDir, filepath.Join(t.TempDir(), "restore")); err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
 }
@@ -229,7 +230,7 @@ func TestRestoreBackupDoesNotOverwriteExistingFiles(t *testing.T) {
 	putAccount(t, db.engine, 1, "exists@example.com")
 
 	backupDir := filepath.Join(t.TempDir(), "backup")
-	if _, err := db.engine.BackupOnline(backupDir); err != nil {
+	if _, err := db.engine.BackupOnline(context.Background(), backupDir); err != nil {
 		t.Fatalf("BackupOnline: %v", err)
 	}
 
@@ -240,7 +241,7 @@ func TestRestoreBackupDoesNotOverwriteExistingFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(targetDir, "accounts.heap"), []byte("already here"), 0600); err != nil {
 		t.Fatalf("WriteFile existing: %v", err)
 	}
-	if _, err := RestoreBackup(backupDir, targetDir); err == nil {
+	if _, err := RestoreBackup(context.Background(), backupDir, targetDir); err == nil {
 		t.Fatal("RestoreBackup should recusar sobrescrever arquivo existsnte")
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -50,9 +51,9 @@ func main() {
 	fmt.Println("TX1 iniciada")
 
 	// Adicionar operações à transação (ainda not persistidas)
-	tx1.Put("accounts", "id", types.IntKey(1), `{"id": 1, "name": "Alice", "balance": 1000}`)
-	tx1.Put("accounts", "id", types.IntKey(2), `{"id": 2, "name": "Bob", "balance": 2000}`)
-	tx1.Put("accounts", "id", types.IntKey(3), `{"id": 3, "name": "Carol", "balance": 3000}`)
+	tx1.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "name": "Alice", "balance": 1000}`)
+	tx1.Put(context.Background(), "accounts", "id", types.IntKey(2), `{"id": 2, "name": "Bob", "balance": 2000}`)
+	tx1.Put(context.Background(), "accounts", "id", types.IntKey(3), `{"id": 3, "name": "Carol", "balance": 3000}`)
 	fmt.Println("  3 operações adicionadas ao buffer da transação")
 
 	// Verificar que os data AINDA NÃO estão visíveis
@@ -60,7 +61,7 @@ func main() {
 	fmt.Printf("  Antes do commit - Alice existe? %v\n", found)
 
 	// Commit - persiste atomicamente todas as operações
-	err := tx1.Commit()
+	err := tx1.Commit(context.Background())
 	if err != nil {
 		fmt.Printf("  Erro no commit: %v\n", err)
 	} else {
@@ -87,13 +88,13 @@ func main() {
 	fmt.Println("TX2 iniciada")
 
 	// Tentar atualizar Bob e deletar Carol
-	tx2.Put("accounts", "id", types.IntKey(2), `{"id": 2, "name": "Bob", "balance": 5000}`)
-	tx2.Del("accounts", "id", types.IntKey(3))
+	tx2.Put(context.Background(), "accounts", "id", types.IntKey(2), `{"id": 2, "name": "Bob", "balance": 5000}`)
+	tx2.Del(context.Background(), "accounts", "id", types.IntKey(3))
 	fmt.Println("  Operações adicionadas: atualizar Bob, deletar Carol")
 
 	// Simular error ou decisão de cancelar
 	fmt.Println("  [Decidimos cancelar a operação]")
-	tx2.Rollback()
+	tx2.Rollback(context.Background())
 	fmt.Println("  ✓ Rollback realizado")
 
 	// Verificar que nada mudou
@@ -120,13 +121,13 @@ func main() {
 	fmt.Println("\nIniciando transferência: Carol -> Alice ($500)")
 
 	// Debitar Carol (de 3000 para 2500)
-	transfer.Put("accounts", "id", types.IntKey(3), `{"id": 3, "name": "Carol", "balance": 2500}`)
+	transfer.Put(context.Background(), "accounts", "id", types.IntKey(3), `{"id": 3, "name": "Carol", "balance": 2500}`)
 
 	// Creditar Alice (de 1000 para 1500)
-	transfer.Put("accounts", "id", types.IntKey(1), `{"id": 1, "name": "Alice", "balance": 1500}`)
+	transfer.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "name": "Alice", "balance": 1500}`)
 
 	// Commit atômico
-	err = transfer.Commit()
+	err = transfer.Commit(context.Background())
 	if err == nil {
 		fmt.Println("✓ Transferência concluída com success")
 	}
@@ -149,24 +150,24 @@ func main() {
 
 	// Inserir data iniciais novamente
 	init := engine.BeginWriteTransaction()
-	init.Put("accounts", "id", types.IntKey(100), `{"id": 100, "name": "Empresa", "balance": 100000}`)
-	init.Put("accounts", "id", types.IntKey(101), `{"id": 101, "name": "Fornecedor", "balance": 0}`)
-	init.Commit()
+	init.Put(context.Background(), "accounts", "id", types.IntKey(100), `{"id": 100, "name": "Empresa", "balance": 100000}`)
+	init.Put(context.Background(), "accounts", "id", types.IntKey(101), `{"id": 101, "name": "Fornecedor", "balance": 0}`)
+	init.Commit(context.Background())
 
 	// Transação que atualiza múltiplas tabelas
 	payment := engine.BeginWriteTransaction()
 	fmt.Println("Iniciando pagamento para fornecedor...")
 
 	// Atualizar contas
-	payment.Put("accounts", "id", types.IntKey(100), `{"id": 100, "name": "Empresa", "balance": 90000}`)
-	payment.Put("accounts", "id", types.IntKey(101), `{"id": 101, "name": "Fornecedor", "balance": 10000}`)
+	payment.Put(context.Background(), "accounts", "id", types.IntKey(100), `{"id": 100, "name": "Empresa", "balance": 90000}`)
+	payment.Put(context.Background(), "accounts", "id", types.IntKey(101), `{"id": 101, "name": "Fornecedor", "balance": 10000}`)
 
 	// Registrar transação no log
-	payment.Put("transactions", "id", types.IntKey(1),
+	payment.Put(context.Background(), "transactions", "id", types.IntKey(1),
 		`{"id": 1, "from": 100, "to": 101, "amount": 10000, "status": "completed"}`)
 
 	// Commit atômico - ou todas as mudanças acontecem ou nenhuma
-	err = payment.Commit()
+	err = payment.Commit(context.Background())
 	if err == nil {
 		fmt.Println("✓ Pagamento processado (conta + log)")
 	}

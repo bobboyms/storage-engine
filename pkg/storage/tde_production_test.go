@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"io"
 	"os"
@@ -102,10 +103,10 @@ func TestTDEProduction_EncryptsHeapAutoIndexAndWALAndReopens(t *testing.T) {
 	doc := `{"email":"prod-tde-secret-card-4111@example.com","balance":1000,"note":"prod-tde-secret-card-4111"}`
 	updated := `{"email":"prod-tde-secret-card-4111@example.com","balance":2000,"note":"prod-tde-secret-card-4111-updated"}`
 
-	if err := se.Put("accounts", "email", types.VarcharKey(secretKey), doc); err != nil {
+	if err := se.Put(context.Background(), "accounts", "email", types.VarcharKey(secretKey), doc); err != nil {
 		t.Fatalf("Put initial: %v", err)
 	}
-	if err := se.Put("accounts", "email", types.VarcharKey(secretKey), updated); err != nil {
+	if err := se.Put(context.Background(), "accounts", "email", types.VarcharKey(secretKey), updated); err != nil {
 		t.Fatalf("Put update: %v", err)
 	}
 	if err := se.Close(); err != nil {
@@ -163,7 +164,7 @@ func TestTDEProduction_EncryptedWALRecoveryAfterCrash(t *testing.T) {
 
 	secretKey := "crash-tde-secret@example.com"
 	want := `{"email":"crash-tde-secret@example.com","balance":777,"note":"wal-only-secret"}`
-	if err := se.Put("accounts", "email", types.VarcharKey(secretKey), want); err != nil {
+	if err := se.Put(context.Background(), "accounts", "email", types.VarcharKey(secretKey), want); err != nil {
 		t.Fatalf("Put before crash: %v", err)
 	}
 

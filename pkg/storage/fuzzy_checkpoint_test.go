@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,12 +49,12 @@ func TestFuzzyCheckpoint_Basic(t *testing.T) {
 
 	for i := 1; i <= 10; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"name":"user%d"}`, i, i)
-		if err := se.Put("users", "id", types.IntKey(i), doc); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), doc); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
 
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		t.Fatalf("FuzzyCheckpoint: %v", err)
 	}
 
@@ -73,7 +74,7 @@ func TestFuzzyCheckpoint_WALContainsCheckpointEntry(t *testing.T) {
 	dir := t.TempDir()
 	se := setupEngineWithWAL(t, dir, "items")
 
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		t.Fatalf("FuzzyCheckpoint: %v", err)
 	}
 
@@ -102,7 +103,7 @@ func TestFuzzyCheckpoint_NoWAL_IsNoop(t *testing.T) {
 	defer se.Close()
 
 	// FuzzyCheckpoint sem WAL must retornar nil (no-op).
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		t.Fatalf("FuzzyCheckpoint sem WAL should be no-op: %v", err)
 	}
 }
@@ -139,20 +140,20 @@ func TestFuzzyCheckpoint_RecoverySkipsBeforeCheckpointLSN(t *testing.T) {
 
 		for i := 1; i <= 5; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"name":"emp%d"}`, i, i)
-			if err := se.Put(tableName, "id", types.IntKey(i), doc); err != nil {
+			if err := se.Put(context.Background(), tableName, "id", types.IntKey(i), doc); err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
 		}
 
 		// Checkpoint fuzzy — grava record no WAL com beginLSN.
-		if err := se.FuzzyCheckpoint(); err != nil {
+		if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 			t.Fatalf("FuzzyCheckpoint: %v", err)
 		}
 
 		// Mais inserts depois do checkpoint.
 		for i := 6; i <= 8; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"name":"emp%d"}`, i, i)
-			if err := se.Put(tableName, "id", types.IntKey(i), doc); err != nil {
+			if err := se.Put(context.Background(), tableName, "id", types.IntKey(i), doc); err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
 		}
@@ -214,11 +215,11 @@ func TestFuzzyCheckpoint_MultipleCheckpoints(t *testing.T) {
 		for i := 1; i <= 3; i++ {
 			key := (round-1)*3 + i
 			doc := fmt.Sprintf(`{"id":%d,"val":%d}`, key, round)
-			if err := se.Put("items", "id", types.IntKey(key), doc); err != nil {
+			if err := se.Put(context.Background(), "items", "id", types.IntKey(key), doc); err != nil {
 				t.Fatalf("Put round=%d i=%d: %v", round, i, err)
 			}
 		}
-		if err := se.FuzzyCheckpoint(); err != nil {
+		if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 			t.Fatalf("FuzzyCheckpoint round=%d: %v", round, err)
 		}
 	}
@@ -272,19 +273,19 @@ func TestFuzzyCheckpoint_RotatesAndTruncatesWALSafely(t *testing.T) {
 
 	se := open(t)
 	for i := 1; i <= 3; i++ {
-		if err := se.Put(tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
+		if err := se.Put(context.Background(), tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		t.Fatalf("checkpoint 1: %v", err)
 	}
 	for i := 4; i <= 6; i++ {
-		if err := se.Put(tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
+		if err := se.Put(context.Background(), tableName, "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i)); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		t.Fatalf("checkpoint 2: %v", err)
 	}
 	if err := se.Close(); err != nil {

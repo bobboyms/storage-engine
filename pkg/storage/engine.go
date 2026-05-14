@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	goerrors "errors"
 	"fmt"
 	"io"
@@ -93,8 +94,12 @@ func NewProductionStorageEngineWithOptions(tableMetaData *TableMetaData, walWrit
 		return nil, err
 	}
 
+	ctx := opts.RecoveryContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Replay idempotente. Se o WAL está empty (setup inicial), é no-op.
-	if err := se.Recover(walWriter.Path()); err != nil {
+	if err := se.Recover(ctx, walWriter.Path()); err != nil {
 		return nil, fmt.Errorf("storage: recovery failed: %w", err)
 	}
 	return se, nil
@@ -388,8 +393,14 @@ type visibleRecordRaw struct {
 // readVisibleRecordRaw walks the version chain for `key` starting at
 // `currentOffset` and returns the first version visible to `tx` as raw
 // bytes. Missing / vacuumed / non-visible chains return Found=false.
-func (se *StorageEngine) readVisibleRecordRaw(tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (visibleRecordRaw, error) {
+//
+// ctx is checked at every chain hop because long-lived version chains
+// can take noticeable time to walk under heavy MVCC churn.
+func (se *StorageEngine) readVisibleRecordRaw(ctx context.Context, tx *Transaction, table *Table, key types.Comparable, currentOffset int64) (visibleRecordRaw, error) {
 	for currentOffset != -1 {
+		if err := ctx.Err(); err != nil {
+			return visibleRecordRaw{}, err
+		}
 		docBytes, header, err := table.Heap.Read(currentOffset)
 		if isChainEndErr(err) {
 			return visibleRecordRaw{}, nil
@@ -411,7 +422,7 @@ func (se *StorageEngine) readVisibleRecordRaw(tx *Transaction, table *Table, key
 }
 
 func (se *StorageEngine) visibleRecordForKey(tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecord, error) {
-	raw, err := se.visibleRecordForKeyRaw(tx, tableName, indexName, key)
+	raw, err := se.visibleRecordForKeyRaw(context.Background(), tx, tableName, indexName, key)
 	if err != nil || !raw.Found {
 		return visibleRecord{Found: raw.Found, CreateLSN: raw.CreateLSN}, err
 	}
@@ -424,8 +435,8 @@ func (se *StorageEngine) visibleRecordForKey(tx *Transaction, tableName string, 
 }
 
 // visibleRecordForKeyRaw resolves the MVCC version for `key` and returns
-// the raw heap bytes. Used by the new bytes-returning Get path.
-func (se *StorageEngine) visibleRecordForKeyRaw(tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
+// the raw heap bytes. Used by the bytes-returning Get path.
+func (se *StorageEngine) visibleRecordForKeyRaw(ctx context.Context, tx *Transaction, tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
 	table, err := se.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return visibleRecordRaw{}, err
@@ -441,11 +452,20 @@ func (se *StorageEngine) visibleRecordForKeyRaw(tx *Transaction, tableName strin
 	if !found {
 		return visibleRecordRaw{}, nil
 	}
-	return se.readVisibleRecordRaw(tx, table, key, currentOffset)
+	return se.readVisibleRecordRaw(ctx, tx, table, key, currentOffset)
 }
 
-// Put: Insert ou Update com Durabilidade (WAL)
-func (se *StorageEngine) Put(tableName string, indexName string, key types.Comparable, document string) error {
+// Put writes (or replaces) `document` under `key` in `tableName.indexName`.
+//
+// Cancellation: ctx is honored up to and including the moment the WAL
+// entry has been queued (see WriteEntry). Once WriteEntry returns, the
+// heap and tree mutations that follow are part of the durability path
+// and are NOT cancelled by ctx — the durable write either lands fully
+// or the engine enters its degraded state.
+func (se *StorageEngine) Put(ctx context.Context, tableName string, indexName string, key types.Comparable, document string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
@@ -499,7 +519,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 			if !sameComparableKey(docKey, key) {
 				return fmt.Errorf("storage: key informada %v diverge do campo indexado %s=%v", key, indexName, docKey)
 			}
-			return se.writeRowLocked(tableName, document, keys, false)
+			return se.writeRowLocked(ctx, tableName, document, keys, false)
 		}
 	} else {
 		// Fallback to raw bytes
@@ -511,7 +531,7 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 		return err
 	}
 
-	return se.withAutoCommitLocks([]string{resource}, func() error {
+	return se.withAutoCommitLocks(ctx, []string{resource}, func() error {
 		// LSN Management
 		// Geramos o LSN *antes* de escrever no WAL ou Heap para garantir ordem
 		currentLSN := se.lsnTracker.Next()
@@ -582,7 +602,14 @@ func (se *StorageEngine) Put(tableName string, indexName string, key types.Compa
 // bypassing the codec text round-trip. Prefer this over Get for any
 // consumer that does its own decoding (BSON, Protobuf, MessagePack,
 // native structs, etc.).
-func (tx *Transaction) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+// GetBytes returns the raw heap bytes of the visible version of `key`,
+// honoring this transaction's snapshot. ctx is honored at entry only —
+// MVCC chain traversal that follows is bounded by the version chain
+// length on disk.
+func (tx *Transaction) GetBytes(ctx context.Context, tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	se := tx.engine
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
@@ -592,7 +619,7 @@ func (tx *Transaction) GetBytes(tableName string, indexName string, key types.Co
 
 	tx.refreshSnapshot()
 
-	rec, err := se.visibleRecordForKeyRaw(tx, tableName, indexName, key)
+	rec, err := se.visibleRecordForKeyRaw(ctx, tx, tableName, indexName, key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -604,29 +631,38 @@ func (tx *Transaction) GetBytes(tableName string, indexName string, key types.Co
 
 // GetBytes is the auto-commit (snapshot-on-call) variant of
 // Transaction.GetBytes.
-func (se *StorageEngine) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+func (se *StorageEngine) GetBytes(ctx context.Context, tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
 	tx := se.BeginRead()
 	defer tx.Close()
-	return tx.GetBytes(tableName, indexName, key)
+	return tx.GetBytes(ctx, tableName, indexName, key)
 }
 
 // InsertRow insere uma nova linha e atualiza todos os indexs da tabela.
 // Chaves primárias duplicadas fail enquanto o lock exclusivo da tabela está
 // mantido, fechando a corrida check-then-write.
-func (se *StorageEngine) InsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
-	return se.writeRow(tableName, doc, keys, true)
+//
+// Cancellation: same contract as Put — ctx is honored up to WAL queue.
+func (se *StorageEngine) InsertRow(ctx context.Context, tableName string, doc string, keys map[string]types.Comparable) error {
+	return se.writeRow(ctx, tableName, doc, keys, true)
 }
 
 // UpsertRow insere ou atualiza uma linha inteira mantendo todos os indexs
 // sincronizados. Quando a key primária já exists, a versão anterior é
 // tombstoned no heap; entradas antigas de indexs secundários passam a apontar
 // para uma versão not visible a snapshots novos.
-func (se *StorageEngine) UpsertRow(tableName string, doc string, keys map[string]types.Comparable) error {
-	return se.writeRow(tableName, doc, keys, false)
+//
+// Cancellation: same contract as Put.
+func (se *StorageEngine) UpsertRow(ctx context.Context, tableName string, doc string, keys map[string]types.Comparable) error {
+	return se.writeRow(ctx, tableName, doc, keys, false)
 }
 
-// Delete: Remove (DELETE FROM WHERE id = x)
-func (se *StorageEngine) Del(tableName string, indexName string, key types.Comparable) (bool, error) {
+// Del removes the visible version under `key`.
+//
+// Cancellation: same contract as Put — ctx is honored up to WAL queue.
+func (se *StorageEngine) Del(ctx context.Context, tableName string, indexName string, key types.Comparable) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
@@ -653,7 +689,7 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	}
 
 	var wasFound bool
-	err = se.withAutoCommitLocks([]string{resource}, func() error {
+	err = se.withAutoCommitLocks(ctx, []string{resource}, func() error {
 		// LSN Management
 		currentLSN := se.lsnTracker.Next()
 
@@ -748,9 +784,16 @@ func (se *StorageEngine) Del(tableName string, indexName string, key types.Compa
 	return wasFound, nil
 }
 
-// CreateCheckpoint agora faz flush durável do estado page-based.
-// O formato `.chk` legado is not mais usado pelo runtime do engine.
-func (se *StorageEngine) CreateCheckpoint() error {
+// CreateCheckpoint flushes the durable page-based state.
+//
+// Cancellation: ctx is honored up to the WAL.Sync(). Once Sync returns
+// successfully, the on-disk page flushes that follow are NOT cancelled —
+// aborting mid-checkpoint would leave the engine with a partially
+// synced view.
+func (se *StorageEngine) CreateCheckpoint(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
@@ -802,16 +845,25 @@ func (tx *Transaction) refreshSnapshot() {
 	}
 }
 
-// Recover: reconstrói o estado a partir do WAL.
-// NOTA: Deve ser chamado ANTES de qualquer operação concurrent no engine.
-// Durante o recovery, assume acesso exclusivo (startup).
-func (se *StorageEngine) Recover(walPath string) error {
-	return se.RecoverWithCipher(walPath, se.walCipher())
+// Recover rebuilds engine state from the WAL.
+//
+// MUST be called before any concurrent operations; recovery assumes
+// exclusive access to the engine.
+//
+// Cancellation: ctx is checked periodically while replaying the WAL
+// (every 256 entries during physical and logical redo). Cancelling
+// returns early with ctx.Err(); the engine is left in its degraded
+// state and must not be used until a successful Recover happens.
+func (se *StorageEngine) Recover(ctx context.Context, walPath string) error {
+	return se.RecoverWithCipher(ctx, walPath, se.walCipher())
 }
 
-// RecoverWithCipher reconstrói o estado a partir de um WAL cifrado ou em claro.
-// Use diretamente apenas quando o WALWriter do engine not está disponível.
-func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher) error {
+// RecoverWithCipher is Recover with an explicit cipher. Use this only
+// when the engine's WALWriter is not yet available.
+func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, cipher crypto.Cipher) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var maxLSN uint64
 	loadedLSNs := make(map[string]uint64)
 	pageRedoTargets := se.pageRedoTargets()
@@ -831,115 +883,25 @@ func (se *StorageEngine) RecoverWithCipher(walPath string, cipher crypto.Cipher)
 		return nil
 	}
 
-	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	physicalApplied, physicalSkipped, physMaxLSN, err := se.runPhysicalRedo(ctx, walPath, cipher, analysis, pageRedoTargets)
 	if err != nil {
 		return err
 	}
-
-	physicalApplied := 0
-	physicalSkipped := 0
-	count := 0
-	skipped := 0
-
-	for {
-		entry, err := reader.ReadEntry()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			if isExpectedWALTail(err) {
-				break
-			}
-			return fmt.Errorf("physical redo error at entry %d: %w", physicalApplied+physicalSkipped, err)
-		}
-
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
-		}
-		if analysis.CheckpointLSN > 0 && entry.Header.LSN < analysis.CheckpointLSN {
-			physicalSkipped++
-			wal.ReleaseEntry(entry)
-			continue
-		}
-		if entry.Header.EntryType != wal.EntryPageRedo {
-			physicalSkipped++
-			wal.ReleaseEntry(entry)
-			continue
-		}
-		applied, err := se.redoPageEntry(entry, pageRedoTargets)
-		wal.ReleaseEntry(entry)
-		if err != nil {
-			return fmt.Errorf("physical redo apply failed at entry %d: %w", physicalApplied+physicalSkipped, err)
-		}
-		if applied {
-			physicalApplied++
-		} else {
-			physicalSkipped++
-		}
-	}
-	if err := reader.Close(); err != nil {
-		return err
+	if physMaxLSN > maxLSN {
+		maxLSN = physMaxLSN
 	}
 
-	reader, err = wal.NewWALReaderWithCipher(walPath, cipher)
+	count, skipped, logMaxLSN, err := se.runLogicalRedo(ctx, walPath, cipher, analysis, loadedLSNs)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = reader.Close() }()
-
-	for {
-		entry, err := reader.ReadEntry()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			if isExpectedWALTail(err) {
-				break
-			}
-			return fmt.Errorf("recovery error at entry %d: %w", count, err)
-		}
-
-		// Atualiza maxLSN visto
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
-		}
-
-		payload, shouldRedo, err := analysis.shouldRedo(entry)
-		if err != nil {
-			wal.ReleaseEntry(entry)
-			return fmt.Errorf("redo classification failed at entry %d: %w", count, err)
-		}
-		if !shouldRedo {
-			skipped++
-			wal.ReleaseEntry(entry)
-			count++
-			continue
-		}
-
-		switch entry.Header.EntryType {
-		case wal.EntryInsert, wal.EntryUpdate, wal.EntryDelete:
-			if err := se.redoDocumentEntry(entry, payload, loadedLSNs); err != nil {
-				wal.ReleaseEntry(entry)
-				return fmt.Errorf("redo document failed at entry %d: %w", count, err)
-			}
-		case wal.EntryMultiInsert:
-			if err := se.redoMultiInsertEntry(entry, payload, loadedLSNs); err != nil {
-				wal.ReleaseEntry(entry)
-				return fmt.Errorf("redo multi-insert failed at entry %d: %w", count, err)
-			}
-		case wal.EntryCLR:
-			if err := se.redoCompensationEntry(entry, payload); err != nil {
-				wal.ReleaseEntry(entry)
-				return fmt.Errorf("redo clr failed at entry %d: %w", count, err)
-			}
-		default:
-			skipped++
-		}
-
-		wal.ReleaseEntry(entry)
-		count++
+	if logMaxLSN > maxLSN {
+		maxLSN = logMaxLSN
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// 2. Undo-lite: loser txs nunca chegaram ao estado visible porque o
 	// write path só aplica heap/tree after COMMIT durável.
 	if err := se.undoLoserTransactions(walPath, cipher, analysis); err != nil {
@@ -970,10 +932,156 @@ func (se *StorageEngine) walCipher() crypto.Cipher {
 	return se.WAL.Cipher()
 }
 
-// Vacuum performs Garbage Collection on the specified table.
-// It removes dead Tombstones (deleted records visible to no active transaction)
-// and compacts the Heap file, reclaiming space.
-func (se *StorageEngine) Vacuum(tableName string) error {
+// runPhysicalRedo replays page-image WAL entries up to / starting from
+// the checkpoint LSN. ctx is checked every 256 entries.
+func (se *StorageEngine) runPhysicalRedo(ctx context.Context, walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis, pageRedoTargets map[string]pageRedoTarget) (int, int, uint64, error) {
+	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer func() { _ = reader.Close() }()
+
+	applied := 0
+	skipped := 0
+	var maxLSN uint64
+
+	for {
+		if (applied+skipped)&0xFF == 0 {
+			if err := ctx.Err(); err != nil {
+				return applied, skipped, maxLSN, err
+			}
+		}
+		entry, err := reader.ReadEntry()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if isExpectedWALTail(err) {
+				break
+			}
+			return applied, skipped, maxLSN, fmt.Errorf("physical redo error at entry %d: %w", applied+skipped, err)
+		}
+
+		if entry.Header.LSN > maxLSN {
+			maxLSN = entry.Header.LSN
+		}
+		if analysis.CheckpointLSN > 0 && entry.Header.LSN < analysis.CheckpointLSN {
+			skipped++
+			wal.ReleaseEntry(entry)
+			continue
+		}
+		if entry.Header.EntryType != wal.EntryPageRedo {
+			skipped++
+			wal.ReleaseEntry(entry)
+			continue
+		}
+		ok, err := se.redoPageEntry(entry, pageRedoTargets)
+		wal.ReleaseEntry(entry)
+		if err != nil {
+			return applied, skipped, maxLSN, fmt.Errorf("physical redo apply failed at entry %d: %w", applied+skipped, err)
+		}
+		if ok {
+			applied++
+		} else {
+			skipped++
+		}
+	}
+	return applied, skipped, maxLSN, nil
+}
+
+// runLogicalRedo replays the logical (document / multi-index / CLR) WAL
+// entries. ctx is checked every 256 entries.
+func (se *StorageEngine) runLogicalRedo(ctx context.Context, walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis, loadedLSNs map[string]uint64) (int, int, uint64, error) {
+	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer func() { _ = reader.Close() }()
+
+	count := 0
+	skipped := 0
+	var maxLSN uint64
+
+	for {
+		if count&0xFF == 0 {
+			if err := ctx.Err(); err != nil {
+				return count, skipped, maxLSN, err
+			}
+		}
+		entry, err := reader.ReadEntry()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if isExpectedWALTail(err) {
+				break
+			}
+			return count, skipped, maxLSN, fmt.Errorf("recovery error at entry %d: %w", count, err)
+		}
+
+		if entry.Header.LSN > maxLSN {
+			maxLSN = entry.Header.LSN
+		}
+
+		payload, shouldRedo, err := analysis.shouldRedo(entry)
+		if err != nil {
+			wal.ReleaseEntry(entry)
+			return count, skipped, maxLSN, fmt.Errorf("redo classification failed at entry %d: %w", count, err)
+		}
+		if !shouldRedo {
+			skipped++
+			wal.ReleaseEntry(entry)
+			count++
+			continue
+		}
+
+		if err := se.redoLogicalEntry(entry, payload, loadedLSNs); err != nil {
+			var unknownErr *unknownEntryTypeError
+			if goerrors.As(err, &unknownErr) {
+				skipped++
+				wal.ReleaseEntry(entry)
+				count++
+				continue
+			}
+			wal.ReleaseEntry(entry)
+			return count, skipped, maxLSN, fmt.Errorf("redo failed at entry %d: %w", count, err)
+		}
+		wal.ReleaseEntry(entry)
+		count++
+	}
+	return count, skipped, maxLSN, nil
+}
+
+type unknownEntryTypeError struct{ typ uint8 }
+
+func (e *unknownEntryTypeError) Error() string {
+	return fmt.Sprintf("storage: recovery skipped unknown entry type %d", e.typ)
+}
+
+func (se *StorageEngine) redoLogicalEntry(entry *wal.WALEntry, payload []byte, loadedLSNs map[string]uint64) error {
+	switch entry.Header.EntryType {
+	case wal.EntryInsert, wal.EntryUpdate, wal.EntryDelete:
+		return se.redoDocumentEntry(entry, payload, loadedLSNs)
+	case wal.EntryMultiInsert:
+		return se.redoMultiInsertEntry(entry, payload, loadedLSNs)
+	case wal.EntryCLR:
+		return se.redoCompensationEntry(entry, payload)
+	default:
+		return &unknownEntryTypeError{typ: entry.Header.EntryType}
+	}
+}
+
+// Vacuum performs garbage collection on `tableName`, removing dead
+// tombstones (deleted records visible to no active transaction) and
+// compacting the heap.
+//
+// Cancellation: ctx is honored at entry and inside the heap's per-page
+// loop. Cancellation between pages returns ctx.Err() without leaving
+// the on-disk state in an inconsistent shape (vacuum is page-local).
+func (se *StorageEngine) Vacuum(ctx context.Context, tableName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	se.opMu.RLock()
 	defer se.opMu.RUnlock()
 	if err := se.runtimeReadyError(); err != nil {
@@ -999,7 +1107,7 @@ func (se *StorageEngine) Vacuum(tableName string) error {
 	// reads caem em ErrVacuumed (tratado como fim de chain no
 	// engine.Get).
 	if heapV2, ok := table.Heap.(*v2.HeapV2); ok {
-		n, err := heapV2.Vacuum(minLSN)
+		n, err := heapV2.Vacuum(ctx, minLSN)
 		if err != nil {
 			return fmt.Errorf("Vacuum v2 failed for table %s: %w", tableName, err)
 		}

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -43,21 +44,21 @@ func TestWriteTransaction_DeadlockVictimReleasesLocks(t *testing.T) {
 	tx1 := se.BeginWriteTransaction()
 	tx2 := se.BeginWriteTransaction()
 
-	if err := tx1.Put("users", "id", types.IntKey(1), `{"id":1,"owner":"tx1"}`); err != nil {
+	if err := tx1.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"owner":"tx1"}`); err != nil {
 		t.Fatalf("tx1 put key1: %v", err)
 	}
-	if err := tx2.Put("users", "id", types.IntKey(2), `{"id":2,"owner":"tx2"}`); err != nil {
+	if err := tx2.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"owner":"tx2"}`); err != nil {
 		t.Fatalf("tx2 put key2: %v", err)
 	}
 
 	tx1ErrCh := make(chan error, 1)
 	go func() {
-		tx1ErrCh <- tx1.Put("users", "id", types.IntKey(2), `{"id":2,"owner":"tx1"}`)
+		tx1ErrCh <- tx1.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"owner":"tx1"}`)
 	}()
 
 	time.Sleep(20 * time.Millisecond)
 
-	tx2Err := tx2.Put("users", "id", types.IntKey(1), `{"id":1,"owner":"tx2"}`)
+	tx2Err := tx2.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"owner":"tx2"}`)
 	if !errors.Is(tx2Err, ErrDeadlockVictim) {
 		t.Fatalf("expected deadlock victim error, got %v", tx2Err)
 	}
@@ -71,10 +72,10 @@ func TestWriteTransaction_DeadlockVictimReleasesLocks(t *testing.T) {
 		t.Fatal("tx1 did not acquire second key after deadlock victim abort")
 	}
 
-	if err := tx1.Commit(); err != nil {
+	if err := tx1.Commit(context.Background()); err != nil {
 		t.Fatalf("tx1 commit: %v", err)
 	}
-	if err := tx2.Commit(); !errors.Is(err, ErrDeadlockVictim) {
+	if err := tx2.Commit(context.Background()); !errors.Is(err, ErrDeadlockVictim) {
 		t.Fatalf("expected tx2 commit to report deadlock victim, got %v", err)
 	}
 
@@ -95,10 +96,10 @@ func TestWriteTransaction_DeadlockVictimReleasesLocks(t *testing.T) {
 	}
 
 	tx3 := se.BeginWriteTransaction()
-	if err := tx3.Put("users", "id", types.IntKey(1), `{"id":1,"owner":"tx3"}`); err != nil {
+	if err := tx3.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"owner":"tx3"}`); err != nil {
 		t.Fatalf("tx3 should acquire key1 after victim cleanup: %v", err)
 	}
-	if err := tx3.Rollback(); err != nil {
+	if err := tx3.Rollback(context.Background()); err != nil {
 		t.Fatalf("tx3 rollback: %v", err)
 	}
 }
@@ -137,13 +138,13 @@ func TestStorageEngine_PutWaitsForLogicalKeyLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resource key: %v", err)
 	}
-	if err := se.LockManager.Acquire(9001, resource); err != nil {
+	if err := se.LockManager.Acquire(context.Background(), 9001, resource); err != nil {
 		t.Fatalf("pre-acquire logical key lock: %v", err)
 	}
 
 	putDone := make(chan error, 1)
 	go func() {
-		putDone <- se.Put("users", "id", types.IntKey(1), `{"id":1,"owner":"autocommit"}`)
+		putDone <- se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"owner":"autocommit"}`)
 	}()
 
 	select {

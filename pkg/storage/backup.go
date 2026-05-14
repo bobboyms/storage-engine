@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -46,14 +47,25 @@ type pathProvider interface {
 	Path() string
 }
 
-// BackupOnline cria um snapshot consistente do engine com ele aberto.
-// Escritas ficam pausadas durante o checkpoint/cópia; reads continuam.
-func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error) {
+// BackupOnline creates a consistent snapshot of the engine while it
+// stays open. Writes are paused during checkpoint/copy; reads continue.
+//
+// Cancellation: ctx is honored at entry, before taking opMu (so we do
+// not block the entire engine on a doomed backup), and once per file
+// during the copy loop.
+func (se *StorageEngine) BackupOnline(ctx context.Context, backupDir string) (*BackupManifest, error) {
 	if backupDir == "" {
 		return nil, fmt.Errorf("backup: backupDir empty")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if err := prepareEmptyBackupDir(backupDir); err != nil {
+		return nil, err
+	}
+
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
@@ -64,7 +76,7 @@ func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error)
 	}
 
 	if se.WAL != nil {
-		if err := se.fuzzyCheckpointLocked(); err != nil {
+		if err := se.fuzzyCheckpointLocked(ctx); err != nil {
 			return nil, fmt.Errorf("backup: checkpoint: %w", err)
 		}
 	} else if err := se.flushAllDirtyPages(); err != nil {
@@ -98,6 +110,9 @@ func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error)
 	}
 
 	for _, src := range sources {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		abs, err := filepath.Abs(src.path)
 		if err != nil {
 			return nil, err
@@ -140,8 +155,12 @@ func (se *StorageEngine) BackupOnline(backupDir string) (*BackupManifest, error)
 	return manifest, nil
 }
 
-// VerifyBackup valida manifest, tamanho e SHA-256 de cada arquivo copiado.
-func VerifyBackup(backupDir string) (*BackupManifest, error) {
+// VerifyBackup validates manifest, size, and SHA-256 of each copied file.
+// ctx is honored per file (verification hashes every byte).
+func VerifyBackup(ctx context.Context, backupDir string) (*BackupManifest, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	manifest, err := readBackupManifest(backupDir)
 	if err != nil {
 		return nil, err
@@ -156,6 +175,9 @@ func VerifyBackup(backupDir string) (*BackupManifest, error) {
 	filesDir := filepath.Join(backupDir, backupFilesDirName)
 	seen := make(map[string]struct{}, len(manifest.Files))
 	for _, file := range manifest.Files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		rel := filepath.FromSlash(file.Path)
 		if err := validateBackupRelPath(rel); err != nil {
 			return nil, err
@@ -179,13 +201,13 @@ func VerifyBackup(backupDir string) (*BackupManifest, error) {
 	return manifest, nil
 }
 
-// RestoreBackup verifica um backup e restaura seus arquivos em targetDir.
-// Arquivos existsntes are not sobrescritos.
-func RestoreBackup(backupDir, targetDir string) (*BackupManifest, error) {
+// RestoreBackup verifies a backup and restores its files to targetDir.
+// Existing files are NOT overwritten. ctx is honored per file.
+func RestoreBackup(ctx context.Context, backupDir, targetDir string) (*BackupManifest, error) {
 	if targetDir == "" {
 		return nil, fmt.Errorf("restore: empty targetDir")
 	}
-	manifest, err := VerifyBackup(backupDir)
+	manifest, err := VerifyBackup(ctx, backupDir)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +217,9 @@ func RestoreBackup(backupDir, targetDir string) (*BackupManifest, error) {
 
 	filesDir := filepath.Join(backupDir, backupFilesDirName)
 	for _, file := range manifest.Files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		rel := filepath.FromSlash(file.Path)
 		if err := validateBackupRelPath(rel); err != nil {
 			return nil, err

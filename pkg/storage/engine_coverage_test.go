@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,8 +25,8 @@ func TestRecover_WALOnly(t *testing.T) {
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
-	se.Put("users", "id", types.IntKey(1), "one")
-	se.Put("users", "id", types.IntKey(2), "two")
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "one")
+	se.Put(context.Background(), "users", "id", types.IntKey(2), "two")
 	se.Close()
 
 	// 2. Recover (No Checkpoint exists)
@@ -48,7 +49,7 @@ func TestRecover_WALOnly(t *testing.T) {
 	}
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
@@ -70,7 +71,7 @@ func TestRecover_MissingTable(t *testing.T) {
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(mgr1, walWriter)
-	se.Put("ghost", "id", types.IntKey(1), "boo")
+	se.Put(context.Background(), "ghost", "id", types.IntKey(1), "boo")
 	se.Close()
 
 	// 2. Restart with only "users" table
@@ -83,7 +84,7 @@ func TestRecover_MissingTable(t *testing.T) {
 	defer se2.Close()
 
 	// Should not fail, just skip "ghost" entries
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover should ignore missing table, but got error: %v", err)
 	}
 }
@@ -99,7 +100,7 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(mgr, walWriter)
-	se.Put("users", "id", types.IntKey(1), "good")
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "good")
 	se.Close()
 
 	// 2. Append garbage
@@ -125,7 +126,7 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	}
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err == nil {
+	if err := se2.Recover(context.Background(), walPath); err == nil {
 		t.Fatal("Expected error for corrupted WAL")
 	}
 }
@@ -138,7 +139,7 @@ func TestPut_InvalidKeyType_Coverage(t *testing.T) {
 
 	se, _ := storage.NewStorageEngine(mgr, nil)
 
-	err := se.Put("users", "id", types.VarcharKey("bad"), `{"id": "bad"}`)
+	err := se.Put(context.Background(), "users", "id", types.VarcharKey("bad"), `{"id": "bad"}`)
 	if err == nil {
 		t.Error("Expected InvalidKeyTypeError")
 	} else if _, ok := err.(*errors.InvalidKeyTypeError); !ok {
@@ -155,7 +156,7 @@ func TestPut_KeyNotFoundInDoc(t *testing.T) {
 	se, _ := storage.NewStorageEngine(mgr, nil)
 
 	// Document doesn't contain "id"
-	err := se.Put("users", "id", types.IntKey(1), `{"name":"missing_id"}`)
+	err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"name":"missing_id"}`)
 	if err == nil {
 		t.Error("Expected error when key is missing in document")
 	}
@@ -175,7 +176,7 @@ func TestPut_WALWriteError(t *testing.T) {
 	// Force close the underlying file of WAL
 	se.WAL.Close()
 
-	err := se.Put("users", "id", types.IntKey(1), "{}")
+	err := se.Put(context.Background(), "users", "id", types.IntKey(1), "{}")
 	if err == nil {
 		t.Log("Warning: WAL write did not fail as expected, possibly due to buffering.")
 		return
@@ -195,7 +196,7 @@ func TestDel_WALWriteError(t *testing.T) {
 
 	se.WAL.Close()
 
-	_, err := se.Del("users", "id", types.IntKey(1))
+	_, err := se.Del(context.Background(), "users", "id", types.IntKey(1))
 	if err == nil {
 		t.Log("Warning: WAL write did not fail as expected (buffering)")
 		return
@@ -235,7 +236,7 @@ func TestRecover_InvalidPayload(t *testing.T) {
 	}
 	defer se.Close()
 
-	if err := se.Recover(walPath); err == nil {
+	if err := se.Recover(context.Background(), walPath); err == nil {
 		t.Error("Expected error for invalid payload")
 	}
 }
@@ -254,7 +255,7 @@ func TestRecover_IgnoresLegacyCheckpointFile(t *testing.T) {
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 	se.Close()
@@ -275,7 +276,7 @@ func TestRecover_IgnoresLegacyCheckpointFile(t *testing.T) {
 	se2, _ := storage.NewStorageEngine(tableMgr2, walWriter2)
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover should ignore legacy .chk files, got: %v", err)
 	}
 

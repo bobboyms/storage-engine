@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"log/slog"
@@ -114,22 +115,22 @@ func main() {
 	for i := 1; i <= 5; i++ {
 		doc := fmt.Sprintf(`{"id": %d, "name": "item-%d", "ts": %q}`,
 			i, i, time.Now().UTC().Format(time.RFC3339))
-		if err := se.InsertRow("products", doc, map[string]types.Comparable{
+		if err := se.InsertRow(context.Background(), "products", doc, map[string]types.Comparable{
 			"id": types.IntKey(i),
 		}); err != nil {
 			log.Fatalf("InsertRow: %v", err)
 		}
 	}
 
-	if _, err := se.Del("products", "id", types.IntKey(3)); err != nil {
+	if _, err := se.Del(context.Background(), "products", "id", types.IntKey(3)); err != nil {
 		log.Fatalf("Del: %v", err)
 	}
 
-	if err := se.Vacuum("products"); err != nil {
+	if err := se.Vacuum(context.Background(), "products"); err != nil {
 		log.Fatalf("Vacuum: %v", err)
 	}
 
-	if err := se.FuzzyCheckpoint(); err != nil {
+	if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 		log.Fatalf("FuzzyCheckpoint: %v", err)
 	}
 

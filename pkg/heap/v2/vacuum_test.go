@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -186,7 +187,7 @@ func TestHeapV2_Vacuum_AggregatesPages(t *testing.T) {
 	}
 
 	// Vacuum com minLSN bem alto (todos os tombstones são elegíveis)
-	total, err := h.Vacuum(9999)
+	total, err := h.Vacuum(context.Background(), 9999)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +221,7 @@ func TestHeapV2_MVCC_ChainWalkTerminatesAtVacuumed(t *testing.T) {
 
 	// Marca v1 como deleted e vacuuma
 	_ = h.Delete(v1, 40)
-	n, err := h.Vacuum(100)
+	n, err := h.Vacuum(context.Background(), 100)
 	if err != nil {
 		t.Fatal(err)
 	}

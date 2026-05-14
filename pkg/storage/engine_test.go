@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,7 +44,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 
 	// Put data
 	doc := "{\"id\":10,\"name\":\"Alice\"}"
-	err = se.Put("users", "id", types.IntKey(10), doc)
+	err = se.Put(context.Background(), "users", "id", types.IntKey(10), doc)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Test Del
-	ok, err := se.Del("users", "id", types.IntKey(10))
+	ok, err := se.Del(context.Background(), "users", "id", types.IntKey(10))
 	if err != nil {
 		t.Fatalf("Del failed: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestEngine_GetAndDel(t *testing.T) {
 	}
 
 	// Test Del missing
-	ok, err = se.Del("users", "id", types.IntKey(99))
+	ok, err = se.Del(context.Background(), "users", "id", types.IntKey(99))
 	if err != nil {
 		t.Fatalf("Del failed: %v", err)
 	}
@@ -113,23 +114,23 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	}
 
 	// 2. Insert Data (Will be in Checkpoint)
-	se.Put("test", "id", types.IntKey(10), "val_10")
-	se.Put("test", "id", types.IntKey(20), "val_20")
+	se.Put(context.Background(), "test", "id", types.IntKey(10), "val_10")
+	se.Put(context.Background(), "test", "id", types.IntKey(20), "val_20")
 
 	// 3. Create Checkpoint
-	if err := se.CreateCheckpoint(); err != nil {
+	if err := se.CreateCheckpoint(context.Background()); err != nil {
 		t.Fatalf("Checkpoint failed: %v", err)
 	}
 
 	// 4. Insert Data (Will be in WAL only)
-	se.Put("test", "id", types.IntKey(30), "val_30")
-	se.Put("test", "id", types.IntKey(40), "val_40")
+	se.Put(context.Background(), "test", "id", types.IntKey(30), "val_30")
+	se.Put(context.Background(), "test", "id", types.IntKey(40), "val_40")
 
 	// 5. Update a value (WAL should override Checkpoint)
-	se.Put("test", "id", types.IntKey(10), "val_10_updated")
+	se.Put(context.Background(), "test", "id", types.IntKey(10), "val_10_updated")
 
 	// 6. Delete a value (WAL should reflect deletion)
-	se.Del("test", "id", types.IntKey(20))
+	se.Del(context.Background(), "test", "id", types.IntKey(20))
 
 	se.Close()
 
@@ -159,7 +160,7 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 	}
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
@@ -206,7 +207,7 @@ func TestEngine_ReadCommitted(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tableMgr, nil)
 	defer se.Close()
 
-	se.Put("users", "id", types.IntKey(1), "v1")
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "v1")
 
 	tx := se.BeginTransaction(storage.ReadCommitted)
 	val, found, _ := getDocStringExtTx(t, tx, "users", "id", types.IntKey(1))
@@ -215,7 +216,7 @@ func TestEngine_ReadCommitted(t *testing.T) {
 	}
 
 	// Update data
-	se.Put("users", "id", types.IntKey(1), "v2")
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "v2")
 
 	// ReadCommitted should see v2 because it refreshes snapshot
 	val, _, _ = getDocStringExtTx(t, tx, "users", "id", types.IntKey(1))
@@ -269,7 +270,7 @@ func TestEngine_RecoverErrors(t *testing.T) {
 
 	walWriter2, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se2, _ := storage.NewStorageEngine(tableMgr2, walWriter2)
-	err := se2.Recover(walPath)
+	err := se2.Recover(context.Background(), walPath)
 	if err != nil {
 		t.Fatalf("Recover should ignore legacy checkpoint files: %v", err)
 	}
@@ -287,8 +288,8 @@ func TestEngine_RecoverDelete(t *testing.T) {
 
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(tableMgr, walWriter)
-	se.Put("users", "id", types.IntKey(1), "v1")
-	se.Del("users", "id", types.IntKey(1))
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "v1")
+	se.Del(context.Background(), "users", "id", types.IntKey(1))
 	se.Close()
 
 	// Reopen and recover
@@ -300,7 +301,7 @@ func TestEngine_RecoverDelete(t *testing.T) {
 	tableMgr2.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm2)
 
 	se2, _ := storage.NewStorageEngine(tableMgr2, walWriter2)
-	err := se2.Recover(walPath)
+	err := se2.Recover(context.Background(), walPath)
 	if err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
@@ -320,10 +321,10 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tableMgr, nil)
 	defer se.Close()
 
-	se.Put("users", "id", types.IntKey(1), "v1")
+	se.Put(context.Background(), "users", "id", types.IntKey(1), "v1")
 
 	tx := se.BeginTransaction(storage.RepeatableRead)
-	se.Put("users", "id", types.IntKey(2), "v2") // Uncommitted for this tx if it were Snapshot?
+	se.Put(context.Background(), "users", "id", types.IntKey(2), "v2") // Uncommitted for this tx if it were Snapshot?
 	// Actually Put on engine is a separate transaction.
 
 	// Scan on tx (snapshot state)
@@ -338,7 +339,7 @@ func TestEngine_ScanInvisible(t *testing.T) {
 	}
 
 	tx2 := se.BeginTransaction(storage.RepeatableRead)
-	se.Put("users", "id", types.IntKey(3), "v3")
+	se.Put(context.Background(), "users", "id", types.IntKey(3), "v3")
 
 	// tx2 should not see v3 yet? No, Put on engine is committed immediately.
 	results2, _ := scanRangeDocsExtTx(t, tx2, "users", "id", nil, nil)
@@ -365,7 +366,7 @@ func TestEngine_RecoverInvalidWAL(t *testing.T) {
 
 	se, _ := storage.NewStorageEngine(tableMgr, nil)
 
-	err := se.Recover(walPath)
+	err := se.Recover(context.Background(), walPath)
 	if err == nil {
 		t.Error("Expected error recovering from invalid WAL file")
 	}
@@ -376,7 +377,7 @@ func TestEngine_PutError_InvalidTable(t *testing.T) {
 	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	defer se.Close()
 
-	err := se.Put("invalid", "id", types.IntKey(1), "{}")
+	err := se.Put(context.Background(), "invalid", "id", types.IntKey(1), "{}")
 	if err == nil {
 		t.Error("Expected error for invalid table")
 	}
@@ -391,7 +392,7 @@ func TestEngine_PutError_InvalidIndex(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tableMgr, nil)
 	defer se.Close()
 
-	err := se.Put("users", "invalid_idx", types.IntKey(1), "{}")
+	err := se.Put(context.Background(), "users", "invalid_idx", types.IntKey(1), "{}")
 	if err == nil {
 		t.Error("Expected error for invalid index")
 	}
@@ -402,7 +403,7 @@ func TestEngine_DelError_InvalidTable(t *testing.T) {
 	se, _ := storage.NewStorageEngine(storage.NewTableMenager(), nil)
 	defer se.Close()
 
-	_, err := se.Del("invalid", "id", types.IntKey(1))
+	_, err := se.Del(context.Background(), "invalid", "id", types.IntKey(1))
 	if err == nil {
 		t.Error("Expected error for invalid table")
 	}
@@ -417,7 +418,7 @@ func TestEngine_DelError_InvalidIndex(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tableMgr, nil)
 	defer se.Close()
 
-	_, err := se.Del("users", "invalid_idx", types.IntKey(1))
+	_, err := se.Del(context.Background(), "users", "invalid_idx", types.IntKey(1))
 	if err == nil {
 		t.Error("Expected error for invalid index")
 	}

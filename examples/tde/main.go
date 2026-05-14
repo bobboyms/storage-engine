@@ -14,6 +14,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -62,7 +63,7 @@ func main() {
 	secretEmail := "tde-secret-card-4111@example.com"
 	secretDoc := `{"email":"tde-secret-card-4111@example.com","balance":2500,"note":"tde-secret-card-4111"}`
 
-	if err := se.Put(tableName, indexName, types.VarcharKey(secretEmail), secretDoc); err != nil {
+	if err := se.Put(context.Background(), tableName, indexName, types.VarcharKey(secretEmail), secretDoc); err != nil {
 		_ = se.Close()
 		fmt.Printf("error gravando documento: %v\n", err)
 		return

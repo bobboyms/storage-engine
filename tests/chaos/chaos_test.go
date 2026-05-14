@@ -4,6 +4,7 @@ package chaos_test
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,7 +23,7 @@ import (
 var chaosCodec = bsoncodec.New()
 
 func fetchDocText(t testing.TB, se *storage.StorageEngine, key int) (string, bool, error) {
-	raw, found, err := se.GetBytes("t", "id", types.IntKey(int64(key)))
+	raw, found, err := se.GetBytes(context.Background(), "t", "id", types.IntKey(int64(key)))
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -220,7 +221,7 @@ func TestChaosChildProcess(t *testing.T) {
 
 	for i := 1; i <= ops; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"value":"crash-%d"}`, i, i)
-		if err := se.Put("t", "id", types.IntKey(int64(i)), doc); err != nil {
+		if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc); err != nil {
 			t.Fatalf("put %d: %v", i, err)
 		}
 		appendOracle(t, p.oracle, i, doc)
@@ -237,14 +238,14 @@ func TestChaosRepeatedReopenRecovery(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			key := cycle*1000 + i
 			doc := fmt.Sprintf(`{"id":%d,"cycle":%d}`, key, cycle)
-			if err := se.Put("t", "id", types.IntKey(int64(key)), doc); err != nil {
+			if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(key)), doc); err != nil {
 				_ = se.Close()
 				t.Fatalf("cycle %d put %d: %v", cycle, key, err)
 			}
 			want[key] = doc
 		}
 		if cycle%10 == 0 {
-			if err := se.FuzzyCheckpoint(); err != nil {
+			if err := se.FuzzyCheckpoint(context.Background()); err != nil {
 				_ = se.Close()
 				t.Fatalf("cycle %d checkpoint: %v", cycle, err)
 			}

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
@@ -44,6 +45,7 @@ type Iterator interface {
 // storageIterator wraps a btreev2.Cursor with MVCC visibility resolution
 // against the originating transaction's snapshot.
 type storageIterator struct {
+	ctx    context.Context
 	tx     *Transaction
 	table  *Table
 	cursor *btreev2.Cursor
@@ -62,7 +64,16 @@ type storageIterator struct {
 // For ReadCommitted, the iterator captures the snapshot at the moment it
 // is created and keeps that view for its whole lifetime — otherwise a
 // long-running scan could observe rows from multiple commit epochs.
-func (tx *Transaction) NewIterator(tableName, indexName string, opts IterOptions) (Iterator, error) {
+//
+// The supplied ctx governs the iterator's whole lifetime: every Next()
+// call short-circuits to false and surfaces ctx.Err() via Err() once
+// ctx is cancelled or expires. Close() is still required to release the
+// pinned leaf latch even after cancellation.
+func (tx *Transaction) NewIterator(ctx context.Context, tableName, indexName string, opts IterOptions) (Iterator, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	se := tx.engine
 	se.opMu.RLock()
 	if err := se.runtimeReadyError(); err != nil {
@@ -96,6 +107,7 @@ func (tx *Transaction) NewIterator(tableName, indexName string, opts IterOptions
 	}
 
 	it := &storageIterator{
+		ctx:    ctx,
 		tx:     tx,
 		table:  table,
 		cursor: cur,
@@ -107,9 +119,9 @@ func (tx *Transaction) NewIterator(tableName, indexName string, opts IterOptions
 // NewIterator on the engine is a wrapper that opens a snapshot read
 // transaction whose lifetime is tied to the returned iterator. Close on
 // the iterator closes the transaction too.
-func (se *StorageEngine) NewIterator(tableName, indexName string, opts IterOptions) (Iterator, error) {
+func (se *StorageEngine) NewIterator(ctx context.Context, tableName, indexName string, opts IterOptions) (Iterator, error) {
 	tx := se.BeginRead()
-	it, err := tx.NewIterator(tableName, indexName, opts)
+	it, err := tx.NewIterator(ctx, tableName, indexName, opts)
 	if err != nil {
 		tx.Close()
 		return nil, err
@@ -121,14 +133,22 @@ func (it *storageIterator) Next() bool {
 	if it.closed || it.err != nil {
 		return false
 	}
+	if err := it.ctx.Err(); err != nil {
+		it.err = err
+		return false
+	}
 	for it.cursor.Next() {
 		offset := it.cursor.Value()
-		rec, err := it.tx.engine.readVisibleRecordRaw(it.tx, it.table, it.cursor.Key(), offset)
+		rec, err := it.tx.engine.readVisibleRecordRaw(it.ctx, it.tx, it.table, it.cursor.Key(), offset)
 		if err != nil {
 			it.err = err
 			return false
 		}
 		if !rec.Found {
+			if err := it.ctx.Err(); err != nil {
+				it.err = err
+				return false
+			}
 			continue
 		}
 		it.curKey = it.cursor.Key()

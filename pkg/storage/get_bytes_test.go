@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,11 +36,11 @@ func newGetBytesEngine(t *testing.T) *storage.StorageEngine {
 
 func TestGetBytes_ReturnsRawHeapPayload(t *testing.T) {
 	se := newGetBytesEngine(t)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	raw, found, err := se.GetBytes("users", "id", types.IntKey(1))
+	raw, found, err := se.GetBytes(context.Background(), "users", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("GetBytes: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestGetBytes_ReturnsRawHeapPayload(t *testing.T) {
 
 func TestGetBytes_MissingKeyReturnsFalseNoError(t *testing.T) {
 	se := newGetBytesEngine(t)
-	raw, found, err := se.GetBytes("users", "id", types.IntKey(42))
+	raw, found, err := se.GetBytes(context.Background(), "users", "id", types.IntKey(42))
 	if err != nil {
 		t.Fatalf("GetBytes: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestGetBytes_MissingKeyReturnsFalseNoError(t *testing.T) {
 
 func TestGetBytes_TransactionRespectsSnapshot(t *testing.T) {
 	se := newGetBytesEngine(t)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"v":"old"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"v":"old"}`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -80,11 +81,11 @@ func TestGetBytes_TransactionRespectsSnapshot(t *testing.T) {
 	defer tx.Close()
 
 	// Overwrite after snapshot capture.
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"v":"new"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"v":"new"}`); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
 
-	raw, found, err := tx.GetBytes("users", "id", types.IntKey(1))
+	raw, found, err := tx.GetBytes(context.Background(), "users", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("GetBytes: found=%v err=%v", found, err)
 	}

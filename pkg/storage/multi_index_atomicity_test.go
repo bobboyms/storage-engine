@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -42,14 +43,14 @@ func TestUpsertRowMaintainsSecondaryIndexesWhenIndexedFieldChanges(t *testing.T)
 	se, cleanup := newMultiIndexEngine(t)
 	defer cleanup()
 
-	if err := se.InsertRow("users", `{"id":1,"email":"old@example.com","name":"Alice"}`, map[string]types.Comparable{
+	if err := se.InsertRow(context.Background(), "users", `{"id":1,"email":"old@example.com","name":"Alice"}`, map[string]types.Comparable{
 		"id":    types.IntKey(1),
 		"email": types.VarcharKey("old@example.com"),
 	}); err != nil {
 		t.Fatalf("InsertRow: %v", err)
 	}
 
-	if err := se.UpsertRow("users", `{"id":1,"email":"new@example.com","name":"Alice Updated"}`, map[string]types.Comparable{
+	if err := se.UpsertRow(context.Background(), "users", `{"id":1,"email":"new@example.com","name":"Alice Updated"}`, map[string]types.Comparable{
 		"id":    types.IntKey(1),
 		"email": types.VarcharKey("new@example.com"),
 	}); err != nil {
@@ -75,10 +76,10 @@ func TestPutWithFullJSONMaintainsAllIndexes(t *testing.T) {
 	se, cleanup := newMultiIndexEngine(t)
 	defer cleanup()
 
-	if err := se.Put("users", "id", types.IntKey(7), `{"id":7,"email":"one@example.com","name":"One"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(7), `{"id":7,"email":"one@example.com","name":"One"}`); err != nil {
 		t.Fatalf("Put insert: %v", err)
 	}
-	if err := se.Put("users", "id", types.IntKey(7), `{"id":7,"email":"two@example.com","name":"Two"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(7), `{"id":7,"email":"two@example.com","name":"Two"}`); err != nil {
 		t.Fatalf("Put update: %v", err)
 	}
 
@@ -102,7 +103,7 @@ func TestInsertRowDuplicatePrimaryKeyRace(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer wg.Done()
-			err := se.InsertRow("users", `{"id":99,"email":"race@example.com","name":"Race"}`, map[string]types.Comparable{
+			err := se.InsertRow(context.Background(), "users", `{"id":99,"email":"race@example.com","name":"Race"}`, map[string]types.Comparable{
 				"id":    types.IntKey(99),
 				"email": types.VarcharKey("race@example.com"),
 			})
@@ -153,13 +154,13 @@ func TestMultiIndexUpsertRecoveryMaintainsChangedSecondaryKey(t *testing.T) {
 	}
 
 	se := open(t)
-	if err := se.InsertRow("users", `{"id":5,"email":"before@example.com","name":"Before"}`, map[string]types.Comparable{
+	if err := se.InsertRow(context.Background(), "users", `{"id":5,"email":"before@example.com","name":"Before"}`, map[string]types.Comparable{
 		"id":    types.IntKey(5),
 		"email": types.VarcharKey("before@example.com"),
 	}); err != nil {
 		t.Fatalf("InsertRow: %v", err)
 	}
-	if err := se.UpsertRow("users", `{"id":5,"email":"after@example.com","name":"After"}`, map[string]types.Comparable{
+	if err := se.UpsertRow(context.Background(), "users", `{"id":5,"email":"after@example.com","name":"After"}`, map[string]types.Comparable{
 		"id":    types.IntKey(5),
 		"email": types.VarcharKey("after@example.com"),
 	}); err != nil {

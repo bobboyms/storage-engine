@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -323,7 +324,10 @@ func (h *HeapV2) Sync() error {
 //
 // Concorrência: usa FetchForWrite por page, então Writes em OUTRAS
 // pages podem prosseguir em paralelo. Writes na mesma page esperam.
-func (h *HeapV2) Vacuum(minLSN uint64) (int, error) {
+func (h *HeapV2) Vacuum(ctx context.Context, minLSN uint64) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// FlushAll antes de iterar: pages newly allocated via NewPage ficam
 	// no BufferPool com dirty=true mas PageFile.NumPages() só aumenta
 	// quando WritePage é chamado. Sem o flush, pages novas ficariam
@@ -336,6 +340,11 @@ func (h *HeapV2) Vacuum(minLSN uint64) (int, error) {
 	total := 0
 
 	for pageID := pagestore.PageID(1); uint64(pageID) < numPages; pageID++ {
+		if pageID%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return total, err
+			}
+		}
 		handle, err := h.bp.FetchForWrite(pageID)
 		if err != nil {
 			return total, err

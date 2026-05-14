@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -42,7 +43,7 @@ func decodeDoc(raw []byte) string {
 }
 
 func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool) {
-	raw, found, err := engine.GetBytes(table, idx, key)
+	raw, found, err := engine.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", false
 	}
@@ -50,7 +51,7 @@ func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Compar
 }
 
 func collectRange(engine *storage.StorageEngine, table, idx string, lo, hi types.Comparable) []string {
-	it, err := engine.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	it, err := engine.NewIterator(context.Background(), table, idx, storage.IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		fmt.Printf("iterator error: %v\n", err)
 		return nil
@@ -77,7 +78,7 @@ func main() {
 	fmt.Println("=== TypeInt ===")
 	for i := int64(1); i <= 5; i++ {
 		doc := fmt.Sprintf(`{"id": %d, "type": "integer", "value": %d}`, i, i*100)
-		engine.Put("int_table", "id", types.IntKey(i), doc)
+		engine.Put(context.Background(), "int_table", "id", types.IntKey(i), doc)
 	}
 	if doc, ok := fetchDoc(engine, "int_table", "id", types.IntKey(3)); ok {
 		fmt.Printf("  IntKey(3): %s\n", doc)
@@ -89,7 +90,7 @@ func main() {
 	names := []string{"Alice", "Bob", "Charlie", "Diana", "Eve"}
 	for _, name := range names {
 		doc := fmt.Sprintf(`{"name": "%s", "type": "string"}`, name)
-		engine.Put("string_table", "name", types.VarcharKey(name), doc)
+		engine.Put(context.Background(), "string_table", "name", types.VarcharKey(name), doc)
 	}
 	if doc, ok := fetchDoc(engine, "string_table", "name", types.VarcharKey("Charlie")); ok {
 		fmt.Printf("  VarcharKey(\"Charlie\"): %s\n", doc)
@@ -101,7 +102,7 @@ func main() {
 	prices := []float64{1.99, 5.50, 10.00, 25.75, 99.99}
 	for _, price := range prices {
 		doc := fmt.Sprintf(`{"price": %.2f, "type": "float"}`, price)
-		engine.Put("float_table", "price", types.FloatKey(price), doc)
+		engine.Put(context.Background(), "float_table", "price", types.FloatKey(price), doc)
 	}
 	if doc, ok := fetchDoc(engine, "float_table", "price", types.FloatKey(10.00)); ok {
 		fmt.Printf("  FloatKey(10.00): %s\n", doc)
@@ -110,7 +111,7 @@ func main() {
 	// filtering the cursor key. The engine itself only understands range
 	// bounds; consumer-side predicates live up here now.
 	var aboveFive []string
-	it, _ := engine.NewIterator("float_table", "price", storage.IterOptions{Lower: types.FloatKey(5.00)})
+	it, _ := engine.NewIterator(context.Background(), "float_table", "price", storage.IterOptions{Lower: types.FloatKey(5.00)})
 	for it.Next() {
 		if it.Key().Compare(types.FloatKey(5.00)) <= 0 {
 			continue
@@ -122,8 +123,8 @@ func main() {
 
 	// 4. TypeBoolean
 	fmt.Println("\n=== TypeBoolean ===")
-	engine.Put("bool_table", "active", types.BoolKey(false), `{"user": "inactive1", "active": false}`)
-	engine.Put("bool_table", "active", types.BoolKey(true), `{"user": "active1", "active": true}`)
+	engine.Put(context.Background(), "bool_table", "active", types.BoolKey(false), `{"user": "inactive1", "active": false}`)
+	engine.Put(context.Background(), "bool_table", "active", types.BoolKey(true), `{"user": "active1", "active": true}`)
 	if doc, ok := fetchDoc(engine, "bool_table", "active", types.BoolKey(true)); ok {
 		fmt.Printf("  BoolKey(true):  %s\n", doc)
 	}
@@ -143,13 +144,13 @@ func main() {
 	}
 	for _, date := range dates {
 		doc := fmt.Sprintf(`{"date": "%s", "type": "date"}`, date.Format("2006-01-02"))
-		engine.Put("date_table", "date", types.DateKey(date), doc)
+		engine.Put(context.Background(), "date_table", "date", types.DateKey(date), doc)
 	}
 	if doc, ok := fetchDoc(engine, "date_table", "date", types.DateKey(now)); ok {
 		fmt.Printf("  DateKey(today): %s\n", doc)
 	}
 	var future []string
-	dit, _ := engine.NewIterator("date_table", "date", storage.IterOptions{Lower: types.DateKey(now)})
+	dit, _ := engine.NewIterator(context.Background(), "date_table", "date", storage.IterOptions{Lower: types.DateKey(now)})
 	for dit.Next() {
 		if dit.Key().Compare(types.DateKey(now)) <= 0 {
 			continue

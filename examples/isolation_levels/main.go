@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -54,8 +55,8 @@ func main() {
 	fmt.Println("=== Preparação ===")
 
 	// Inserir conta bancária inicial
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
-	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2000, "owner": "Bob"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2000, "owner": "Bob"}`)
 
 	fmt.Println("✓ Contas criadas: Alice=$1000, Bob=$2000")
 
@@ -74,7 +75,7 @@ func main() {
 
 	// Simular outra transação que modifica o saldo
 	fmt.Println("\n[Outra transação atualiza saldo de Alice para $1500]")
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1500, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1500, "owner": "Alice"}`)
 
 	// Aguardar um pouco para garantir que a write foi feita
 	time.Sleep(time.Millisecond * 10)
@@ -97,7 +98,7 @@ func main() {
 	fmt.Println("\n=== Cenário 2: Read Committed ===")
 
 	// Reset
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
 
 	// Iniciar transação com Read Committed
 	tx3 := engine.BeginTransaction(storage.ReadCommitted)
@@ -109,7 +110,7 @@ func main() {
 
 	// Outra transação modifica
 	fmt.Println("\n[Outra transação atualiza saldo de Alice para $1800]")
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1800, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1800, "owner": "Alice"}`)
 	time.Sleep(time.Millisecond * 10)
 
 	// TX3 deve ver o valor NOVO (read committed refresha o snapshot)
@@ -125,8 +126,8 @@ func main() {
 	fmt.Println("\n=== Cenário 3: Operação de Transferência ===")
 
 	// Reset
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
-	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2000, "owner": "Bob"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 1000, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2000, "owner": "Bob"}`)
 
 	// Transação de read que calcula saldo total
 	fmt.Println("\nTX4: Calculando saldo total (RepeatableRead)")
@@ -137,8 +138,8 @@ func main() {
 
 	// Simular transferência during a read
 	fmt.Println("\n  [Transferência em andamento: Alice -$500, Bob +$500]")
-	engine.Put("accounts", "id", types.IntKey(1), `{"id": 1, "balance": 500, "owner": "Alice"}`)
-	engine.Put("accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2500, "owner": "Bob"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id": 1, "balance": 500, "owner": "Alice"}`)
+	engine.Put(context.Background(), "accounts", "id", types.IntKey(2), `{"id": 2, "balance": 2500, "owner": "Bob"}`)
 	time.Sleep(time.Millisecond * 10)
 
 	docBob, _, _ := legacydoc.FetchTx(tx4, "accounts", "id", types.IntKey(2))

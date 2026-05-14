@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func main() {
 
 	for i := int64(1); i <= 3; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"email":"user-%d@example.com","balance":%d}`, i, i, i*100)
-		if err := source.Put(tableName, indexName, types.IntKey(i), doc); err != nil {
+		if err := source.Put(context.Background(), tableName, indexName, types.IntKey(i), doc); err != nil {
 			_ = source.Close()
 			fmt.Printf("error gravando documento %d: %v\n", i, err)
 			return
@@ -49,7 +50,7 @@ func main() {
 	}
 	fmt.Println("Dados gravados no banco origem.")
 
-	manifest, err := source.BackupOnline(backupDir)
+	manifest, err := source.BackupOnline(context.Background(), backupDir)
 	if err != nil {
 		_ = source.Close()
 		fmt.Printf("error criando backup online: %v\n", err)
@@ -58,7 +59,7 @@ func main() {
 	fmt.Printf("Backup criado em %s com %d files e checkpoint LSN %d.\n",
 		backupDir, len(manifest.Files), manifest.CheckpointLSN)
 
-	if _, err := storage.VerifyBackup(backupDir); err != nil {
+	if _, err := storage.VerifyBackup(context.Background(), backupDir); err != nil {
 		_ = source.Close()
 		fmt.Printf("backup failed na verificacao: %v\n", err)
 		return
@@ -67,14 +68,14 @@ func main() {
 
 	// Esta write acontece after do backup. Ela continua existindo no banco
 	// origem, mas nao deve aparecer no restore feito a partir do snapshot.
-	if err := source.Put(tableName, indexName, types.IntKey(99),
+	if err := source.Put(context.Background(), tableName, indexName, types.IntKey(99),
 		`{"id":99,"email":"after-backup@example.com","balance":9900}`); err != nil {
 		_ = source.Close()
 		fmt.Printf("error gravando documento pos-backup: %v\n", err)
 		return
 	}
 
-	if _, err := storage.RestoreBackup(backupDir, restoreDir); err != nil {
+	if _, err := storage.RestoreBackup(context.Background(), backupDir, restoreDir); err != nil {
 		_ = source.Close()
 		fmt.Printf("error restaurando backup: %v\n", err)
 		return

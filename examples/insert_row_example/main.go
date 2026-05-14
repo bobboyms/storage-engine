@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -51,9 +52,9 @@ func main() {
 	doc := `{"id": 1, "email": "alice@example.com", "name": "Alice"}`
 
 	// Put no index primário
-	engine1.Put("users", "id", types.IntKey(1), doc)
+	engine1.Put(context.Background(), "users", "id", types.IntKey(1), doc)
 	// Put no index secundário (DUPLICA o documento no heap!)
-	engine1.Put("users", "email", types.VarcharKey("alice@example.com"), doc)
+	engine1.Put(context.Background(), "users", "email", types.VarcharKey("alice@example.com"), doc)
 
 	size1 := getFileSize("heap1.heap")
 	fmt.Printf("Tamanho do heap after 2x Put(): %d bytes\n", size1)
@@ -71,7 +72,7 @@ func main() {
 	// Inserir usuário com InsertRow() - atualiza múltiplos indexs atomicamente
 	doc2 := `{"id": 2, "email": "bob@example.com", "name": "Bob"}`
 
-	err := engine2.InsertRow("users", doc2, map[string]types.Comparable{
+	err := engine2.InsertRow(context.Background(), "users", doc2, map[string]types.Comparable{
 		"id":    types.IntKey(2),
 		"email": types.VarcharKey("bob@example.com"),
 	})
@@ -109,14 +110,14 @@ func main() {
 	// Engine 3: Usando Put() para cada index
 	for _, u := range users {
 		doc := fmt.Sprintf(`{"id": %d, "email": "%s", "name": "%s"}`, u.id, u.email, u.name)
-		engine3.Put("users", "id", types.IntKey(u.id), doc)
-		engine3.Put("users", "email", types.VarcharKey(u.email), doc)
+		engine3.Put(context.Background(), "users", "id", types.IntKey(u.id), doc)
+		engine3.Put(context.Background(), "users", "email", types.VarcharKey(u.email), doc)
 	}
 
 	// Engine 4: Usando InsertRow()
 	for _, u := range users {
 		doc := fmt.Sprintf(`{"id": %d, "email": "%s", "name": "%s"}`, u.id, u.email, u.name)
-		engine4.InsertRow("users", doc, map[string]types.Comparable{
+		engine4.InsertRow(context.Background(), "users", doc, map[string]types.Comparable{
 			"id":    types.IntKey(u.id),
 			"email": types.VarcharKey(u.email),
 		})
@@ -145,7 +146,7 @@ func main() {
 	engine5 := setupEngine("heap5.heap", "wal5.wal")
 
 	doc5 := `{"id": 100, "email": "test@example.com", "name": "Test User"}`
-	engine5.InsertRow("users", doc5, map[string]types.Comparable{
+	engine5.InsertRow(context.Background(), "users", doc5, map[string]types.Comparable{
 		"id":    types.IntKey(100),
 		"email": types.VarcharKey("test@example.com"),
 	})

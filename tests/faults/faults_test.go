@@ -3,6 +3,7 @@
 package faults_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -65,7 +66,7 @@ func seedAndClose(t testing.TB, p dbPaths, n int) {
 	se := openEngine(t, p)
 	for i := 1; i <= n; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"value":"v%d"}`, i, i)
-		if err := se.Put("t", "id", types.IntKey(int64(i)), doc); err != nil {
+		if err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc); err != nil {
 			_ = se.Close()
 			t.Fatalf("put %d: %v", i, err)
 		}
@@ -125,7 +126,7 @@ func TestFaultWALPageCorruptionFailsRecovery(t *testing.T) {
 	}
 	se, err := storage.NewStorageEngine(tm, ww)
 	if err == nil {
-		err = se.Recover(p.walPath)
+		err = se.Recover(context.Background(), p.walPath)
 	}
 	if se != nil {
 		_ = se.Close()
@@ -149,7 +150,7 @@ func TestFaultHeapPageCorruptionRecoveredFromWAL(t *testing.T) {
 	}
 	defer se.Close()
 
-	raw, found, err := se.GetBytes("t", "id", types.IntKey(1))
+	raw, found, err := se.GetBytes(context.Background(), "t", "id", types.IntKey(1))
 	if err != nil {
 		t.Fatalf("expected WAL-based heap recovery, got read error: %v", err)
 	}
@@ -212,7 +213,7 @@ func TestFaultBTreePageCorruptionDetectedOnOpenOrRead(t *testing.T) {
 		}
 		se, engineErr := storage.NewProductionStorageEngine(tm, ww)
 		if engineErr == nil {
-			_, _, engineErr = se.GetBytes("t", "id", types.IntKey(1))
+			_, _, engineErr = se.GetBytes(context.Background(), "t", "id", types.IntKey(1))
 			_ = se.Close()
 		} else {
 			_ = ww.Close()
@@ -245,7 +246,7 @@ func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
 	}
 	for i := 1; i <= 1_000_000; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"payload":"%s"}`, i, payload)
-		err := se.Put("t", "id", types.IntKey(int64(i)), doc)
+		err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc)
 		if err != nil {
 			t.Logf("observed expected write failure after %d inserts: %v", i, err)
 			return
@@ -273,7 +274,7 @@ func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {
 		_ = se.Close()
 		t.Fatalf("enable fsync fault injection: %v", err)
 	}
-	err := se.Put("t", "id", types.IntKey(1), `{"id":1}`)
+	err := se.Put(context.Background(), "t", "id", types.IntKey(1), `{"id":1}`)
 	closeErr := se.Close()
 	if err == nil && closeErr == nil {
 		t.Fatal("expected put or close to observe injected fsync failure")

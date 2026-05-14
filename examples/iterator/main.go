@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -15,9 +16,9 @@ EXAMPLE: Streaming Iterator + GetBytes
 Demonstrates the streaming read API introduced as part of the
 iterator/raw-bytes refactor:
 
-  - StorageEngine.NewIterator(...): one row at a time, constant memory,
+  - StorageEngine.NewIterator(context.Background(), ...): one row at a time, constant memory,
     Close() cancels mid-scan.
-  - StorageEngine.GetBytes(...): raw heap bytes (no codec round-trip).
+  - StorageEngine.GetBytes(context.Background(), ...): raw heap bytes (no codec round-trip).
 
 The legacy Get / Scan / RangeScan methods still work — they are now thin
 deprecated wrappers around the new API for backwards compatibility.
@@ -48,13 +49,13 @@ func main() {
 
 	for i := 1; i <= 5; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"name":"user-%d"}`, i, i)
-		if err := se.Put("users", "id", types.IntKey(i), doc); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), doc); err != nil {
 			panic(err)
 		}
 	}
 
 	fmt.Println("== Streaming full scan via NewIterator ==")
-	it, err := se.NewIterator("users", "id", storage.IterOptions{})
+	it, err := se.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -67,7 +68,7 @@ func main() {
 	_ = it.Close()
 
 	fmt.Println("== Range [2,4] via NewIterator ==")
-	rit, err := se.NewIterator("users", "id", storage.IterOptions{
+	rit, err := se.NewIterator(context.Background(), "users", "id", storage.IterOptions{
 		Lower: types.IntKey(2),
 		Upper: types.IntKey(4),
 	})
@@ -80,7 +81,7 @@ func main() {
 	_ = rit.Close()
 
 	fmt.Println("== Raw bytes via GetBytes ==")
-	raw, found, err := se.GetBytes("users", "id", types.IntKey(3))
+	raw, found, err := se.GetBytes(context.Background(), "users", "id", types.IntKey(3))
 	if err != nil {
 		panic(err)
 	}

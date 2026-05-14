@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,7 +141,7 @@ func TestRecovery_RepeatedRecoveriesDoNotDuplicateVersions(t *testing.T) {
 
 	func() {
 		se := openRecoveryEngine(t, fx, false)
-		if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
 			t.Fatalf("Put: %v", err)
 		}
 		if err := se.WAL.Close(); err != nil {
@@ -151,13 +152,13 @@ func TestRecovery_RepeatedRecoveriesDoNotDuplicateVersions(t *testing.T) {
 	recovered := openRecoveryEngine(t, fx, false)
 	defer recovered.Close()
 
-	if err := recovered.Recover(fx.walPath); err != nil {
+	if err := recovered.Recover(context.Background(), fx.walPath); err != nil {
 		t.Fatalf("Recover #1: %v", err)
 	}
-	if err := recovered.Recover(fx.walPath); err != nil {
+	if err := recovered.Recover(context.Background(), fx.walPath); err != nil {
 		t.Fatalf("Recover #2: %v", err)
 	}
-	if err := recovered.Recover(fx.walPath); err != nil {
+	if err := recovered.Recover(context.Background(), fx.walPath); err != nil {
 		t.Fatalf("Recover #3: %v", err)
 	}
 
@@ -177,11 +178,11 @@ func TestRecovery_RepairsTornHeapPageFromWAL(t *testing.T) {
 
 		for i := 1; i <= 6; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"status":"paid"}`, i)
-			if err := se.Put("orders", "id", types.IntKey(i), doc); err != nil {
+			if err := se.Put(context.Background(), "orders", "id", types.IntKey(i), doc); err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
 		}
-		if err := se.CreateCheckpoint(); err != nil {
+		if err := se.CreateCheckpoint(context.Background()); err != nil {
 			t.Fatalf("CreateCheckpoint: %v", err)
 		}
 	}()
@@ -206,11 +207,11 @@ func TestRecovery_RepairsTornIndexPageFromWAL(t *testing.T) {
 
 		for i := 1; i <= 20; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"balance":%d}`, i, i*10)
-			if err := se.Put("accounts", "id", types.IntKey(i), doc); err != nil {
+			if err := se.Put(context.Background(), "accounts", "id", types.IntKey(i), doc); err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
 		}
-		if err := se.CreateCheckpoint(); err != nil {
+		if err := se.CreateCheckpoint(context.Background()); err != nil {
 			t.Fatalf("CreateCheckpoint: %v", err)
 		}
 	}()
@@ -234,7 +235,7 @@ func TestRecovery_RepairsTornPageWhenCheckpointCrashesMidFlight(t *testing.T) {
 
 		for i := 1; i <= 8; i++ {
 			doc := fmt.Sprintf(`{"id":%d,"kind":"checkpoint"}`, i)
-			if err := se.Put("events", "id", types.IntKey(i), doc); err != nil {
+			if err := se.Put(context.Background(), "events", "id", types.IntKey(i), doc); err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
 		}

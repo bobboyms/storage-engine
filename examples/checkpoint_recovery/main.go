@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -53,7 +54,7 @@ func main() {
 
 	for _, u := range users {
 		doc := fmt.Sprintf(`{"id": %d, "name": "%s", "status": "active"}`, u.id, u.name)
-		err := engine.Put("users", "id", types.IntKey(u.id), doc)
+		err := engine.Put(context.Background(), "users", "id", types.IntKey(u.id), doc)
 		if err != nil {
 			fmt.Printf("Erro ao inserir user %d: %v\n", u.id, err)
 		}
@@ -61,7 +62,7 @@ func main() {
 	fmt.Printf("✓ %d usuários inseridos\n", len(users))
 
 	// Força flush durável das pages/trees
-	err := engine.CreateCheckpoint()
+	err := engine.CreateCheckpoint(context.Background())
 	if err != nil {
 		fmt.Printf("Erro ao flushar estado: %v\n", err)
 	} else {
@@ -88,7 +89,7 @@ func main() {
 
 	engine = setupEngine(heapPath, walPath)
 
-	err = engine.Recover(walPath)
+	err = engine.Recover(context.Background(), walPath)
 	if err != nil {
 		fmt.Printf("Erro no recover inicial: %v\n", err)
 	}
@@ -106,16 +107,16 @@ func main() {
 
 	for _, u := range newUsers {
 		doc := fmt.Sprintf(`{"id": %d, "name": "%s", "status": "new"}`, u.id, u.name)
-		engine.Put("users", "id", types.IntKey(u.id), doc)
+		engine.Put(context.Background(), "users", "id", types.IntKey(u.id), doc)
 	}
 	fmt.Printf("✓ %d novos usuários inseridos (apenas no WAL)\n", len(newUsers))
 
 	// Atualizar um usuário existente
-	engine.Put("users", "id", types.IntKey(1), `{"id": 1, "name": "Alice Updated", "status": "modified"}`)
+	engine.Put(context.Background(), "users", "id", types.IntKey(1), `{"id": 1, "name": "Alice Updated", "status": "modified"}`)
 	fmt.Println("✓ User 1 atualizado (apenas no WAL)")
 
 	// Deletar um usuário
-	engine.Del("users", "id", types.IntKey(3))
+	engine.Del(context.Background(), "users", "id", types.IntKey(3))
 	fmt.Println("✓ User 3 deletado (apenas no WAL)")
 
 	// **SIMULAR CRASH: Fechar sem flush explícito**
@@ -134,7 +135,7 @@ func main() {
 	// Executar recovery - deve reconstituir:
 	// 1. Estado flushado (users 1-5)
 	// 2. Operações do WAL after o flush (users 6-8, update user 1, delete user 3)
-	err = engine.Recover(walPath)
+	err = engine.Recover(context.Background(), walPath)
 	if err != nil {
 		fmt.Printf("❌ Erro no recovery: %v\n", err)
 		return

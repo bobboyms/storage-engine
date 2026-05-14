@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func TestStatsTracksActiveTransactionsAndVacuum(t *testing.T) {
 		t.Fatalf("OnRecoveryComplete não chamou (count=%d)", got)
 	}
 
-	if err := se.Put("obs", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "obs", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -96,10 +97,10 @@ func TestStatsTracksActiveTransactionsAndVacuum(t *testing.T) {
 		t.Fatalf("CurrentLSN=0 após Put bem-sucedido")
 	}
 
-	if _, err := se.Del("obs", "id", types.IntKey(1)); err != nil {
+	if _, err := se.Del(context.Background(), "obs", "id", types.IntKey(1)); err != nil {
 		t.Fatalf("Del: %v", err)
 	}
-	if err := se.Vacuum("obs"); err != nil {
+	if err := se.Vacuum(context.Background(), "obs"); err != nil {
 		t.Fatalf("Vacuum: %v", err)
 	}
 
@@ -120,10 +121,10 @@ func TestLoggerReceivesEvents(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	se := newObservabilityTestEngine(t, Options{Logger: logger})
 
-	if err := se.Put("obs", "id", types.IntKey(42), `{"id":42}`); err != nil {
+	if err := se.Put(context.Background(), "obs", "id", types.IntKey(42), `{"id":42}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := se.Vacuum("obs"); err != nil {
+	if err := se.Vacuum(context.Background(), "obs"); err != nil {
 		t.Fatalf("Vacuum: %v", err)
 	}
 

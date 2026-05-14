@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func TestRecovery_CrashMidWrite_RecoversAllCommittedWrites(t *testing.T) {
 
 		// Escreve N entries
 		for i := 1; i <= N; i++ {
-			err := se.Put("t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
+			err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
 			if err != nil {
 				t.Fatalf("Put %d: %v", i, err)
 			}
@@ -82,7 +83,7 @@ func TestRecovery_CrashMidWrite_RecoversAllCommittedWrites(t *testing.T) {
 	defer se2.Close()
 
 	// Recovery
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 
@@ -123,7 +124,7 @@ func TestRecovery_IdempotentMultipleCalls(t *testing.T) {
 	se, _ := storage.NewStorageEngine(tm, ww)
 
 	for i := 1; i <= 10; i++ {
-		se.Put("t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
+		se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
 	}
 	se.Close()
 
@@ -140,10 +141,10 @@ func TestRecovery_IdempotentMultipleCalls(t *testing.T) {
 	defer se2.Close()
 
 	// Recover 2x
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover 1: %v", err)
 	}
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover 2 (should be idempotent): %v", err)
 	}
 
@@ -185,7 +186,7 @@ func TestRecovery_WithoutRecoverDataIsLost(t *testing.T) {
 		se, _ := storage.NewStorageEngine(tm, ww)
 
 		for i := 1; i <= 5; i++ {
-			se.Put("t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
+			se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
 		}
 		ww.Close() // crash: WAL fsync'd, mas tree/heap em BufferPool
 	}
@@ -242,7 +243,7 @@ func TestProductionStorageEngine_AutoRecovery(t *testing.T) {
 		se, _ := storage.NewProductionStorageEngine(tm, ww)
 
 		for i := 1; i <= 50; i++ {
-			se.Put("t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
+			se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), fmt.Sprintf(`{"id":%d}`, i))
 		}
 		ww.Close() // crash
 	}
@@ -309,12 +310,12 @@ func TestRecovery_EmptyWAL(t *testing.T) {
 	defer se.Close()
 
 	// WAL empty (nada foi escrito ainda) — Recover must ser no-op
-	if err := se.Recover(walPath); err != nil {
+	if err := se.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover em WAL empty: %v", err)
 	}
 
 	// Escrevendo depois funciona normalmente
-	if err := se.Put("t", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "t", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatal(err)
 	}
 	_, found, _ := getDocStringExt(t, se, "t", "id", types.IntKey(1))

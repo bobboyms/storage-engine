@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -43,7 +44,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	}
 
 	// 1. InsertRow
-	if err := se.InsertRow("users", doc, keys); err != nil {
+	if err := se.InsertRow(context.Background(), "users", doc, keys); err != nil {
 		t.Fatalf("InsertRow failed: %v", err)
 	}
 
@@ -63,7 +64,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	}
 
 	// 3. Duplicate Key check (Primary Key)
-	err = se.InsertRow("users", doc, keys)
+	err = se.InsertRow(context.Background(), "users", doc, keys)
 	if err == nil {
 		t.Errorf("Expected error for duplicate key, but got nil")
 	}
@@ -105,7 +106,7 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	}
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
@@ -158,7 +159,7 @@ func TestRecover_CorruptedMultiInsert(t *testing.T) {
 	}
 	defer se.Close()
 
-	if err := se.Recover(walPath); err == nil {
+	if err := se.Recover(context.Background(), walPath); err == nil {
 		t.Error("Expected error when recovering corrupted MultiInsert payload")
 	}
 }
@@ -176,7 +177,7 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
 	se, _ := storage.NewStorageEngine(mgr1, walWriter)
 
-	se.InsertRow("ghost", `{"id":1}`, map[string]types.Comparable{"id": types.IntKey(1)})
+	se.InsertRow(context.Background(), "ghost", `{"id":1}`, map[string]types.Comparable{"id": types.IntKey(1)})
 	se.Close()
 
 	// 2. Restart with NO tables defined
@@ -189,7 +190,7 @@ func TestRecover_MultiInsertMissingTable(t *testing.T) {
 	defer se2.Close()
 
 	// Should skip the entry gracefully
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Errorf("Recover should skip missing table in MultiInsert, but got error: %v", err)
 	}
 }
@@ -208,7 +209,7 @@ func TestInsertRow_InvalidDoc(t *testing.T) {
 	// Missing "id" in doc
 	doc := `{"email": "no-id"}`
 	keys := map[string]types.Comparable{"id": types.IntKey(1)}
-	err := se.InsertRow("users", doc, keys)
+	err := se.InsertRow(context.Background(), "users", doc, keys)
 	if err == nil {
 		t.Error("Expected error for document missing index key")
 	}

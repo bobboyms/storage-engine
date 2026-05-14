@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,8 +44,8 @@ func TestStorageEngine_Durability(t *testing.T) {
 	// 2. Insere dados
 	doc1 := "user_1"
 	doc2 := "user_2"
-	se.Put(tableName, "id", types.IntKey(1), doc1)
-	se.Put(tableName, "id", types.IntKey(2), doc2)
+	se.Put(context.Background(), tableName, "id", types.IntKey(1), doc1)
+	se.Put(context.Background(), tableName, "id", types.IntKey(2), doc2)
 	se.WAL.Sync() // Force sync
 	se.Close()
 
@@ -79,7 +80,7 @@ func TestStorageEngine_Durability(t *testing.T) {
 
 	// 4. Executa Recovery
 	// Deve recuperar do WAL, pois nao houve CreateCheckpoint explicitamente
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recovery failed: %v", err)
 	}
 

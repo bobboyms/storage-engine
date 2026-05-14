@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -64,9 +65,16 @@ type lockWaiter struct {
 }
 
 func NewLockManager(cfg LockManagerConfig) *LockManager {
+	// WaitTimeout sentinels:
+	//   - 0 (zero value): use the historical default of 5 s.
+	//   - negative: disable the internal timer entirely; only ctx
+	//     cancellation can wake a parked waiter.
+	//   - positive: explicit budget.
 	waitTimeout := cfg.WaitTimeout
-	if waitTimeout <= 0 {
+	if waitTimeout == 0 {
 		waitTimeout = 5 * time.Second
+	} else if waitTimeout < 0 {
+		waitTimeout = 0
 	}
 
 	return &LockManager{
@@ -80,7 +88,21 @@ func NewLockManager(cfg LockManagerConfig) *LockManager {
 	}
 }
 
-func (lm *LockManager) Acquire(txID uint64, resource string) error {
+// Acquire blocks until the resource lock is granted to txID or one of:
+//   - ctx is cancelled / its deadline fires → returns ctx.Err()
+//   - lm.waitTimeout elapses (when > 0) → returns ErrLockWaitTimeout
+//   - the caller's transaction is chosen as a deadlock victim → returns
+//     a *DeadlockError
+//
+// When ctx is already cancelled at entry, Acquire fails fast without
+// touching the wait graph. If the caller is concurrently granted the
+// lock at the same instant ctx fires, the grant wins (otherwise the
+// lock would be silently held by an unaware tx).
+func (lm *LockManager) Acquire(ctx context.Context, txID uint64, resource string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	lm.mu.Lock()
 
 	if err := lm.abortedTxs[txID]; err != nil {
@@ -128,18 +150,43 @@ func (lm *LockManager) Acquire(txID uint64, resource string) error {
 		lm.onDeadlock(*deadlockEvent)
 	}
 
-	timer := time.NewTimer(lm.waitTimeout)
+	var timerC <-chan time.Time
+	var timer *time.Timer
+	if lm.waitTimeout > 0 {
+		timer = time.NewTimer(lm.waitTimeout)
+		timerC = timer.C
+	}
+
+	var (
+		granted    bool
+		grantedErr error
+		timedOut   bool
+		cancelled  bool
+	)
 	select {
 	case err := <-waiter.result:
-		if !timer.Stop() {
+		if timer != nil && !timer.Stop() {
 			<-timer.C
 		}
-		return err
-	case <-timer.C:
+		grantedErr = err
+		granted = true
+	case <-timerC:
+		timedOut = true
+	case <-ctx.Done():
+		if timer != nil && !timer.Stop() {
+			<-timer.C
+		}
+		cancelled = true
+	}
+	if granted {
+		return grantedErr
 	}
 
 	lm.mu.Lock()
 	if waiter.done {
+		// grantNextWaiterLocked raced and handed us the lock at the
+		// same moment ctx cancelled / the timer fired. Accept the
+		// grant — refusing it would silently leak the holder.
 		lm.mu.Unlock()
 		return <-waiter.result
 	}
@@ -147,7 +194,11 @@ func (lm *LockManager) Acquire(txID uint64, resource string) error {
 	delete(lm.waitingByTx, txID)
 	waiter.done = true
 	lm.mu.Unlock()
-	if lm.onLockWaitTimeout != nil {
+
+	if cancelled {
+		return ctx.Err()
+	}
+	if timedOut && lm.onLockWaitTimeout != nil {
 		lm.onLockWaitTimeout(LockWaitTimeoutEvent{TxID: txID, Resource: resource})
 	}
 	return ErrLockWaitTimeout

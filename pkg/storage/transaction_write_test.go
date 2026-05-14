@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -46,10 +47,10 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	userDoc := `{"id": 1, "name": "Alice"}`
 	orderDoc := `{"id": 100, "user_id": 1, "total": 50}`
 
-	if err := tx.Put("users", "id", types.IntKey(1), userDoc); err != nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(1), userDoc); err != nil {
 		t.Fatalf("Put users failed: %v", err)
 	}
-	if err := tx.Put("orders", "id", types.IntKey(100), orderDoc); err != nil {
+	if err := tx.Put(context.Background(), "orders", "id", types.IntKey(100), orderDoc); err != nil {
 		t.Fatalf("Put orders failed: %v", err)
 	}
 
@@ -60,7 +61,7 @@ func TestWriteTransaction_Commit(t *testing.T) {
 	}
 
 	// Commit
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
@@ -109,12 +110,12 @@ func TestWriteTransaction_Rollback(t *testing.T) {
 
 	tx := se.BeginWriteTransaction()
 
-	if err := tx.Put("users", "id", types.IntKey(1), `{"id": 1}`); err != nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(1), `{"id": 1}`); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
 	// Rollback
-	if err := tx.Rollback(); err != nil {
+	if err := tx.Rollback(context.Background()); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 
@@ -125,7 +126,7 @@ func TestWriteTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify accessing finished tx returns error
-	if err := tx.Put("users", "id", types.IntKey(2), `{"id": 2}`); err == nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(2), `{"id": 2}`); err == nil {
 		t.Errorf("Expected error writing to finished tx")
 	}
 }
@@ -156,14 +157,14 @@ func TestWriteTransaction_Delete(t *testing.T) {
 	defer se.Close()
 
 	// Setup initial data
-	se.Put("users", "id", types.IntKey(1), `{"id": 1}`)
+	se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id": 1}`)
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Del("users", "id", types.IntKey(1)); err != nil {
+	if err := tx.Del(context.Background(), "users", "id", types.IntKey(1)); err != nil {
 		t.Fatalf("Del failed: %v", err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
@@ -202,7 +203,7 @@ func TestWriteTransaction_InvalidKeyType(t *testing.T) {
 	tx := se.BeginWriteTransaction()
 
 	// Try to put String Key into Int Index
-	if err := tx.Put("users", "id", types.VarcharKey("bad"), "{}"); err == nil {
+	if err := tx.Put(context.Background(), "users", "id", types.VarcharKey("bad"), "{}"); err == nil {
 		t.Error("Expected error for invalid key type")
 	}
 }
@@ -233,19 +234,19 @@ func TestWriteTransaction_DoubleCommit(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	tx.Put("users", "id", types.IntKey(1), "{}")
+	tx.Put(context.Background(), "users", "id", types.IntKey(1), "{}")
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
 	// Double commit
-	if err := tx.Commit(); err == nil {
+	if err := tx.Commit(context.Background()); err == nil {
 		t.Error("Expected error on double commit")
 	}
 
 	// Put after commit
-	if err := tx.Put("users", "id", types.IntKey(2), "{}"); err == nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(2), "{}"); err == nil {
 		t.Error("Expected error writing after commit")
 	}
 }
@@ -286,16 +287,16 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 
 	tx := se.BeginWriteTransaction()
 
-	if err := tx.Put("all_types", "int", types.IntKey(1), "{}"); err != nil {
+	if err := tx.Put(context.Background(), "all_types", "int", types.IntKey(1), "{}"); err != nil {
 		t.Errorf("Int put failed: %v", err)
 	}
-	if err := tx.Put("all_types", "varchar", types.VarcharKey("s"), "{}"); err != nil {
+	if err := tx.Put(context.Background(), "all_types", "varchar", types.VarcharKey("s"), "{}"); err != nil {
 		t.Errorf("Varchar put failed: %v", err)
 	}
-	if err := tx.Put("all_types", "bool", types.BoolKey(true), "{}"); err != nil {
+	if err := tx.Put(context.Background(), "all_types", "bool", types.BoolKey(true), "{}"); err != nil {
 		t.Errorf("Bool put failed: %v", err)
 	}
-	if err := tx.Put("all_types", "float", types.FloatKey(1.0), "{}"); err != nil {
+	if err := tx.Put(context.Background(), "all_types", "float", types.FloatKey(1.0), "{}"); err != nil {
 		t.Errorf("Float put failed: %v", err)
 	}
 
@@ -306,7 +307,7 @@ func TestWriteTransaction_AllKeyTypes(t *testing.T) {
 	// But table definition above missed date.
 	// Let's assume these are enough to cover the switch cases for non-default.
 
-	tx.Commit()
+	tx.Commit(context.Background())
 }
 
 func TestWriteTransaction_EmptyCommit(t *testing.T) {
@@ -318,7 +319,7 @@ func TestWriteTransaction_EmptyCommit(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Errorf("Expected nil error for empty commit, got %v", err)
 	}
 }
@@ -334,13 +335,13 @@ func TestWriteTransaction_PutErrors(t *testing.T) {
 	tx := se.BeginWriteTransaction()
 
 	// Table not found
-	if err := tx.Put("none", "id", types.IntKey(1), ""); err == nil {
+	if err := tx.Put(context.Background(), "none", "id", types.IntKey(1), ""); err == nil {
 		t.Error("Expected error for missing table")
 	}
 
 	// Index not found
 	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3, hm)
-	if err := tx.Put("users", "wrong", types.IntKey(1), ""); err == nil {
+	if err := tx.Put(context.Background(), "users", "wrong", types.IntKey(1), ""); err == nil {
 		t.Error("Expected error for missing index")
 	}
 }
@@ -356,13 +357,13 @@ func TestWriteTransaction_DelErrors(t *testing.T) {
 	tx := se.BeginWriteTransaction()
 
 	// Table not found
-	if err := tx.Del("none", "id", types.IntKey(1)); err == nil {
+	if err := tx.Del(context.Background(), "none", "id", types.IntKey(1)); err == nil {
 		t.Error("Expected error for missing table")
 	}
 
 	// Index not found
 	se.TableMetaData.NewTable("users", []Index{{Name: "id", Type: TypeInt}}, 3, hm)
-	if err := tx.Del("users", "wrong", types.IntKey(1)); err == nil {
+	if err := tx.Del(context.Background(), "users", "wrong", types.IntKey(1)); err == nil {
 		t.Error("Expected error for missing index")
 	}
 }
@@ -388,9 +389,9 @@ func TestWriteTransaction_RollbackWAL(t *testing.T) {
 	se.WAL.Close() // Close it
 
 	tx := se.BeginWriteTransaction()
-	tx.Put("users", "id", types.IntKey(1), "{}")
+	tx.Put(context.Background(), "users", "id", types.IntKey(1), "{}")
 
-	err := tx.Commit()
+	err := tx.Commit(context.Background())
 	if err == nil {
 		t.Error("Expected commit error when WAL is closed and SyncEveryWrite is active")
 	}
@@ -410,10 +411,10 @@ func TestWriteTransaction_DateType(t *testing.T) {
 
 	tx := se.BeginWriteTransaction()
 	dateKey := types.DateKey(time.Now())
-	if err := tx.Put("dates", "d", dateKey, "{}"); err != nil {
+	if err := tx.Put(context.Background(), "dates", "d", dateKey, "{}"); err != nil {
 		t.Errorf("Put date failed: %v", err)
 	}
-	tx.Commit()
+	tx.Commit(context.Background())
 }
 
 type dummyKey struct {
@@ -452,11 +453,11 @@ func TestWriteTransaction_DelNonExistent(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	err := tx.Del("users", "id", types.IntKey(999))
+	err := tx.Del(context.Background(), "users", "id", types.IntKey(999))
 	if err != nil {
 		t.Errorf("Del should not error for non-existsnt key: %v", err)
 	}
-	tx.Commit()
+	tx.Commit(context.Background())
 }
 
 func TestWriteTransaction_DelInvalidTable(t *testing.T) {
@@ -468,7 +469,7 @@ func TestWriteTransaction_DelInvalidTable(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	err := tx.Del("invalid", "id", types.IntKey(1))
+	err := tx.Del(context.Background(), "invalid", "id", types.IntKey(1))
 	if err == nil {
 		t.Error("Expected error for invalid table")
 	}
@@ -483,12 +484,12 @@ func TestWriteTransaction_DelAfterCommit(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
 	// Del after commit
-	if err := tx.Del("any", "idx", types.IntKey(1)); err == nil {
+	if err := tx.Del(context.Background(), "any", "idx", types.IntKey(1)); err == nil {
 		t.Error("Expected error calling Del on committed tx")
 	}
 }
@@ -536,10 +537,10 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 	se := openEngine(t, false)
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Put("users", "id", types.IntKey(1), `{"id":1,"name":"Alice"}`); err != nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"name":"Alice"}`); err != nil {
 		t.Fatalf("tx put key1: %v", err)
 	}
-	if err := tx.Put("users", "id", types.IntKey(2), `{"id":2,"name":"Bob"}`); err != nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"name":"Bob"}`); err != nil {
 		t.Fatalf("tx put key2: %v", err)
 	}
 
@@ -558,7 +559,7 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 
 	commitErrCh := make(chan error, 1)
 	go func() {
-		commitErrCh <- tx.Commit()
+		commitErrCh <- tx.Commit(context.Background())
 	}()
 
 	<-applyStarted
@@ -594,7 +595,7 @@ func TestWriteTransaction_PostCommitApplyFailureDegradesRuntimeAndRecoveryConver
 		t.Fatalf("expected no visible document after degraded read, got found=%v doc=%q", gotFound, gotDoc)
 	}
 
-	if err := se.Put("users", "id", types.IntKey(3), `{"id":3,"name":"Carol"}`); !errors.Is(err, ErrEngineDegraded) {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(3), `{"id":3,"name":"Carol"}`); !errors.Is(err, ErrEngineDegraded) {
 		t.Fatalf("expected degraded write error, got %v", err)
 	}
 

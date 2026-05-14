@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ func TestIterator_FullScanReturnsAllVisibleRowsInKeyOrder(t *testing.T) {
 	se, _ := newIteratorEngine(t)
 	for i := 1; i <= 5; i++ {
 		doc := `{"id":` + itoa(i) + `,"name":"u` + itoa(i) + `"}`
-		if err := se.Put("users", "id", types.IntKey(i), doc); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), doc); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
@@ -45,7 +46,7 @@ func TestIterator_FullScanReturnsAllVisibleRowsInKeyOrder(t *testing.T) {
 	tx := se.BeginRead()
 	defer tx.Close()
 
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{})
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestIterator_RangeRespectsLowerUpperInclusive(t *testing.T) {
 	se, _ := newIteratorEngine(t)
 	for i := 1; i <= 10; i++ {
 		doc := `{"id":` + itoa(i) + `}`
-		if err := se.Put("users", "id", types.IntKey(i), doc); err != nil {
+		if err := se.Put(context.Background(), "users", "id", types.IntKey(i), doc); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
 		}
 	}
@@ -92,7 +93,7 @@ func TestIterator_RangeRespectsLowerUpperInclusive(t *testing.T) {
 	tx := se.BeginRead()
 	defer tx.Close()
 
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{
 		Lower: types.IntKey(3),
 		Upper: types.IntKey(7),
 	})
@@ -120,7 +121,7 @@ func TestIterator_RangeRespectsLowerUpperInclusive(t *testing.T) {
 // commits after Begin must NOT appear in the iterator's results.
 func TestIterator_SnapshotIsolation(t *testing.T) {
 	se, _ := newIteratorEngine(t)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatalf("Put 1: %v", err)
 	}
 
@@ -128,11 +129,11 @@ func TestIterator_SnapshotIsolation(t *testing.T) {
 	defer tx.Close()
 
 	// Insert a new row AFTER the snapshot is captured.
-	if err := se.Put("users", "id", types.IntKey(2), `{"id":2}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2}`); err != nil {
 		t.Fatalf("Put 2: %v", err)
 	}
 
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{})
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -154,13 +155,13 @@ func TestIterator_SnapshotIsolation(t *testing.T) {
 func TestIterator_CloseIsIdempotentAndAllowsConcurrentWrites(t *testing.T) {
 	se, _ := newIteratorEngine(t)
 	for i := 1; i <= 3; i++ {
-		_ = se.Put("users", "id", types.IntKey(i), `{"id":`+itoa(i)+`}`)
+		_ = se.Put(context.Background(), "users", "id", types.IntKey(i), `{"id":`+itoa(i)+`}`)
 	}
 
 	tx := se.BeginRead()
 	defer tx.Close()
 
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{})
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestIterator_CloseIsIdempotentAndAllowsConcurrentWrites(t *testing.T) {
 	}
 	// A writer can immediately make progress now that the iterator
 	// dropped its leaf latch.
-	if err := se.Put("users", "id", types.IntKey(99), `{"id":99}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(99), `{"id":99}`); err != nil {
 		t.Fatalf("Put after iterator close: %v", err)
 	}
 }
@@ -187,12 +188,12 @@ func TestIterator_CloseIsIdempotentAndAllowsConcurrentWrites(t *testing.T) {
 // todos os iteradores ainda abertos").
 func TestIterator_TransactionCloseForceClosesOpenIterators(t *testing.T) {
 	se, _ := newIteratorEngine(t)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
 	tx := se.BeginRead()
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{})
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -204,21 +205,21 @@ func TestIterator_TransactionCloseForceClosesOpenIterators(t *testing.T) {
 	tx.Close()
 
 	// Now a writer on the same leaf must not deadlock.
-	if err := se.Put("users", "id", types.IntKey(2), `{"id":2}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2}`); err != nil {
 		t.Fatalf("Put after tx close: %v", err)
 	}
 }
 
 func TestIterator_ValueReturnsRawHeapBytesNotJSONRoundTrip(t *testing.T) {
 	se, _ := newIteratorEngine(t)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"x":42}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"x":42}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
 	tx := se.BeginRead()
 	defer tx.Close()
 
-	it, err := tx.NewIterator("users", "id", storage.IterOptions{})
+	it, err := tx.NewIterator(context.Background(), "users", "id", storage.IterOptions{})
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}

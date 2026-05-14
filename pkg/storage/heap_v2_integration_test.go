@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -42,10 +43,10 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	defer se.Close()
 
 	// INSERT via engine (exercita Heap.Write, B+ tree, WAL)
-	if err := se.Put("users_v2", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
+	if err := se.Put(context.Background(), "users_v2", "id", types.IntKey(1), `{"id":1,"name":"alice"}`); err != nil {
 		t.Fatalf("Put 1: %v", err)
 	}
-	if err := se.Put("users_v2", "id", types.IntKey(2), `{"id":2,"name":"bob"}`); err != nil {
+	if err := se.Put(context.Background(), "users_v2", "id", types.IntKey(2), `{"id":2,"name":"bob"}`); err != nil {
 		t.Fatalf("Put 2: %v", err)
 	}
 
@@ -67,7 +68,7 @@ func TestHeapV2_Integration_BasicCRUD(t *testing.T) {
 	}
 
 	// UPDATE via Put com mesma key (exercita Heap.Write com prevRecordID + Heap.Delete)
-	if err := se.Put("users_v2", "id", types.IntKey(1), `{"id":1,"name":"alice-updated"}`); err != nil {
+	if err := se.Put(context.Background(), "users_v2", "id", types.IntKey(1), `{"id":1,"name":"alice-updated"}`); err != nil {
 		t.Fatalf("Update 1: %v", err)
 	}
 
@@ -106,7 +107,7 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	defer se.Close()
 
 	// Setup: key 1 exists antes do snapshot
-	if err := se.Put("mvcc_v2", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_v2", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +115,7 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	tx1 := se.BeginRead()
 
 	// Insert key 2 APÓS o snapshot
-	if err := se.Put("mvcc_v2", "id", types.IntKey(2), `{"id":2}`); err != nil {
+	if err := se.Put(context.Background(), "mvcc_v2", "id", types.IntKey(2), `{"id":2}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +135,7 @@ func TestHeapV2_Integration_MVCC_SnapshotRead(t *testing.T) {
 	}
 }
 
-// TestHeapV2_Integration_EngineVacuum prova que se.Vacuum() faz dispatch
+// TestHeapV2_Integration_EngineVacuum prova que se.Vacuum(context.Background()) faz dispatch
 // polimórfico: tabelas v2 vão pro caminho compact in-place (not o copy+
 // rebuild do v1). Após vacuum, tombstones deleted antes do minLSN
 // viram inacessíveis; engine.Get devolve "not found" (not erro).
@@ -158,8 +159,8 @@ func TestHeapV2_Integration_EngineVacuum(t *testing.T) {
 	defer se.Close()
 
 	// Cria 2 linhas e delete uma
-	se.Put("vac_v2", "id", types.IntKey(1), `{"id":1,"nome":"alice"}`)
-	se.Put("vac_v2", "id", types.IntKey(2), `{"id":2,"nome":"bob"}`)
+	se.Put(context.Background(), "vac_v2", "id", types.IntKey(1), `{"id":1,"nome":"alice"}`)
+	se.Put(context.Background(), "vac_v2", "id", types.IntKey(2), `{"id":2,"nome":"bob"}`)
 	// Engine not tem Delete público direto pela key, simula via Put de tombstone?
 	// Na verdade, o engine tem se.Delete. Mas pra este teste, o que importa é
 	// que a linha com Valid=false exista na chain. A forma mais simples é
@@ -168,7 +169,7 @@ func TestHeapV2_Integration_EngineVacuum(t *testing.T) {
 	//
 	// Abordagem pragmática: exercita Engine.Vacuum — mesmo sem tombstones
 	// must passar sem erro (no-op). E valida que o dispatch foi pro v2.
-	if err := se.Vacuum("vac_v2"); err != nil {
+	if err := se.Vacuum(context.Background(), "vac_v2"); err != nil {
 		t.Fatalf("Engine.Vacuum em tabela v2: %v", err)
 	}
 
@@ -204,15 +205,15 @@ func TestHeapV2_Integration_MVCC_UpdateChain(t *testing.T) {
 	defer se.Close()
 
 	// v1
-	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":1}`)
+	se.Put(context.Background(), "chain_v2", "id", types.IntKey(1), `{"id":1,"v":1}`)
 	txA := se.BeginRead()
 
 	// v2 (after txA)
-	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":2}`)
+	se.Put(context.Background(), "chain_v2", "id", types.IntKey(1), `{"id":1,"v":2}`)
 	txB := se.BeginRead()
 
 	// v3 (after txB)
-	se.Put("chain_v2", "id", types.IntKey(1), `{"id":1,"v":3}`)
+	se.Put(context.Background(), "chain_v2", "id", types.IntKey(1), `{"id":1,"v":3}`)
 
 	// txA must ver v1
 	doc, found, _ := getDocStringExtTx(t, txA, "chain_v2", "id", types.IntKey(1))

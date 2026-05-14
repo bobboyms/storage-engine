@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -50,7 +51,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 				key := routineID*numInserts + j
 				val := fmt.Sprintf("val-%d", key)
 				// Simula workload
-				err := se.Put("concurrent_table", "id", types.IntKey(key), val)
+				err := se.Put(context.Background(), "concurrent_table", "id", types.IntKey(key), val)
 				if err != nil {
 					t.Errorf("Put failed: %v", err)
 				}
@@ -65,7 +66,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 8; i++ {
 			time.Sleep(12 * time.Millisecond) // Checkpoint no meio das writes
-			err := se.CreateCheckpoint()
+			err := se.CreateCheckpoint(context.Background())
 			if err != nil {
 				t.Errorf("Checkpoint failed: %v", err)
 			}
@@ -98,7 +99,7 @@ func TestConcurrency_CheckpointUnderLoad(t *testing.T) {
 	}
 	defer se2.Close()
 
-	if err := se2.Recover(walPath); err != nil {
+	if err := se2.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("Recover failed: %v", err)
 	}
 
@@ -167,7 +168,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 		for i := 0; i < numInserts; i++ {
 			// O documento must conter o campo "id" pois é o index
 			val := fmt.Sprintf(`{"id": %d, "name": "user-%d"}`, i, i)
-			err := se.Put("users", "id", types.IntKey(i), val)
+			err := se.Put(context.Background(), "users", "id", types.IntKey(i), val)
 			if err != nil {
 				t.Errorf("Put users failed: %v", err)
 			}
@@ -182,7 +183,7 @@ func TestConcurrency_PerTableLocking(t *testing.T) {
 		for i := 0; i < numInserts; i++ {
 			// O documento must conter o campo "id" pois é o index
 			val := fmt.Sprintf(`{"id": %d, "order": "order-%d"}`, i, i)
-			err := se.Put("orders", "id", types.IntKey(i), val)
+			err := se.Put(context.Background(), "orders", "id", types.IntKey(i), val)
 			if err != nil {
 				t.Errorf("Put orders failed: %v", err)
 			}
@@ -266,7 +267,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	// Keys 25-49: Will be read by reader goroutine (safe, not deleted)
 	for i := 0; i < 50; i++ {
 		// O documento must conter o campo "id" pois é o index
-		se.Put("mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
+		se.Put(context.Background(), "mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
 	}
 
 	numOps := 100
@@ -279,7 +280,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 		defer wg.Done()
 		for i := 50; i < 50+numOps; i++ {
 			// O documento must conter o campo "id" pois é o index
-			err := se.Put("mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
+			err := se.Put(context.Background(), "mixed_ops", "id", types.IntKey(i), fmt.Sprintf(`{"id": %d, "val": %d}`, i, i))
 			if err != nil {
 				errChan <- fmt.Errorf("write error key %d: %w", i, err)
 			}
@@ -308,7 +309,7 @@ func TestConcurrency_ReadWriteMix(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 25; i++ {
-			_, err := se.Del("mixed_ops", "id", types.IntKey(i))
+			_, err := se.Del(context.Background(), "mixed_ops", "id", types.IntKey(i))
 			if err != nil {
 				errChan <- fmt.Errorf("delete error key %d: %w", i, err)
 			}

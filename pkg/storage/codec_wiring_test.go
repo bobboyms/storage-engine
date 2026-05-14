@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -68,11 +69,11 @@ func TestEngineUsesCodecFromOptions(t *testing.T) {
 	}
 	defer se.Close()
 
-	if err := se.Put("users", "id", types.IntKey(1), `{"id": 1, "name": "alice"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id": 1, "name": "alice"}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	raw, found, err := se.GetBytes("users", "id", types.IntKey(1))
+	raw, found, err := se.GetBytes(context.Background(), "users", "id", types.IntKey(1))
 	if err != nil || !found {
 		t.Fatalf("GetBytes: found=%v err=%v", found, err)
 	}

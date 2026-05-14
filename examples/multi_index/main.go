@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -24,7 +25,7 @@ func decodeDoc(raw []byte) string {
 }
 
 func fetchDoc(engine *storage.StorageEngine, table, idx string, key types.Comparable) (string, bool) {
-	raw, found, err := engine.GetBytes(table, idx, key)
+	raw, found, err := engine.GetBytes(context.Background(), table, idx, key)
 	if err != nil || !found {
 		return "", false
 	}
@@ -36,7 +37,7 @@ func scanEqual(engine *storage.StorageEngine, table, idx string, key types.Compa
 }
 
 func collectRange(engine *storage.StorageEngine, table, idx string, lo, hi types.Comparable) []string {
-	it, err := engine.NewIterator(table, idx, storage.IterOptions{Lower: lo, Upper: hi})
+	it, err := engine.NewIterator(context.Background(), table, idx, storage.IterOptions{Lower: lo, Upper: hi})
 	if err != nil {
 		fmt.Printf("iterator error: %v\n", err)
 		return nil
@@ -109,7 +110,7 @@ func main() {
 		doc := fmt.Sprintf(`{"id": %d, "email": "%s", "department": "%s", "salary": %.2f}`,
 			emp.id, emp.email, emp.department, emp.salary)
 
-		err := engine.InsertRow("employees", doc, map[string]types.Comparable{
+		err := engine.InsertRow(context.Background(), "employees", doc, map[string]types.Comparable{
 			"id":         types.IntKey(emp.id),
 			"email":      types.VarcharKey(emp.email),
 			"department": types.VarcharKey(emp.department),
@@ -236,7 +237,7 @@ Quando NÃO criar index secundário?
 
 	// IMPORTANTE: Ao atualizar, use UpsertRow para manter todos os indexs consistentes.
 	// InsertRow é insert-only e rejeita key primária duplicada.
-	err := engine.UpsertRow("employees", newDoc, map[string]types.Comparable{
+	err := engine.UpsertRow(context.Background(), "employees", newDoc, map[string]types.Comparable{
 		"id":         types.IntKey(2),
 		"email":      types.VarcharKey("bob@company.com"),
 		"department": types.VarcharKey("Engineering"),

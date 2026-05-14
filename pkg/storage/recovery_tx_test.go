@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestRecovery_ExplicitTransaction_CommitsWinnersAndDropsLosers(t *testing.T)
 	}
 	defer se.Close()
 
-	if err := se.Recover(walPath); err != nil {
+	if err := se.Recover(context.Background(), walPath); err != nil {
 		t.Fatalf("recover: %v", err)
 	}
 
@@ -138,10 +139,10 @@ func TestWriteTransaction_Rollback_PersistsAbortMarker(t *testing.T) {
 	}
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Put("users", "id", types.IntKey(1), `{"id":1}`); err != nil {
+	if err := tx.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1}`); err != nil {
 		t.Fatalf("tx put: %v", err)
 	}
-	if err := tx.Rollback(); err != nil {
+	if err := tx.Rollback(context.Background()); err != nil {
 		t.Fatalf("tx rollback: %v", err)
 	}
 

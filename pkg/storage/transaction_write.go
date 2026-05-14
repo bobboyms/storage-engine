@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -72,8 +73,13 @@ func (se *StorageEngine) BeginWriteTransactionWithIsolation(level IsolationLevel
 	}
 }
 
-// Put adds a put operation to the transaction buffer
-func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Comparable, document string) error {
+// Put adds a put operation to the transaction buffer. ctx is honored
+// while waiting for row locks; once the operation has been buffered,
+// the work for it happens at Commit time.
+func (tx *WriteTransaction) Put(ctx context.Context, tableName string, indexName string, key types.Comparable, document string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
@@ -81,7 +87,6 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 		return err
 	}
 
-	// Validate metadata immediately to fail fast
 	table, err := tx.engine.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return err
@@ -91,10 +96,6 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 		return err
 	}
 
-	// Validate types
-	// Using generic check here, full validation happens at commit or we duplicate logic?
-	// Better to duplicate critical checks or reuse existing private methods
-	// We will validate basically here
 	if index.Type != getTypeFromKey(key) {
 		return &storageerrors.InvalidKeyTypeError{
 			Name:     indexName,
@@ -106,7 +107,7 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 	if err != nil {
 		return err
 	}
-	if err := tx.acquireLockLocked(resource); err != nil {
+	if err := tx.acquireLockLocked(ctx, resource); err != nil {
 		return err
 	}
 	if err := tx.checkReadWriteConflictLocked(resource, tableName, indexName, key); err != nil {
@@ -124,8 +125,12 @@ func (tx *WriteTransaction) Put(tableName string, indexName string, key types.Co
 	return nil
 }
 
-// Del adds a delete operation to the transaction buffer
-func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Comparable) error {
+// Del adds a delete operation to the transaction buffer. ctx is honored
+// while waiting for row locks.
+func (tx *WriteTransaction) Del(ctx context.Context, tableName string, indexName string, key types.Comparable) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
@@ -133,7 +138,6 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 		return err
 	}
 
-	// Validate metadata
 	table, err := tx.engine.TableMetaData.GetTableByName(tableName)
 	if err != nil {
 		return err
@@ -146,7 +150,7 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 	if err != nil {
 		return err
 	}
-	if err := tx.acquireLockLocked(resource); err != nil {
+	if err := tx.acquireLockLocked(ctx, resource); err != nil {
 		return err
 	}
 	if err := tx.checkReadWriteConflictLocked(resource, tableName, indexName, key); err != nil {
@@ -167,8 +171,12 @@ func (tx *WriteTransaction) Del(tableName string, indexName string, key types.Co
 // honoring its read view and any pending writes already staged in the
 // transaction. Pending Put operations are returned as their encoded
 // canonical form (via the engine's codec); pending Deletes report
-// found=false.
-func (tx *WriteTransaction) GetBytes(tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+// found=false. ctx is checked at entry only — once the read view holds
+// the snapshot LSN there is no further blocking work.
+func (tx *WriteTransaction) GetBytes(ctx context.Context, tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
@@ -202,8 +210,18 @@ func (tx *WriteTransaction) GetBytes(tableName string, indexName string, key typ
 	return record.Raw, true, nil
 }
 
-// Commit persists all operations atomically
-func (tx *WriteTransaction) Commit() (err error) {
+// Commit persists all operations atomically.
+//
+// Cancellation: ctx is honored up to and including the moment the WAL
+// BEGIN marker has been synced. Once BEGIN is durable, ctx cancellation
+// no longer aborts the call — the commit either succeeds and applies
+// to the heap/tree, or returns a degradation error. Cancelling after
+// the point of no return is silently ignored so the engine does not
+// leave half-applied state behind.
+func (tx *WriteTransaction) Commit(ctx context.Context) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 	if tx.engine.LockManager != nil {
@@ -225,6 +243,11 @@ func (tx *WriteTransaction) Commit() (err error) {
 	se.opMu.Lock()
 	defer se.opMu.Unlock()
 	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
+
+	// Last chance to abort cleanly before any WAL bytes hit disk.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -318,7 +341,12 @@ func (tx *WriteTransaction) Commit() (err error) {
 }
 
 // Rollback discards all pending operations
-func (tx *WriteTransaction) Rollback() error {
+// Rollback aborts the transaction. ctx is accepted for symmetry with
+// the other operations but is intentionally not used to short-circuit
+// the rollback path itself — once a rollback is in flight we always
+// run it to completion to keep WAL state consistent.
+func (tx *WriteTransaction) Rollback(ctx context.Context) error {
+	_ = ctx
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 	if tx.engine.LockManager != nil {
@@ -378,11 +406,11 @@ func (tx *WriteTransaction) closeReadViewLocked() {
 	}
 }
 
-func (tx *WriteTransaction) acquireLockLocked(resource string) error {
+func (tx *WriteTransaction) acquireLockLocked(ctx context.Context, resource string) error {
 	if tx.engine.LockManager == nil {
 		return nil
 	}
-	if err := tx.engine.LockManager.Acquire(tx.txID, resource); err != nil {
+	if err := tx.engine.LockManager.Acquire(ctx, tx.txID, resource); err != nil {
 		tx.aborted = true
 		tx.abortErr = err
 		tx.writeSet = nil
@@ -445,7 +473,7 @@ func (tx *WriteTransaction) readCommittedRecordRawLocked(tableName string, index
 		return visibleRecordRaw{}, fmt.Errorf("transaction already finished")
 	}
 	tx.readView.refreshSnapshot()
-	return se.visibleRecordForKeyRaw(tx.readView, tableName, indexName, key)
+	return se.visibleRecordForKeyRaw(context.Background(), tx.readView, tableName, indexName, key)
 }
 
 func (tx *WriteTransaction) currentCommittedObservationLocked(tableName string, indexName string, key types.Comparable) (readObservation, error) {

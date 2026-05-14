@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -66,10 +67,10 @@ func TestBTreeV2_Integration_BasicCRUD(t *testing.T) {
 	defer se.Close()
 
 	// INSERT
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"nome":"alice"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"nome":"alice"}`); err != nil {
 		t.Fatalf("Put 1: %v", err)
 	}
-	if err := se.Put("users", "id", types.IntKey(2), `{"id":2,"nome":"bob"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"nome":"bob"}`); err != nil {
 		t.Fatalf("Put 2: %v", err)
 	}
 
@@ -83,7 +84,7 @@ func TestBTreeV2_Integration_BasicCRUD(t *testing.T) {
 	}
 
 	// UPDATE — exercita index.Tree.Upsert (v2)
-	if err := se.Put("users", "id", types.IntKey(1), `{"id":1,"nome":"alice-updated"}`); err != nil {
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"nome":"alice-updated"}`); err != nil {
 		t.Fatalf("Update 1: %v", err)
 	}
 	doc, _, _ = getDocStringExt(t, se, "users", "id", types.IntKey(1))
@@ -120,7 +121,7 @@ func TestEngine_AutoScanWALForMaxLSN(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := int64(1); i <= 5; i++ {
-			se.Put("t", "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i))
+			se.Put(context.Background(), "t", "id", types.IntKey(i), fmt.Sprintf(`{"id":%d}`, i))
 		}
 		se.Close()
 	}
@@ -199,7 +200,7 @@ func TestBTreeV2_Integration_Varchar(t *testing.T) {
 		"carlos+longsufix+lista@empresa.com.br": `{"email":"carlos+longsufix+lista@empresa.com.br","nome":"Carlos"}`,
 	}
 	for email, doc := range rows {
-		if err := se.Put("contacts", "email", types.VarcharKey(email), doc); err != nil {
+		if err := se.Put(context.Background(), "contacts", "email", types.VarcharKey(email), doc); err != nil {
 			t.Fatalf("Put %q: %v", email, err)
 		}
 	}
@@ -216,7 +217,7 @@ func TestBTreeV2_Integration_Varchar(t *testing.T) {
 	}
 
 	// Update (exercita Upsert em VarcharKey)
-	if err := se.Put("contacts", "email", types.VarcharKey("bob@b.co"),
+	if err := se.Put(context.Background(), "contacts", "email", types.VarcharKey("bob@b.co"),
 		`{"email":"bob@b.co","nome":"Bob Updated"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -250,14 +251,14 @@ func TestBTreeV2_Integration_MVCC(t *testing.T) {
 	defer se.Close()
 
 	// v1 da row
-	se.Put("mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":1}`)
+	se.Put(context.Background(), "mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":1}`)
 	txA := se.BeginRead()
 
 	// update — cria v2 no heap, atualiza BTreeV2 via Upsert (chainada por PrevRecordID)
-	se.Put("mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":2}`)
+	se.Put(context.Background(), "mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":2}`)
 	txB := se.BeginRead()
 
-	se.Put("mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":3}`)
+	se.Put(context.Background(), "mvcc_btv2", "id", types.IntKey(1), `{"id":1,"v":3}`)
 
 	// txA vê v1 (snapshot antes dos updates)
 	doc, found, _ := getDocStringExtTx(t, txA, "mvcc_btv2", "id", types.IntKey(1))
@@ -311,7 +312,7 @@ func TestBTreeV2_Integration_ReopenWithTDE(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := se.Put("t", "id", types.IntKey(42), `{"id":42,"payload":"confidencial"}`); err != nil {
+	if err := se.Put(context.Background(), "t", "id", types.IntKey(42), `{"id":42,"payload":"confidencial"}`); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := se.Close(); err != nil {

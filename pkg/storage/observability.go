@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -67,6 +68,14 @@ type Options struct {
 	// bsoncodec.New() is used so the engine keeps its historical
 	// JSON-in / BSON-on-disk behavior.
 	Codec codec.Codec
+
+	// RecoveryContext is passed to the implicit Recover call in
+	// NewProductionStorageEngineWithOptions. nil means context.Background().
+	// Useful when bootstrapping under a shutdown deadline — cancelling
+	// the context interrupts the WAL replay early. The engine's other
+	// methods take their own ctx parameter so this only governs the
+	// startup-time recovery.
+	RecoveryContext context.Context
 }
 
 // Stats is a point-in-time snapshot of cumulative engine counters.

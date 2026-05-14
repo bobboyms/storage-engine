@@ -2,6 +2,7 @@ package v2
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -362,7 +363,7 @@ func TestHeapV2_Vacuum_PopulatesFSM(t *testing.T) {
 	}
 
 	// Vacuum com minLSN alto → todos os tombstones reclaimed.
-	n, err := h.Vacuum(100)
+	n, err := h.Vacuum(context.Background(), 100)
 	if err != nil {
 		t.Fatalf("Vacuum: %v", err)
 	}
@@ -403,7 +404,7 @@ func TestHeapV2_FSM_ReusesVacuumedSpace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.Vacuum(10); err != nil {
+	if _, err := h.Vacuum(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -74,7 +75,7 @@ func main() {
 
 	// 5. Delete a Product (Create Tombstone)
 	fmt.Println("🗑️  Deleting Product 2 (Mouse)...")
-	_, err = se.Del("products", "id", types.IntKey(2)) // Returns (found, error)
+	_, err = se.Del(context.Background(), "products", "id", types.IntKey(2)) // Returns (found, error)
 	if err != nil {
 		log.Fatalf("Delete failed: %v", err)
 	}
@@ -83,7 +84,7 @@ func main() {
 	// Because Tx1 is still active and its snapshot might need 'Mouse'.
 	fmt.Println("\n🧹 Running Vacuum (Pass 1)...")
 	fmt.Println("   (Expectation: Should NOT reclaim space for 'Mouse' because Tx1 is active)")
-	if err := se.Vacuum("products"); err != nil {
+	if err := se.Vacuum(context.Background(), "products"); err != nil {
 		log.Fatalf("Vacuum failed: %v", err)
 	}
 
@@ -115,7 +116,7 @@ func main() {
 	// 9. Run Vacuum Again (Should Reclaim)
 	fmt.Println("\n🧹 Running Vacuum (Pass 2)...")
 	fmt.Println("   (Expectation: Should remove 'Mouse' tombstone fully)")
-	if err := se.Vacuum("products"); err != nil {
+	if err := se.Vacuum(context.Background(), "products"); err != nil {
 		log.Fatalf("Vacuum failed: %v", err)
 	}
 
@@ -140,7 +141,7 @@ func insertProduct(se *storage.StorageEngine, id int, name string) {
 	keys := map[string]types.Comparable{
 		"id": types.IntKey(id),
 	}
-	if err := se.InsertRow("products", doc, keys); err != nil {
+	if err := se.InsertRow(context.Background(), "products", doc, keys); err != nil {
 		log.Fatalf("Insert failed: %v", err)
 	}
 	fmt.Printf("   -> Inserted ID %d: %s\n", id, name)

@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -200,30 +201,30 @@ func TestTableManager_Integration(t *testing.T) {
 	se, _ := storage.NewStorageEngine(mgr, nil)
 
 	// Insere dados na PK
-	err = se.Put("users", "id", types.IntKey(1), "user_1")
+	err = se.Put(context.Background(), "users", "id", types.IntKey(1), "user_1")
 	if err != nil {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
-	err = se.Put("users", "id", types.IntKey(2), "user_2")
+	err = se.Put(context.Background(), "users", "id", types.IntKey(2), "user_2")
 	if err != nil {
 		t.Fatalf("Failed to insert into primary key: %v", err)
 	}
 
 	// Tenta inserir duplicata na PK - must fail (Update em MVCC)
 	// Em MVCC, Put em PK existsnte = Update.
-	err = se.Put("users", "id", types.IntKey(1), "user_1_duplicate")
+	err = se.Put(context.Background(), "users", "id", types.IntKey(1), "user_1_duplicate")
 	if err != nil {
 		t.Fatalf("Updating primary key should succeed: %v", err)
 	}
 
 	// Insere dados no index secundário (permite duplicatas)
-	err = se.Put("users", "age", types.IntKey(25), "age_25")
+	err = se.Put(context.Background(), "users", "age", types.IntKey(25), "age_25")
 	if err != nil {
 		t.Fatalf("Failed to insert into secondary index: %v", err)
 	}
 
-	err = se.Put("users", "age", types.IntKey(25), "age_25_2") // Duplicata OK em index secundário
+	err = se.Put(context.Background(), "users", "age", types.IntKey(25), "age_25_2") // Duplicata OK em index secundário
 	if err != nil {
 		t.Fatalf("Secondary index should allow duplicates: %v", err)
 	}

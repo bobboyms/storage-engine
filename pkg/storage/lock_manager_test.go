@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -17,10 +18,10 @@ func TestLockManager_DeadlockAbortsYoungestVictim(t *testing.T) {
 	resourceA := lockResourceID("users", "id", "1")
 	resourceB := lockResourceID("users", "id", "2")
 
-	if err := lm.Acquire(1, resourceA); err != nil {
+	if err := lm.Acquire(context.Background(), 1, resourceA); err != nil {
 		t.Fatalf("tx1 acquire A: %v", err)
 	}
-	if err := lm.Acquire(2, resourceB); err != nil {
+	if err := lm.Acquire(context.Background(), 2, resourceB); err != nil {
 		t.Fatalf("tx2 acquire B: %v", err)
 	}
 
@@ -28,13 +29,13 @@ func TestLockManager_DeadlockAbortsYoungestVictim(t *testing.T) {
 	tx1Result := make(chan error, 1)
 	go func() {
 		close(tx1Ready)
-		tx1Result <- lm.Acquire(1, resourceB)
+		tx1Result <- lm.Acquire(context.Background(), 1, resourceB)
 	}()
 	<-tx1Ready
 
 	time.Sleep(20 * time.Millisecond)
 
-	tx2Err := lm.Acquire(2, resourceA)
+	tx2Err := lm.Acquire(context.Background(), 2, resourceA)
 	if !errors.Is(tx2Err, ErrDeadlockVictim) {
 		t.Fatalf("expected deadlock victim error, got %v", tx2Err)
 	}
@@ -50,10 +51,10 @@ func TestLockManager_DeadlockAbortsYoungestVictim(t *testing.T) {
 
 	lm.ReleaseAll(1)
 
-	if err := lm.Acquire(3, resourceA); err != nil {
+	if err := lm.Acquire(context.Background(), 3, resourceA); err != nil {
 		t.Fatalf("tx3 acquire A after release: %v", err)
 	}
-	if err := lm.Acquire(3, resourceB); err != nil {
+	if err := lm.Acquire(context.Background(), 3, resourceB); err != nil {
 		t.Fatalf("tx3 acquire B after release: %v", err)
 	}
 	lm.ReleaseAll(3)
@@ -67,13 +68,13 @@ func TestLockManager_TimesOutWaiting(t *testing.T) {
 	})
 
 	resource := lockResourceID("users", "id", "1")
-	if err := lm.Acquire(1, resource); err != nil {
+	if err := lm.Acquire(context.Background(), 1, resource); err != nil {
 		t.Fatalf("tx1 acquire: %v", err)
 	}
 	defer lm.ReleaseAll(1)
 
 	start := time.Now()
-	err := lm.Acquire(2, resource)
+	err := lm.Acquire(context.Background(), 2, resource)
 	if !errors.Is(err, ErrLockWaitTimeout) {
 		t.Fatalf("expected wait timeout, got %v", err)
 	}
@@ -103,7 +104,7 @@ func TestLockManager_MakesProgressUnderContention(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
 				txID := uint64(workerID*1000 + i)
-				if err := lm.Acquire(txID, resource); err != nil {
+				if err := lm.Acquire(context.Background(), txID, resource); err != nil {
 					errCh <- err
 					return
 				}

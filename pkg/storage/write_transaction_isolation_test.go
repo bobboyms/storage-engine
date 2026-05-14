@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -46,7 +47,7 @@ func TestWriteTransaction_ReadsOwnPendingWrites(t *testing.T) {
 	defer se.Close()
 
 	tx := se.BeginWriteTransaction()
-	if err := tx.Put("accounts", "id", types.IntKey(1), `{"id":1,"balance":100}`); err != nil {
+	if err := tx.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id":1,"balance":100}`); err != nil {
 		t.Fatalf("tx put: %v", err)
 	}
 
@@ -58,7 +59,7 @@ func TestWriteTransaction_ReadsOwnPendingWrites(t *testing.T) {
 		t.Fatalf("expected own pending write, found=%v doc=%q", found, doc)
 	}
 
-	if err := tx.Del("accounts", "id", types.IntKey(1)); err != nil {
+	if err := tx.Del(context.Background(), "accounts", "id", types.IntKey(1)); err != nil {
 		t.Fatalf("tx delete own pending write: %v", err)
 	}
 
@@ -75,7 +76,7 @@ func TestWriteTransaction_PreventsLostUpdateAfterStaleRead(t *testing.T) {
 	se := openIsolationTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("accounts", "id", types.IntKey(1), `{"id":1,"balance":100}`); err != nil {
+	if err := se.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id":1,"balance":100}`); err != nil {
 		t.Fatalf("seed put: %v", err)
 	}
 
@@ -91,14 +92,14 @@ func TestWriteTransaction_PreventsLostUpdateAfterStaleRead(t *testing.T) {
 		t.Fatalf("tx2 initial read: found=%v doc=%q err=%v", found, doc, err)
 	}
 
-	if err := tx1.Put("accounts", "id", types.IntKey(1), `{"id":1,"balance":150}`); err != nil {
+	if err := tx1.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id":1,"balance":150}`); err != nil {
 		t.Fatalf("tx1 put: %v", err)
 	}
-	if err := tx1.Commit(); err != nil {
+	if err := tx1.Commit(context.Background()); err != nil {
 		t.Fatalf("tx1 commit: %v", err)
 	}
 
-	err = tx2.Put("accounts", "id", types.IntKey(1), `{"id":1,"balance":50}`)
+	err = tx2.Put(context.Background(), "accounts", "id", types.IntKey(1), `{"id":1,"balance":50}`)
 	if !errors.Is(err, ErrSerializationConflict) {
 		t.Fatalf("expected serialization conflict, got %v", err)
 	}
@@ -113,10 +114,10 @@ func TestWriteTransaction_RepeatableReadStillAllowsWriteSkew(t *testing.T) {
 	se := openIsolationTestEngine(t)
 	defer se.Close()
 
-	if err := se.Put("shifts", "id", types.IntKey(1), `{"id":1,"on_call":true}`); err != nil {
+	if err := se.Put(context.Background(), "shifts", "id", types.IntKey(1), `{"id":1,"on_call":true}`); err != nil {
 		t.Fatalf("seed shift 1: %v", err)
 	}
-	if err := se.Put("shifts", "id", types.IntKey(2), `{"id":2,"on_call":true}`); err != nil {
+	if err := se.Put(context.Background(), "shifts", "id", types.IntKey(2), `{"id":2,"on_call":true}`); err != nil {
 		t.Fatalf("seed shift 2: %v", err)
 	}
 
@@ -147,17 +148,17 @@ func TestWriteTransaction_RepeatableReadStillAllowsWriteSkew(t *testing.T) {
 		t.Fatalf("tx2 unexpected snapshot: %q / %q", doc2a, doc2b)
 	}
 
-	if err := tx1.Put("shifts", "id", types.IntKey(1), `{"id":1,"on_call":false}`); err != nil {
+	if err := tx1.Put(context.Background(), "shifts", "id", types.IntKey(1), `{"id":1,"on_call":false}`); err != nil {
 		t.Fatalf("tx1 put row1: %v", err)
 	}
-	if err := tx2.Put("shifts", "id", types.IntKey(2), `{"id":2,"on_call":false}`); err != nil {
+	if err := tx2.Put(context.Background(), "shifts", "id", types.IntKey(2), `{"id":2,"on_call":false}`); err != nil {
 		t.Fatalf("tx2 put row2: %v", err)
 	}
 
-	if err := tx1.Commit(); err != nil {
+	if err := tx1.Commit(context.Background()); err != nil {
 		t.Fatalf("tx1 commit: %v", err)
 	}
-	if err := tx2.Commit(); err != nil {
+	if err := tx2.Commit(context.Background()); err != nil {
 		t.Fatalf("tx2 commit: %v", err)
 	}
 

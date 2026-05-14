@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -97,10 +98,10 @@ func TestRecovery_UndoLoserTransactionAcrossPages(t *testing.T) {
 	fx := newRecoveryFixture(dir, "users")
 
 	base := openRecoveryEngine(t, fx, false)
-	if err := base.Put("users", "id", types.IntKey(1), `{"id":1,"name":"before-update"}`); err != nil {
+	if err := base.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"name":"before-update"}`); err != nil {
 		t.Fatalf("base Put key 1: %v", err)
 	}
-	if err := base.Put("users", "id", types.IntKey(2), `{"id":2,"name":"before-delete"}`); err != nil {
+	if err := base.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"name":"before-delete"}`); err != nil {
 		t.Fatalf("base Put key 2: %v", err)
 	}
 	if err := base.Close(); err != nil {
@@ -192,7 +193,7 @@ func TestRecovery_UndoLoserMultiIndexUpdateRestoresSecondaryIndexes(t *testing.T
 	}
 
 	base := openRecoveryEngineWithIndexes(t, fx, indexes, false)
-	if err := base.InsertRow("users", `{"id":1,"email":"before@example.com","name":"Before"}`, map[string]types.Comparable{
+	if err := base.InsertRow(context.Background(), "users", `{"id":1,"email":"before@example.com","name":"Before"}`, map[string]types.Comparable{
 		"id":    types.IntKey(1),
 		"email": types.VarcharKey("before@example.com"),
 	}); err != nil {
@@ -264,10 +265,10 @@ func TestRecovery_CrashDuringUndoRemainsRecoverable(t *testing.T) {
 	fx := newRecoveryFixture(dir, "users")
 
 	base := openRecoveryEngine(t, fx, false)
-	if err := base.Put("users", "id", types.IntKey(1), `{"id":1,"name":"before-update"}`); err != nil {
+	if err := base.Put(context.Background(), "users", "id", types.IntKey(1), `{"id":1,"name":"before-update"}`); err != nil {
 		t.Fatalf("base Put key 1: %v", err)
 	}
-	if err := base.Put("users", "id", types.IntKey(2), `{"id":2,"name":"before-delete"}`); err != nil {
+	if err := base.Put(context.Background(), "users", "id", types.IntKey(2), `{"id":2,"name":"before-delete"}`); err != nil {
 		t.Fatalf("base Put key 2: %v", err)
 	}
 	if err := base.Close(); err != nil {
