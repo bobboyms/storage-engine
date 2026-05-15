@@ -34,6 +34,7 @@ import (
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
 	"github.com/bobboyms/storage-engine/pkg/heap"
 	v2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
+	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
 // FuzzyCheckpoint runs a non-blocking checkpoint and writes a
@@ -74,13 +75,22 @@ func (se *StorageEngine) fuzzyCheckpointLocked(ctx context.Context) error {
 		return fmt.Errorf("fuzzy checkpoint: sync WAL: %w", err)
 	}
 
+	// ARIES: snapshot the Dirty Page Table BEFORE the flush so the
+	// recorded recLSNs reflect what was unflushed at the moment we
+	// declared the checkpoint. We still flush below; future analyses
+	// honor the snapshot to bound the redo start. ATT also captures
+	// the active transactions' lastLSN at the same instant.
+	dpt := se.snapshotDirtyPageTable()
+	att := se.snapshotActiveTxTable()
+
 	if err := se.flushAllDirtyPages(); err != nil {
 		return fmt.Errorf("fuzzy checkpoint: flush pages: %w", err)
 	}
 
 	// 4. Grava o record de checkpoint no WAL com o beginLSN.
 	//    Recovery encontrará este record e iniciará o redo a partir de beginLSN.
-	if err := se.WAL.WriteCheckpointRecord(beginLSN); err != nil {
+	payload := serializeCheckpointPayloadV2(beginLSN, dpt, att)
+	if err := se.WAL.WriteCheckpointRecordPayload(beginLSN, payload); err != nil {
 		return fmt.Errorf("fuzzy checkpoint: escrever record WAL: %w", err)
 	}
 
@@ -89,6 +99,51 @@ func (se *StorageEngine) fuzzyCheckpointLocked(ctx context.Context) error {
 	}
 
 	se.fireCheckpoint(CheckpointEvent{BeginLSN: beginLSN})
+	return nil
+}
+
+// snapshotDirtyPageTable collects (path, pageID, recLSN) for every
+// page currently dirty in any storage engine buffer pool, suitable for
+// persisting in the next checkpoint record.
+func (se *StorageEngine) snapshotDirtyPageTable() []dirtyPageEntry {
+	out := []dirtyPageEntry{}
+	collect := func(path string, infos []pagestore.DirtyPageInfo) {
+		for _, info := range infos {
+			if info.RecLSN == 0 {
+				continue
+			}
+			out = append(out, dirtyPageEntry{
+				Path:   path,
+				PageID: uint64(info.PageID),
+				RecLSN: info.RecLSN,
+			})
+		}
+	}
+
+	for _, tableName := range se.TableMetaData.ListTables() {
+		table, err := se.TableMetaData.GetTableByName(tableName)
+		if err != nil {
+			continue
+		}
+		if heapV2, ok := table.Heap.(*v2.HeapV2); ok {
+			collect(heapV2.Path(), heapV2.DirtyPages())
+		}
+		for _, idx := range table.GetIndices() {
+			if treeV2, ok := idx.Tree.(*btreev2.BTreeV2); ok {
+				collect(treeV2.Path(), treeV2.DirtyPages())
+			}
+		}
+	}
+	return out
+}
+
+// snapshotActiveTxTable returns one (txID, lastLSN) entry per active
+// write transaction known to the engine. The current engine tracks the
+// read view in TxRegistry but does not persist per-tx WAL LSNs there;
+// returning an empty slice is correct for now (recovery falls back to
+// scanning the WAL from CheckpointLSN). Future evolution can plug a
+// real source of truth here without changing the on-disk format.
+func (se *StorageEngine) snapshotActiveTxTable() []activeTxEntry {
 	return nil
 }
 

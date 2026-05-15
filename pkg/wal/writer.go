@@ -330,20 +330,32 @@ func (w *WALWriter) Close() error {
 	return closeErr
 }
 
-// WriteCheckpointRecord grava um record de checkpoint fuzzy no WAL.
-// `beginLSN` é o LSN capturado no início do checkpoint — recovery pode
-// pular entradas com LSN < beginLSN porque as pages sujas naquele
-// momento foram garantidamente flushadas ao disco antes desta chamada.
+// WriteCheckpointRecord grava um record de checkpoint fuzzy no WAL com
+// apenas o beginLSN (legacy v1 payload). Prefira WriteCheckpointRecordPayload
+// quando quiser carregar DPT/ATT no record.
 func (w *WALWriter) WriteCheckpointRecord(beginLSN uint64) error {
 	payload := make([]byte, 8)
 	binary.LittleEndian.PutUint64(payload, beginLSN)
+	return w.WriteCheckpointRecordPayload(beginLSN, payload)
+}
+
+// WriteCheckpointRecordPayload grava um checkpoint com um payload
+// arbitrário. Os primeiros 8 bytes DEVEM ser o beginLSN little-endian
+// (para compatibilidade com leitores antigos).
+func (w *WALWriter) WriteCheckpointRecordPayload(beginLSN uint64, payload []byte) error {
+	if len(payload) < 8 {
+		return fmt.Errorf("wal: checkpoint payload too short (%d)", len(payload))
+	}
+	if binary.LittleEndian.Uint64(payload[:8]) != beginLSN {
+		return fmt.Errorf("wal: checkpoint payload header beginLSN mismatch")
+	}
 
 	entry := AcquireEntry()
 	entry.Header.Magic = WALMagic
 	entry.Header.Version = WALVersion
 	entry.Header.EntryType = EntryCheckpoint
 	entry.Header.LSN = beginLSN
-	entry.Header.PayloadLen = 8
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by DPT/ATT cardinality
 	entry.Header.CRC32 = CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload[:0], payload...)
 

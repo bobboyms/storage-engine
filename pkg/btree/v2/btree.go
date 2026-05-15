@@ -83,6 +83,80 @@ type BTreeV2 struct {
 
 	writeMu            sync.Mutex
 	currentMutationLSN uint64
+
+	// structural is the nested-top-action logger used to bracket
+	// multi-page mutations (splits, merges) with WAL Begin/Commit
+	// records and capture before-images for crash recovery. nil means
+	// no structural logging (e.g. unit tests that exercise the tree
+	// in isolation without a WAL).
+	structural StructuralLogger
+}
+
+// StructuralLogger mirrors pkg/storage.StructuralLogger so the B+ tree
+// can call into the engine without importing it.
+type StructuralLogger interface {
+	BeginNTA(kind uint8, pages []NTAPage) (uint64, error)
+	CommitNTA(ntaID uint64) error
+}
+
+// NTAPage carries the before-image of a page involved in a structural
+// op so crash recovery can restore the pre-NTA state when the Commit
+// record never made it to disk.
+type NTAPage struct {
+	Path     string
+	PageID   pagestore.PageID
+	PreImage []byte
+}
+
+// Structural op kinds. Kept in sync with pkg/storage/nta.go.
+const (
+	NTAKindBTreeSplit uint8 = 1
+	NTAKindBTreeMerge uint8 = 2
+)
+
+// SetStructuralLogger plugs in a logger that the tree uses to bracket
+// structural ops. Default is no-op; the storage engine wires this
+// during NewStorageEngine.
+func (tr *BTreeV2) SetStructuralLogger(l StructuralLogger) {
+	tr.structural = l
+}
+
+// snapshotPageImage returns a copy of the on-page bytes. Used to
+// capture before-images for NTA Begin records.
+func snapshotPageImage(page *pagestore.Page) []byte {
+	out := make([]byte, pagestore.PageSize)
+	copy(out, page[:])
+	return out
+}
+
+// beginStructural emits a Begin entry capturing the before-images of
+// the given handles. Returns the NTA id (0 if structural logging is
+// disabled). beforeImages are snapshotted under the caller's latches.
+//
+//nolint:unparam // kind will diversify when merge NTAs are wired up
+func (tr *BTreeV2) beginStructural(kind uint8, handles ...*pagestore.PageHandle) (uint64, error) {
+	if tr.structural == nil {
+		return 0, nil
+	}
+	pages := make([]NTAPage, 0, len(handles))
+	for _, h := range handles {
+		if h == nil {
+			continue
+		}
+		pages = append(pages, NTAPage{
+			Path:     tr.pf.Path(),
+			PageID:   h.ID(),
+			PreImage: snapshotPageImage(h.Page()),
+		})
+	}
+	return tr.structural.BeginNTA(kind, pages)
+}
+
+func (tr *BTreeV2) commitStructural(ntaID uint64) error {
+	if tr.structural == nil || ntaID == 0 {
+		return nil
+	}
+	return tr.structural.CommitNTA(ntaID)
 }
 
 // NewBTreeV2 abre ou cria uma B+ tree page-based em `path` com IntKeyCodec
@@ -166,6 +240,18 @@ func (tr *BTreeV2) Sync() error {
 
 // Path devolve o caminho do arquivo.
 func (tr *BTreeV2) Path() string { return tr.pf.Path() }
+
+// WritePageBytes writes `data` (exactly PageSize bytes) to `pageID` on
+// disk, bypassing the buffer pool. Used by recovery to restore NTA
+// before-images of structural page mutations.
+func (tr *BTreeV2) WritePageBytes(pageID pagestore.PageID, data []byte) error {
+	if len(data) != pagestore.PageSize {
+		return fmt.Errorf("btree/v2: WritePageBytes expects %d bytes, got %d", pagestore.PageSize, len(data))
+	}
+	var p pagestore.Page
+	copy(p[:], data)
+	return tr.pf.WritePage(pageID, &p)
+}
 
 func (tr *BTreeV2) SetBeforeFlushHook(hook func(pageID pagestore.PageID, page *pagestore.Page) error) {
 	tr.bp.SetBeforeFlushHook(hook)
@@ -408,6 +494,17 @@ func (tr *BTreeV2) ensureRootSafeForInsertFixed() (*pagestore.PageHandle, *NodeP
 		return rootH, rootNP, nil
 	}
 
+	// ARIES nested top action: capture the pre-split image of the old
+	// root before any in-memory mutation. The new root and new right
+	// are freshly allocated pages — their "before state" is
+	// equivalent to "not yet linked", so we do not log them.
+	ntaID, err := tr.beginStructural(NTAKindBTreeSplit, rootH)
+	if err != nil {
+		rootH.Release()
+		tr.metaMu.Unlock()
+		return nil, nil, err
+	}
+
 	newRootH, err := tr.bp.NewPage()
 	if err != nil {
 		rootH.Release()
@@ -439,6 +536,14 @@ func (tr *BTreeV2) ensureRootSafeForInsertFixed() (*pagestore.PageHandle, *NodeP
 
 	newRootPageID := newRootH.ID()
 	if err := tr.updateRootLocked(newRootPageID); err != nil {
+		rightH.Release()
+		newRootH.Release()
+		rootH.Release()
+		tr.metaMu.Unlock()
+		return nil, nil, err
+	}
+
+	if err := tr.commitStructural(ntaID); err != nil {
 		rightH.Release()
 		newRootH.Release()
 		rootH.Release()
@@ -480,6 +585,14 @@ func (tr *BTreeV2) splitChildAndChooseFixed(
 	childNP *NodePage,
 	key uint64,
 ) (*pagestore.PageHandle, *NodePage, error) {
+	// ARIES NTA: capture before-images of parent + child. New right
+	// leaf is fresh and does not need a pre-image.
+	ntaID, err := tr.beginStructural(NTAKindBTreeSplit, parentH, childH)
+	if err != nil {
+		childH.Release()
+		return nil, nil, err
+	}
+
 	rightH, sepKey, err := tr.splitFixedNode(childH, childNP)
 	if err != nil {
 		childH.Release()
@@ -492,6 +605,12 @@ func (tr *BTreeV2) splitChildAndChooseFixed(
 		return nil, nil, err
 	}
 	tr.markDirty(parentH)
+
+	if err := tr.commitStructural(ntaID); err != nil {
+		rightH.Release()
+		childH.Release()
+		return nil, nil, err
+	}
 
 	if tr.codec.Compare(key, sepKey) < 0 {
 		rightH.Release()

@@ -902,9 +902,15 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// 2. Undo-lite: loser txs nunca chegaram ao estado visible porque o
+	// 2a. Undo-lite: loser txs nunca chegaram ao estado visible porque o
 	// write path só aplica heap/tree after COMMIT durável.
 	if err := se.undoLoserTransactions(walPath, cipher, analysis); err != nil {
+		return err
+	}
+	// 2b. Roll back nested top actions that started but never
+	// committed. Their captured before-images get written back to
+	// the on-disk pages so a half-applied split / merge is reverted.
+	if err := se.rollbackPartialNTAs(analysis); err != nil {
 		return err
 	}
 
@@ -965,7 +971,15 @@ func (se *StorageEngine) runPhysicalRedo(ctx context.Context, walPath string, ci
 		if entry.Header.LSN > maxLSN {
 			maxLSN = entry.Header.LSN
 		}
-		if analysis.CheckpointLSN > 0 && entry.Header.LSN < analysis.CheckpointLSN {
+		// ARIES: physical redo can start from min(DPT.recLSN) instead
+		// of CheckpointLSN. Pages absent from the DPT at checkpoint
+		// time were flushed; entries before minRec for those pages
+		// have been durably applied.
+		startLSN := analysis.CheckpointLSN
+		if rec := minRecLSN(analysis.DPT); rec > 0 && rec < startLSN {
+			startLSN = rec
+		}
+		if startLSN > 0 && entry.Header.LSN < startLSN {
 			skipped++
 			wal.ReleaseEntry(entry)
 			continue

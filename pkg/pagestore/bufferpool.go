@@ -49,12 +49,18 @@ type BufferPool struct {
 type DirtyPageInfo struct {
 	PageID  PageID
 	PageLSN uint64
+	// RecLSN is the oldest unflushed LSN that has modified this page
+	// since it transitioned from clean → dirty. ARIES recovery uses
+	// the minimum RecLSN across the dirty page table to bound the
+	// physical redo start.
+	RecLSN uint64
 }
 
 type frame struct {
 	page     Page
 	pageID   PageID
 	dirty    atomic.Bool
+	recLSN   atomic.Uint64 // oldest unflushed LSN; 0 when clean
 	pinCount atomic.Int32
 
 	rw sync.RWMutex // protege `page`
@@ -118,6 +124,7 @@ func (bp *BufferPool) DirtyPages() []DirtyPageInfo {
 		dirty = append(dirty, DirtyPageInfo{
 			PageID:  f.pageID,
 			PageLSN: hdr.PageLSN,
+			RecLSN:  f.recLSN.Load(),
 		})
 	}
 	return dirty
@@ -222,6 +229,7 @@ func (bp *BufferPool) tryEvictLocked() bool {
 				return false
 			}
 			f.dirty.Store(false)
+			f.recLSN.Store(0)
 		}
 
 		delete(bp.frames, f.pageID)
@@ -326,7 +334,19 @@ func (h *PageHandle) ID() PageID { return h.frame.pageID }
 // MarkDirty sinaliza que o content foi modificado. Só faz sentido
 // depois de um FetchForWrite ou NewPage — marcar com latch de read
 // é um bug no chamador mas does not cause corruption (só flush desnecessário).
-func (h *PageHandle) MarkDirty() { h.frame.dirty.Store(true) }
+//
+// On a clean → dirty transition the frame snapshots the page's current
+// PageLSN as its ARIES recLSN (oldest unflushed LSN). The recLSN is
+// reset to 0 when the page is flushed back to disk. Callers should
+// therefore call AdvancePageLSN before MarkDirty so the captured LSN
+// matches the modifying entry.
+func (h *PageHandle) MarkDirty() {
+	if h.frame.dirty.CompareAndSwap(false, true) {
+		if hdr, err := h.frame.page.GetHeader(); err == nil {
+			h.frame.recLSN.Store(hdr.PageLSN)
+		}
+	}
+}
 
 // Release libera o latch e decrementa o pinCount. Idempotente.
 // Em caso de PAGES de write sujas, a gravação só acontece em

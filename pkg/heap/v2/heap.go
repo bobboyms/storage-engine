@@ -71,6 +71,19 @@ func NewHeapV2(path string, bufferPoolCapacity int, cipher crypto.Cipher) (*Heap
 // Path devolve o caminho do page file subjacente.
 func (h *HeapV2) Path() string { return h.pf.Path() }
 
+// WritePageBytes writes `data` (exactly PageSize bytes) to `pageID` on
+// disk, bypassing the buffer pool. Used by recovery to restore NTA
+// before-images. Caller is responsible for any in-memory frame
+// invalidation; today recovery runs before any reads so this is safe.
+func (h *HeapV2) WritePageBytes(pageID pagestore.PageID, data []byte) error {
+	if len(data) != pagestore.PageSize {
+		return fmt.Errorf("heap/v2: WritePageBytes expects %d bytes, got %d", pagestore.PageSize, len(data))
+	}
+	var p pagestore.Page
+	copy(p[:], data)
+	return h.pf.WritePage(pageID, &p)
+}
+
 func (h *HeapV2) SetBeforeFlushHook(hook func(pageID pagestore.PageID, page *pagestore.Page) error) {
 	h.bp.SetBeforeFlushHook(hook)
 }

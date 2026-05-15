@@ -99,6 +99,13 @@ func (tr *BTreeV2) ensureRootSafeForInsertVar(key []byte) (*pagestore.PageHandle
 		return rootH, rootVP, nil
 	}
 
+	ntaID, err := tr.beginStructural(NTAKindBTreeSplit, rootH)
+	if err != nil {
+		rootH.Release()
+		tr.metaMu.Unlock()
+		return nil, nil, err
+	}
+
 	newRootH, err := tr.bp.NewPage()
 	if err != nil {
 		rootH.Release()
@@ -137,6 +144,14 @@ func (tr *BTreeV2) ensureRootSafeForInsertVar(key []byte) (*pagestore.PageHandle
 		return nil, nil, err
 	}
 
+	if err := tr.commitStructural(ntaID); err != nil {
+		rightH.Release()
+		newRootH.Release()
+		rootH.Release()
+		tr.metaMu.Unlock()
+		return nil, nil, err
+	}
+
 	rightH.Release()
 	rootH.Release()
 	tr.metaMu.Unlock()
@@ -150,6 +165,12 @@ func (tr *BTreeV2) splitChildAndChooseVar(
 	childVP *VariableNodePage,
 	key []byte,
 ) (*pagestore.PageHandle, *VariableNodePage, error) {
+	ntaID, err := tr.beginStructural(NTAKindBTreeSplit, parentH, childH)
+	if err != nil {
+		childH.Release()
+		return nil, nil, err
+	}
+
 	rightH, sepKey, err := tr.splitVarNode(childH, childVP)
 	if err != nil {
 		childH.Release()
@@ -162,6 +183,12 @@ func (tr *BTreeV2) splitChildAndChooseVar(
 		return nil, nil, err
 	}
 	tr.markDirty(parentH)
+
+	if err := tr.commitStructural(ntaID); err != nil {
+		rightH.Release()
+		childH.Release()
+		return nil, nil, err
+	}
 
 	if tr.varCodec.Compare(key, sepKey) < 0 {
 		rightH.Release()

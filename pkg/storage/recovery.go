@@ -59,8 +59,15 @@ func findLastCheckpointLSNWithCipher(walPath string, cipher crypto.Cipher) (uint
 }
 
 const (
+	// txAwareWALVersion is the WAL entry version that carries the
+	// transaction id in the payload prefix.
 	txAwareWALVersion = 2
-	txPayloadPrefix   = 8
+	// ariesWALVersion adds prevLSN after the txID. Together they form
+	// the per-tx backlink chain ARIES needs for safe restartable undo.
+	ariesWALVersion = 3
+	txPayloadPrefix = 8 // bytes: just txID (v2 layout)
+	// ariesPayloadPrefix = txID(8) + prevLSN(8) (v3 layout).
+	ariesPayloadPrefix = 16
 )
 
 type recoveryTxnStatus uint8
@@ -86,6 +93,111 @@ type recoveryAnalysis struct {
 	CommittedTxs  map[uint64]struct{}
 	LoserTxs      map[uint64]struct{}
 	UndoneLSNs    map[uint64]map[uint64]struct{}
+	// DPT captured from the latest checkpoint record. minRecLSN(DPT)
+	// is the lower bound for physical redo: entries with LSN below
+	// that point have necessarily been applied and flushed.
+	DPT []dirtyPageEntry
+	// PartialNTAs maps NTABegin LSN → its parsed payload for every
+	// nested top action that did not see a matching NTACommit. These
+	// represent structural ops that crashed mid-flight; recovery
+	// restores the captured before-images for their pages.
+	PartialNTAs map[uint64]ntaBeginRecord
+}
+
+type ntaBeginRecord struct {
+	Kind  uint8
+	Pages []NTAPage
+}
+
+// ingestTxEntry folds a transactional WAL entry into the analysis
+// tx-table state and, when the entry is a CLR, records the LSN whose
+// effects it undoes.
+func (ra *recoveryAnalysis) ingestTxEntry(txID uint64, entry *wal.WALEntry, payload []byte) error {
+	state := ra.TxTable[txID]
+	if state.FirstLSN == 0 || entry.Header.LSN < state.FirstLSN {
+		state.FirstLSN = entry.Header.LSN
+	}
+	if entry.Header.LSN > state.LastLSN {
+		state.LastLSN = entry.Header.LSN
+	}
+	switch entry.Header.EntryType {
+	case wal.EntryBegin:
+		if state.Status == recoveryTxnUnknown {
+			state.Status = recoveryTxnActive
+		}
+	case wal.EntryCommit:
+		state.Status = recoveryTxnCommitted
+	case wal.EntryAbort:
+		state.Status = recoveryTxnAborted
+	default:
+		if state.Status == recoveryTxnUnknown {
+			state.Status = recoveryTxnActive
+		}
+	}
+	ra.TxTable[txID] = state
+
+	if entry.Header.EntryType == wal.EntryCLR {
+		originalLSN, _, _, _, err := DeserializeCompensationEntry(payload)
+		if err != nil {
+			return fmt.Errorf("deserialize clr: %w", err)
+		}
+		if _, ok := ra.UndoneLSNs[txID]; !ok {
+			ra.UndoneLSNs[txID] = make(map[uint64]struct{})
+		}
+		ra.UndoneLSNs[txID][originalLSN] = struct{}{}
+	}
+	return nil
+}
+
+// ingestNTA folds a nested-top-action entry (Begin or Commit) into
+// the partial-NTA map so recovery can later restore before-images for
+// NTAs whose Commit never made it to disk.
+func (ra *recoveryAnalysis) ingestNTA(entry *wal.WALEntry) error {
+	switch entry.Header.EntryType {
+	case wal.EntryNTABegin:
+		kind, pages, err := deserializeNTABeginPayload(entry.Payload)
+		if err != nil {
+			return err
+		}
+		ra.PartialNTAs[entry.Header.LSN] = ntaBeginRecord{Kind: kind, Pages: pages}
+	case wal.EntryNTACommit:
+		ntaID, err := deserializeNTACommitPayload(entry.Payload)
+		if err != nil {
+			return err
+		}
+		delete(ra.PartialNTAs, ntaID)
+	}
+	return nil
+}
+
+// ingestCheckpoint folds a checkpoint payload into the analysis state.
+// Both v1 (beginLSN only) and v2 (beginLSN + DPT + ATT) formats are
+// accepted; v2 overwrites the current snapshot when its beginLSN is at
+// least as fresh.
+func (ra *recoveryAnalysis) ingestCheckpoint(payload []byte) error {
+	beginLSN, dpt, att, err := parseCheckpointPayload(payload)
+	if err != nil {
+		return err
+	}
+	if beginLSN < ra.CheckpointLSN {
+		return nil
+	}
+	ra.CheckpointLSN = beginLSN
+	ra.DPT = dpt
+	for _, e := range att {
+		state := ra.TxTable[e.TxID]
+		if state.FirstLSN == 0 || e.LastLSN < state.FirstLSN {
+			state.FirstLSN = e.LastLSN
+		}
+		if e.LastLSN > state.LastLSN {
+			state.LastLSN = e.LastLSN
+		}
+		if state.Status == recoveryTxnUnknown {
+			state.Status = recoveryTxnActive
+		}
+		ra.TxTable[e.TxID] = state
+	}
+	return nil
 }
 
 func newRecoveryAnalysis() *recoveryAnalysis {
@@ -95,9 +207,24 @@ func newRecoveryAnalysis() *recoveryAnalysis {
 		CommittedTxs: make(map[uint64]struct{}),
 		LoserTxs:     make(map[uint64]struct{}),
 		UndoneLSNs:   make(map[uint64]map[uint64]struct{}),
+		PartialNTAs:  make(map[uint64]ntaBeginRecord),
 	}
 }
 
+// wrapAriesPayload prefixes the WAL body with (txID, prevLSN). Use this
+// for transactional entries written in WAL v3+. prevLSN == 0 means the
+// entry is the first one for txID.
+func wrapAriesPayload(txID, prevLSN uint64, payload []byte) []byte {
+	buf := make([]byte, ariesPayloadPrefix+len(payload))
+	binary.LittleEndian.PutUint64(buf[:8], txID)
+	binary.LittleEndian.PutUint64(buf[8:16], prevLSN)
+	copy(buf[ariesPayloadPrefix:], payload)
+	return buf
+}
+
+// wrapTxPayload preserves the v2 prefix layout (txID only). Kept for
+// callers that have not been upgraded; new write paths should use
+// wrapAriesPayload.
 func wrapTxPayload(txID uint64, payload []byte) []byte {
 	buf := make([]byte, txPayloadPrefix+len(payload))
 	binary.LittleEndian.PutUint64(buf[:txPayloadPrefix], txID)
@@ -105,16 +232,34 @@ func wrapTxPayload(txID uint64, payload []byte) []byte {
 	return buf
 }
 
+// unwrapTxPayload returns txID and body, hiding the version-aware prefix
+// length. prevLSN is silently discarded; callers that need it must use
+// unwrapTxPayloadWithPrev.
 func unwrapTxPayload(header wal.WALHeader, payload []byte) (txID uint64, body []byte, transactional bool, err error) {
+	txID, body, _, transactional, err = unwrapTxPayloadWithPrev(header, payload)
+	return txID, body, transactional, err
+}
+
+// unwrapTxPayloadWithPrev returns the txID, body, and the prevLSN that
+// links this entry to its predecessor in the same transaction (v3+).
+// v2 entries report prevLSN=0.
+func unwrapTxPayloadWithPrev(header wal.WALHeader, payload []byte) (txID uint64, body []byte, prevLSN uint64, transactional bool, err error) {
 	if header.Version < txAwareWALVersion {
-		return 0, payload, false, nil
+		return 0, payload, 0, false, nil
+	}
+	if header.Version >= ariesWALVersion {
+		if len(payload) < ariesPayloadPrefix {
+			return 0, nil, 0, false, fmt.Errorf("wal entry version %d requires aries payload prefix", header.Version)
+		}
+		txID = binary.LittleEndian.Uint64(payload[:8])
+		prevLSN = binary.LittleEndian.Uint64(payload[8:16])
+		return txID, payload[ariesPayloadPrefix:], prevLSN, true, nil
 	}
 	if len(payload) < txPayloadPrefix {
-		return 0, nil, false, fmt.Errorf("wal entry version %d requires tx payload prefix", header.Version)
+		return 0, nil, 0, false, fmt.Errorf("wal entry version %d requires tx payload prefix", header.Version)
 	}
-
 	txID = binary.LittleEndian.Uint64(payload[:txPayloadPrefix])
-	return txID, payload[txPayloadPrefix:], true, nil
+	return txID, payload[txPayloadPrefix:], 0, true, nil
 }
 
 func isExpectedWALTail(err error) bool {
@@ -153,11 +298,19 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 			result.MaxLSN = entry.Header.LSN
 		}
 
-		// Atualiza o checkpoint LSN se encontrar record mais recente.
 		if entry.Header.EntryType == wal.EntryCheckpoint && len(entry.Payload) >= 8 {
-			beginLSN := binary.LittleEndian.Uint64(entry.Payload[:8])
-			if beginLSN >= result.CheckpointLSN {
-				result.CheckpointLSN = beginLSN
+			if err := result.ingestCheckpoint(entry.Payload); err != nil {
+				wal.ReleaseEntry(entry)
+				return nil, fmt.Errorf("analysis parse checkpoint at entry %d: %w", count, err)
+			}
+			wal.ReleaseEntry(entry)
+			continue
+		}
+
+		if entry.Header.EntryType == wal.EntryNTABegin || entry.Header.EntryType == wal.EntryNTACommit {
+			if err := result.ingestNTA(entry); err != nil {
+				wal.ReleaseEntry(entry)
+				return nil, fmt.Errorf("analysis parse NTA at entry %d: %w", count, err)
 			}
 			wal.ReleaseEntry(entry)
 			continue
@@ -170,40 +323,9 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 		}
 
 		if transactional {
-			state := result.TxTable[txID]
-			if state.FirstLSN == 0 || entry.Header.LSN < state.FirstLSN {
-				state.FirstLSN = entry.Header.LSN
-			}
-			if entry.Header.LSN > state.LastLSN {
-				state.LastLSN = entry.Header.LSN
-			}
-
-			switch entry.Header.EntryType {
-			case wal.EntryBegin:
-				if state.Status == recoveryTxnUnknown {
-					state.Status = recoveryTxnActive
-				}
-			case wal.EntryCommit:
-				state.Status = recoveryTxnCommitted
-			case wal.EntryAbort:
-				state.Status = recoveryTxnAborted
-			default:
-				if state.Status == recoveryTxnUnknown {
-					state.Status = recoveryTxnActive
-				}
-			}
-			result.TxTable[txID] = state
-
-			if entry.Header.EntryType == wal.EntryCLR {
-				originalLSN, _, _, _, clrErr := DeserializeCompensationEntry(payload)
-				if clrErr != nil {
-					wal.ReleaseEntry(entry)
-					return nil, fmt.Errorf("analysis deserialize clr failed at entry %d: %w", count, clrErr)
-				}
-				if _, ok := result.UndoneLSNs[txID]; !ok {
-					result.UndoneLSNs[txID] = make(map[uint64]struct{})
-				}
-				result.UndoneLSNs[txID][originalLSN] = struct{}{}
+			if err := result.ingestTxEntry(txID, entry, payload); err != nil {
+				wal.ReleaseEntry(entry)
+				return nil, fmt.Errorf("analysis tx entry %d: %w", count, err)
 			}
 		}
 

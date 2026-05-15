@@ -85,6 +85,7 @@ func (se *StorageEngine) registerPageRedoHooks() {
 			treeV2.SetBeforeFlushHook(func(pageID pagestore.PageID, page *pagestore.Page) error {
 				return se.writePageRedoRecord(treePath, pageID, page)
 			})
+			treeV2.SetStructuralLogger(btreeStructuralLogger{se: se})
 			seenTrees[treeV2] = struct{}{}
 		}
 	}

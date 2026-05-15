@@ -37,11 +37,22 @@ func (se *StorageEngine) undoLoserTransactionsWithLimit(walPath string, cipher c
 	if err != nil {
 		return 0, err
 	}
+	// lastLSN per tx — kept fresh as we append CLRs / ABORT so each new
+	// entry can backlink to its predecessor.
+	lastLSN := make(map[uint64]uint64)
+	for txID := range analysis.LoserTxs {
+		if state, ok := analysis.TxTable[txID]; ok {
+			lastLSN[txID] = state.LastLSN
+		}
+	}
+
 	if len(tasks) == 0 {
 		for txID := range analysis.LoserTxs {
-			if err := se.writeTxAbortMarker(txID); err != nil {
+			abortLSN, err := se.writeTxAbortMarker(txID, lastLSN[txID])
+			if err != nil {
 				return 0, err
 			}
+			lastLSN[txID] = abortLSN
 		}
 		return 0, nil
 	}
@@ -83,10 +94,11 @@ func (se *StorageEngine) undoLoserTransactionsWithLimit(walPath string, cipher c
 			OriginalPayload:   task.payload,
 			UndoNextLSN:       undoNextLSN,
 		}
-		clrLSN, err := se.writeCompensationLogRecord(task.txID, clr)
+		clrLSN, err := se.writeCompensationLogRecord(task.txID, lastLSN[task.txID], clr)
 		if err != nil {
 			return processed, err
 		}
+		lastLSN[task.txID] = clrLSN
 		if err := se.applyCompensation(clrLSN, clr); err != nil {
 			return processed, err
 		}
@@ -99,9 +111,11 @@ func (se *StorageEngine) undoLoserTransactionsWithLimit(walPath string, cipher c
 
 		remainingPerTx[task.txID]--
 		if remainingPerTx[task.txID] == 0 {
-			if err := se.writeTxAbortMarker(task.txID); err != nil {
+			abortLSN, err := se.writeTxAbortMarker(task.txID, lastLSN[task.txID])
+			if err != nil {
 				return processed, err
 			}
+			lastLSN[task.txID] = abortLSN
 		}
 	}
 
@@ -164,13 +178,13 @@ func (se *StorageEngine) collectLoserUndoTasks(walPath string, cipher crypto.Cip
 	return tasks, nil
 }
 
-func (se *StorageEngine) writeCompensationLogRecord(txID uint64, clr compensationEntry) (uint64, error) {
+func (se *StorageEngine) writeCompensationLogRecord(txID, prevLSN uint64, clr compensationEntry) (uint64, error) {
 	lsn := se.lsnTracker.Next()
-	payload := wrapTxPayload(txID, SerializeCompensationEntry(clr.OriginalLSN, clr.OriginalEntryType, clr.OriginalPayload, clr.UndoNextLSN))
+	payload := wrapAriesPayload(txID, prevLSN, SerializeCompensationEntry(clr.OriginalLSN, clr.OriginalEntryType, clr.OriginalPayload, clr.UndoNextLSN))
 
 	entry := wal.AcquireEntry()
 	entry.Header.Magic = wal.WALMagic
-	entry.Header.Version = txAwareWALVersion
+	entry.Header.Version = ariesWALVersion
 	entry.Header.EntryType = wal.EntryCLR
 	entry.Header.LSN = lsn
 	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
@@ -185,16 +199,16 @@ func (se *StorageEngine) writeCompensationLogRecord(txID uint64, clr compensatio
 	return lsn, nil
 }
 
-func (se *StorageEngine) writeTxAbortMarker(txID uint64) error {
+func (se *StorageEngine) writeTxAbortMarker(txID, prevLSN uint64) (uint64, error) {
 	if se.WAL == nil {
-		return nil
+		return prevLSN, nil
 	}
 	lsn := se.lsnTracker.Next()
-	payload := wrapTxPayload(txID, nil)
+	payload := wrapAriesPayload(txID, prevLSN, nil)
 
 	entry := wal.AcquireEntry()
 	entry.Header.Magic = wal.WALMagic
-	entry.Header.Version = txAwareWALVersion
+	entry.Header.Version = ariesWALVersion
 	entry.Header.EntryType = wal.EntryAbort
 	entry.Header.LSN = lsn
 	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
@@ -204,9 +218,9 @@ func (se *StorageEngine) writeTxAbortMarker(txID uint64) error {
 	err := se.WAL.WriteEntry(entry)
 	wal.ReleaseEntry(entry)
 	if err != nil {
-		return fmt.Errorf("wal write abort failed: %w", err)
+		return 0, fmt.Errorf("wal write abort failed: %w", err)
 	}
-	return nil
+	return lsn, nil
 }
 
 func (se *StorageEngine) redoCompensationEntry(entry *wal.WALEntry, payload []byte) error {

@@ -28,7 +28,13 @@ func (e *SerializationConflictError) Unwrap() error {
 	return ErrSerializationConflict
 }
 
-// WriteTransaction accumulates operations for atomic commit
+// WriteTransaction accumulates operations for atomic commit.
+//
+// lastLSN tracks the most recent WAL LSN written for this transaction.
+// ARIES uses it to back-link each new entry to its predecessor
+// (prevLSN), forming the per-tx chain required for safe restartable
+// undo. lastLSN is updated as BEGIN / op / CLR / COMMIT entries are
+// flushed to the WAL.
 type WriteTransaction struct {
 	engine    *StorageEngine
 	txID      uint64
@@ -36,6 +42,7 @@ type WriteTransaction struct {
 	writeSet  []writeOp
 	readSet   map[string]readObservation
 	pending   map[string]int
+	lastLSN   uint64
 	committed bool
 	aborted   bool
 	abortErr  error
@@ -303,10 +310,10 @@ func (tx *WriteTransaction) Commit(ctx context.Context) (err error) {
 
 			entry := wal.AcquireEntry()
 			entry.Header.Magic = wal.WALMagic
-			entry.Header.Version = txAwareWALVersion
+			entry.Header.Version = ariesWALVersion
 			entry.Header.EntryType = op.opType
 			entry.Header.LSN = opLSN
-			payload = wrapTxPayload(tx.txID, payload)
+			payload = wrapAriesPayload(tx.txID, tx.lastLSN, payload)
 			entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by record limits
 			entry.Header.CRC32 = wal.CalculateCRC32(payload)
 			entry.Payload = append(entry.Payload, payload...)
@@ -317,6 +324,7 @@ func (tx *WriteTransaction) Commit(ctx context.Context) (err error) {
 				return fmt.Errorf("wal write failed: %w", err)
 			}
 			wal.ReleaseEntry(entry)
+			tx.lastLSN = opLSN
 		}
 
 		// Write COMMIT
@@ -502,20 +510,25 @@ func (tx *WriteTransaction) currentCommittedObservationLocked(tableName string, 
 func (tx *WriteTransaction) writeWALMarker(typeID uint8, lsn uint64) error {
 	entry := wal.AcquireEntry()
 	entry.Header.Magic = wal.WALMagic
-	entry.Header.Version = txAwareWALVersion
+	entry.Header.Version = ariesWALVersion
 	entry.Header.EntryType = typeID
 	entry.Header.LSN = lsn
-	entry.Payload = append(entry.Payload, wrapTxPayload(tx.txID, nil)...)
+	prevLSN := tx.lastLSN
+	entry.Payload = append(entry.Payload, wrapAriesPayload(tx.txID, prevLSN, nil)...)
 	entry.Header.PayloadLen = uint32(len(entry.Payload)) //nolint:gosec // payload size bounded by tx marker size
 	entry.Header.CRC32 = wal.CalculateCRC32(entry.Payload)
 
 	if tx.engine.WAL == nil {
 		wal.ReleaseEntry(entry)
+		tx.lastLSN = lsn
 		return nil
 	}
 
 	err := tx.engine.WAL.WriteEntry(entry)
 	wal.ReleaseEntry(entry)
+	if err == nil {
+		tx.lastLSN = lsn
+	}
 	return err
 }
 

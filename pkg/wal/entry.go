@@ -26,6 +26,8 @@ const (
 	EntryCheckpoint                   // 8: Checkpoint record (fuzzy checkpoint begin LSN)
 	EntryPageRedo                     // 9: after-image físico de page para recovery
 	EntryCLR                          // 10: compensation log record for undo/recovery
+	EntryNTABegin                     // 11: nested top action begin (before-image of affected pages)
+	EntryNTACommit                    // 12: nested top action commit (refers to NTABegin LSN)
 )
 
 // WALHeader cabeçalho de 24 bytes para cada entrada
