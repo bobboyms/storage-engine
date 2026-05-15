@@ -80,6 +80,29 @@ func isENOSPC(err error) bool {
 	return strings.Contains(msg, "no space left on device")
 }
 
+func isEIO(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EIO) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "input/output error") || strings.Contains(msg, "i/o error")
+}
+
+func faultWALEntry(lsn uint64, payload []byte) *wal.WALEntry {
+	entry := wal.AcquireEntry()
+	entry.Header.Magic = wal.WALMagic
+	entry.Header.Version = wal.WALVersion
+	entry.Header.EntryType = wal.EntryInsert
+	entry.Header.LSN = lsn
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // fault payload size is test-controlled
+	entry.Header.CRC32 = wal.CalculateCRC32(payload)
+	entry.Payload = append(entry.Payload[:0], payload...)
+	return entry
+}
+
 type dbPaths struct {
 	dir       string
 	walPath   string
@@ -333,6 +356,132 @@ func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
 		t.Fatalf("expected ENOSPC from constrained filesystem, got unrelated sync error: %v", err)
 	}
 	t.Fatal("expected ENOSPC on constrained filesystem, but page writes did not fail")
+}
+
+func TestFaultWALENOSPCOnConstrainedFilesystem(t *testing.T) {
+	dir := faultEnvDir(t,
+		"STORAGE_ENGINE_ENOSPC_DIR",
+		"set STORAGE_ENGINE_ENOSPC_DIR to a small mounted filesystem to run real WAL ENOSPC test",
+	)
+
+	testDir := filepath.Join(dir, "storage-engine-wal-enospc-"+strconvLikeTime())
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("create constrained wal dir: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	ww, err := wal.NewWALWriter(filepath.Join(testDir, "wal.log"), wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("open WAL on constrained filesystem: %v", err)
+	}
+	defer ww.Close()
+
+	payload := make([]byte, 7000)
+	for i := range payload {
+		payload[i] = byte(i%251 + 1)
+	}
+	for i := 1; i <= 1_000_000; i++ {
+		entry := faultWALEntry(uint64(i), payload)
+		err := ww.WriteEntry(entry)
+		wal.ReleaseEntry(entry)
+		if err == nil {
+			continue
+		}
+		if isENOSPC(err) {
+			t.Logf("observed expected WAL ENOSPC after %d entries: %v", i, err)
+			return
+		}
+		t.Fatalf("expected WAL ENOSPC, got unrelated error after %d entries: %v", i, err)
+	}
+	t.Fatal("expected WAL ENOSPC on constrained filesystem, but writes did not fail")
+}
+
+func TestFaultWALFsyncFailureOnFaultingFilesystem(t *testing.T) {
+	dir := faultEnvDir(t,
+		"STORAGE_ENGINE_FSYNC_FAIL_DIR",
+		"set STORAGE_ENGINE_FSYNC_FAIL_DIR to enable WAL fsync fault injection",
+	)
+	markerPath := filepath.Join(dir, ".fail_fsync_now")
+	_ = os.Remove(markerPath)
+
+	testDir := filepath.Join(dir, "storage-engine-wal-fsync-"+strconvLikeTime())
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("create faulting wal dir: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	ww, err := wal.NewWALWriter(filepath.Join(testDir, "wal.log"), wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("open WAL before fsync fault: %v", err)
+	}
+	if err := os.WriteFile(markerPath, []byte("1"), 0644); err != nil {
+		_ = ww.Close()
+		t.Fatalf("enable WAL fsync fault injection: %v", err)
+	}
+	entry := faultWALEntry(1, []byte("payload"))
+	err = ww.WriteEntry(entry)
+	wal.ReleaseEntry(entry)
+	_ = os.Remove(markerPath)
+	closeErr := ww.Close()
+	if err == nil {
+		t.Fatalf("expected WAL write to observe injected fsync failure, closeErr=%v", closeErr)
+	}
+	if !isEIO(err) {
+		t.Fatalf("expected injected WAL fsync EIO, got: %v", err)
+	}
+}
+
+func TestFaultEngineWALFsyncFailureDoesNotMutateVisibleState(t *testing.T) {
+	dir := faultEnvDir(t,
+		"STORAGE_ENGINE_FSYNC_FAIL_DIR",
+		"set STORAGE_ENGINE_FSYNC_FAIL_DIR to enable engine WAL fsync fault injection",
+	)
+	markerPath := filepath.Join(dir, ".fail_fsync_now")
+	_ = os.Remove(markerPath)
+
+	p := pathsFor(filepath.Join(dir, "storage-engine-engine-fsync-"+strconvLikeTime()))
+	if err := os.MkdirAll(p.dir, 0755); err != nil {
+		t.Fatalf("create faulting engine dir: %v", err)
+	}
+	defer os.RemoveAll(p.dir)
+
+	se := openEngine(t, p)
+	if err := se.Put(context.Background(), "t", "id", types.IntKey(1), `{"id":1,"value":"stable"}`); err != nil {
+		_ = se.Close()
+		t.Fatalf("seed stable row before fsync fault: %v", err)
+	}
+
+	if err := os.WriteFile(markerPath, []byte("1"), 0644); err != nil {
+		_ = se.Close()
+		t.Fatalf("enable engine WAL fsync fault injection: %v", err)
+	}
+	err := se.Put(context.Background(), "t", "id", types.IntKey(2), `{"id":2,"value":"failed"}`)
+	if err == nil {
+		_ = os.Remove(markerPath)
+		_ = se.Close()
+		t.Fatal("expected engine Put to observe injected WAL fsync failure")
+	}
+	if !isEIO(err) {
+		_ = os.Remove(markerPath)
+		_ = se.Close()
+		t.Fatalf("expected injected engine WAL fsync EIO, got: %v", err)
+	}
+
+	if _, found, getErr := se.GetBytes(context.Background(), "t", "id", types.IntKey(1)); getErr != nil || !found {
+		_ = os.Remove(markerPath)
+		_ = se.Close()
+		t.Fatalf("stable row must remain visible after failed WAL fsync, found=%v err=%v", found, getErr)
+	}
+	if _, found, getErr := se.GetBytes(context.Background(), "t", "id", types.IntKey(2)); getErr != nil || found {
+		_ = os.Remove(markerPath)
+		_ = se.Close()
+		t.Fatalf("failed WAL fsync row must not become visible, found=%v err=%v", found, getErr)
+	}
+
+	_ = os.Remove(markerPath)
+	if err := se.Close(); err != nil {
+		t.Fatalf("close engine after removing fsync fault marker: %v", err)
+	}
 }
 
 func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {

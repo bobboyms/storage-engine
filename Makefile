@@ -51,7 +51,16 @@ test-faults-env:
 	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
 	STORAGE_ENGINE_ENOSPC_DIR="$$mount_dir" \
 	go test ./tests/faults -tags faults -run TestFaultENOSPCOnConstrainedFilesystem -count=1 -v; \
+	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
+	STORAGE_ENGINE_ENOSPC_DIR="$$mount_dir" \
+	go test ./tests/faults -tags faults -run TestFaultWALENOSPCOnConstrainedFilesystem -count=1 -v; \
 	mkdir -p "$$fsync_dir"; \
+	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
+	STORAGE_ENGINE_FSYNC_FAIL_DIR="$$fsync_dir" \
+	go test ./tests/faults -tags faults -run TestFaultWALFsyncFailureOnFaultingFilesystem -count=1 -v; \
+	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
+	STORAGE_ENGINE_FSYNC_FAIL_DIR="$$fsync_dir" \
+	go test ./tests/faults -tags faults -run TestFaultEngineWALFsyncFailureDoesNotMutateVisibleState -count=1 -v; \
 	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
 	STORAGE_ENGINE_FSYNC_FAIL_DIR="$$fsync_dir" \
 	go test ./tests/faults -tags faults -run TestFaultFsyncFailureOnFaultingFilesystem -count=1 -v
