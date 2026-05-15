@@ -62,10 +62,11 @@ const (
 )
 
 var (
-	ErrLeafFull     = errors.New("btree/v2: leaf has no space for a new key")
-	ErrInternalFull = errors.New("btree/v2: internal node has no space for a new separator")
-	ErrKeyNotFound  = errors.New("btree/v2: key not found")
-	ErrBadNodeType  = errors.New("btree/v2: invalid node type")
+	ErrLeafFull                = errors.New("btree/v2: leaf has no space for a new key")
+	ErrInternalFull            = errors.New("btree/v2: internal node has no space for a new separator")
+	ErrKeyNotFound             = errors.New("btree/v2: key not found")
+	ErrBadNodeType             = errors.New("btree/v2: invalid node type")
+	ErrNodePageIndexOutOfRange = errors.New("btree/v2: node page index out of range")
 )
 
 // nodeHeader é a visão decodificada do cabeçalho.
@@ -311,14 +312,14 @@ func (np *NodePage) LeafDelete(key uint64) (bool, error) {
 	return true, nil
 }
 
-// LeafAt devolve o par (key, value) do slot i, em ordem. Útil para
-// iteração e para testes. Pânico se i fora do intervalo.
-// Key é uint64 (encoded via KeyCodec); value é int64.
-func (np *NodePage) LeafAt(i int) (uint64, int64) {
+// LeafAt returns the (key, value) pair from slot i in order. The key is the
+// uint64 encoded by KeyCodec; the value is the stored int64 pointer.
+func (np *NodePage) LeafAt(i int) (uint64, int64, error) {
 	if i < 0 || i >= np.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: LeafAt index %d fora de [0, %d)", i, np.NumKeys()))
+		return 0, 0, fmt.Errorf("%w: LeafAt index %d outside [0, %d)", ErrNodePageIndexOutOfRange, i, np.NumKeys())
 	}
-	return np.readLeafSlot(i)
+	key, value := np.readLeafSlot(i)
+	return key, value, nil
 }
 
 // splitLeafInto divide esta folha em duas:
@@ -475,17 +476,17 @@ func (np *NodePage) internalBinarySearch(key uint64) int {
 	return lo
 }
 
-// FindChild devolve o PageID do filho cuja sub-tree contém `key`.
-func (np *NodePage) FindChild(key uint64) pagestore.PageID {
+// FindChild returns the PageID of the child whose subtree contains key.
+func (np *NodePage) FindChild(key uint64) (pagestore.PageID, error) {
 	if !np.isInternal() {
-		panic("btree/v2: FindChild chamado em not-internal")
+		return pagestore.InvalidPageID, ErrBadNodeType
 	}
 	firstGT := np.internalBinarySearch(key)
 	if firstGT == 0 {
-		return np.LeftmostChild()
+		return np.LeftmostChild(), nil
 	}
 	_, child := np.readInternalSlot(firstGT - 1)
-	return child
+	return child, nil
 }
 
 // isInternal é helper interno (IsLeaf pública já exists).
@@ -524,13 +525,13 @@ func (np *NodePage) InsertSeparator(key uint64, child pagestore.PageID) error {
 	return nil
 }
 
-// InternalAt devolve (sep_i, child_{i+1}) do slot i. Útil pra testes
-// e pra split. Pânico fora do intervalo.
-func (np *NodePage) InternalAt(i int) (uint64, pagestore.PageID) {
+// InternalAt returns (sep_i, child_{i+1}) from slot i.
+func (np *NodePage) InternalAt(i int) (uint64, pagestore.PageID, error) {
 	if i < 0 || i >= np.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: InternalAt index %d fora de [0, %d)", i, np.NumKeys()))
+		return 0, pagestore.InvalidPageID, fmt.Errorf("%w: InternalAt index %d outside [0, %d)", ErrNodePageIndexOutOfRange, i, np.NumKeys())
 	}
-	return np.readInternalSlot(i)
+	key, child := np.readInternalSlot(i)
+	return key, child, nil
 }
 
 // splitInternalInto divide este internal em dois, promovendo a key

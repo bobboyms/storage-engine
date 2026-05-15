@@ -113,7 +113,11 @@ func main() {
 	var aboveFive []string
 	it, _ := engine.NewIterator(context.Background(), "float_table", "price", storage.IterOptions{Lower: types.FloatKey(5.00)})
 	for it.Next() {
-		if it.Key().Compare(types.FloatKey(5.00)) <= 0 {
+		cmp, err := it.Key().Compare(types.FloatKey(5.00))
+		if err != nil {
+			panic(err)
+		}
+		if cmp <= 0 {
 			continue
 		}
 		aboveFive = append(aboveFive, decodeDoc(it.Value()))
@@ -152,7 +156,11 @@ func main() {
 	var future []string
 	dit, _ := engine.NewIterator(context.Background(), "date_table", "date", storage.IterOptions{Lower: types.DateKey(now)})
 	for dit.Next() {
-		if dit.Key().Compare(types.DateKey(now)) <= 0 {
+		cmp, err := dit.Key().Compare(types.DateKey(now))
+		if err != nil {
+			panic(err)
+		}
+		if cmp <= 0 {
 			continue
 		}
 		future = append(future, decodeDoc(dit.Value()))
@@ -162,12 +170,20 @@ func main() {
 
 	// 6. Comparison demo
 	fmt.Println("\n=== Comparable.Compare ===")
-	fmt.Printf("IntKey(5) vs IntKey(10): %d\n", types.IntKey(5).Compare(types.IntKey(10)))
-	fmt.Printf("VarcharKey(\"abc\") vs VarcharKey(\"xyz\"): %d\n", types.VarcharKey("abc").Compare(types.VarcharKey("xyz")))
-	fmt.Printf("BoolKey(false) vs BoolKey(true): %d\n", types.BoolKey(false).Compare(types.BoolKey(true)))
+	fmt.Printf("IntKey(5) vs IntKey(10): %d\n", mustCompare(types.IntKey(5), types.IntKey(10)))
+	fmt.Printf("VarcharKey(\"abc\") vs VarcharKey(\"xyz\"): %d\n", mustCompare(types.VarcharKey("abc"), types.VarcharKey("xyz")))
+	fmt.Printf("BoolKey(false) vs BoolKey(true): %d\n", mustCompare(types.BoolKey(false), types.BoolKey(true)))
 	yesterday := now.AddDate(0, 0, -1)
 	tomorrow := now.AddDate(0, 0, 1)
-	fmt.Printf("DateKey(yesterday) vs DateKey(tomorrow): %d\n", types.DateKey(yesterday).Compare(types.DateKey(tomorrow)))
+	fmt.Printf("DateKey(yesterday) vs DateKey(tomorrow): %d\n", mustCompare(types.DateKey(yesterday), types.DateKey(tomorrow)))
+}
+
+func mustCompare(left, right types.Comparable) int {
+	cmp, err := left.Compare(right)
+	if err != nil {
+		panic(err)
+	}
+	return cmp
 }
 
 func setupEngine(heapPath, walPath string) *storage.StorageEngine {

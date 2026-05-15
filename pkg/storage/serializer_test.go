@@ -74,8 +74,11 @@ func TestSerializeDocumentEntry_Protobuf(t *testing.T) {
 				t.Errorf("Expected document %q, got %q", string(tc.document), string(gotDoc))
 			}
 
-			// Key comparison
-			if tc.key.Compare(gotKey) != 0 {
+			cmp, err := tc.key.Compare(gotKey)
+			if err != nil {
+				t.Fatalf("Compare keys: %v", err)
+			}
+			if cmp != 0 {
 				t.Errorf("Key mismatch. Expected %v, got %v", tc.key, gotKey)
 			}
 		})
@@ -191,8 +194,8 @@ func TestDeserializeDocumentEntry_Error(t *testing.T) {
 
 type customKey struct{}
 
-func (c customKey) Compare(other types.Comparable) int { return 0 }
-func (c customKey) String() string                     { return "" }
+func (c customKey) Compare(other types.Comparable) (int, error) { return 0, nil }
+func (c customKey) String() string                              { return "" }
 
 func TestSerializeDocumentEntry_UnsupportedKey(t *testing.T) {
 	_, err := SerializeDocumentEntry("t", "i", customKey{}, []byte{})

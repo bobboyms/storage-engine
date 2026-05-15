@@ -30,13 +30,13 @@ func isChainEndErr(err error) bool {
 	return goerrors.Is(err, v2.ErrVacuumed)
 }
 
-func GenerateKey() string {
-	// NewV7 gera um UUID baseado no tempo atual + aleatoriedade segura
+func GenerateKey() (string, error) {
+	// NewV7 generates a UUID from the current time and secure randomness.
 	id, err := uuid.NewV7()
 	if err != nil {
-		panic(err) // Em caso improvável de erro no gerador de entropia
+		return "", err
 	}
-	return id.String()
+	return id.String(), nil
 }
 
 type StorageEngine struct {

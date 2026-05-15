@@ -58,17 +58,33 @@ func (tr *BTreeV2) NewCursor(lower, upper types.Comparable) (*Cursor, error) {
 	if lower != nil {
 		c.hasStart = true
 		if tr.isVariable {
-			c.startV = tr.varCodec.Encode(lower)
+			enc, err := tr.varCodec.Encode(lower)
+			if err != nil {
+				return nil, err
+			}
+			c.startV = enc
 		} else {
-			c.startU = tr.codec.Encode(lower)
+			enc, err := tr.codec.Encode(lower)
+			if err != nil {
+				return nil, err
+			}
+			c.startU = enc
 		}
 	}
 	if upper != nil {
 		c.hasEnd = true
 		if tr.isVariable {
-			c.endV = tr.varCodec.Encode(upper)
+			enc, err := tr.varCodec.Encode(upper)
+			if err != nil {
+				return nil, err
+			}
+			c.endV = enc
 		} else {
-			c.endU = tr.codec.Encode(upper)
+			enc, err := tr.codec.Encode(upper)
+			if err != nil {
+				return nil, err
+			}
+			c.endU = enc
 		}
 	}
 	return c, nil
@@ -237,7 +253,10 @@ func (c *Cursor) readCurrentSlot() (bool, bool, error) {
 	if err != nil {
 		return false, false, fmt.Errorf("btree cursor: reopen leaf: %w", err)
 	}
-	key, val := np.LeafAt(c.idx)
+	key, val, err := np.LeafAt(c.idx)
+	if err != nil {
+		return false, false, err
+	}
 	if c.hasStart && c.tr.codec.Compare(key, c.startU) < 0 {
 		return false, false, nil
 	}

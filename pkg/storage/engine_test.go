@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,7 +10,16 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
+	"github.com/google/uuid"
 )
+
+type failingRand struct {
+	err error
+}
+
+func (r failingRand) Read([]byte) (int, error) {
+	return 0, r.err
+}
 
 func TestEngine_GetAndDel(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -191,10 +201,30 @@ func TestEngine_RecoverWithCheckpointAndWAL(t *testing.T) {
 }
 
 func TestEngine_GenerateKey(t *testing.T) {
-	k1 := storage.GenerateKey()
-	k2 := storage.GenerateKey()
+	k1, err := storage.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	k2, err := storage.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
 	if k1 == "" || k2 == "" || k1 == k2 {
 		t.Errorf("GenerateKey produced invalid or duplicate keys: %s, %s", k1, k2)
+	}
+}
+
+func TestEngine_GenerateKey_ReturnsEntropyError(t *testing.T) {
+	wantErr := errors.New("entropy unavailable")
+	uuid.SetRand(failingRand{err: wantErr})
+	defer uuid.SetRand(nil)
+
+	key, err := storage.GenerateKey()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected entropy error, got key=%q err=%v", key, err)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key on error, got %q", key)
 	}
 }
 

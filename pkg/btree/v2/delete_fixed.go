@@ -12,49 +12,57 @@ type fixedInternalEntry struct {
 	child pagestore.PageID
 }
 
-func collectLeafEntriesFixed(np *NodePage) []fixedLeafEntry {
+func collectLeafEntriesFixed(np *NodePage) ([]fixedLeafEntry, error) {
 	entries := make([]fixedLeafEntry, 0, np.NumKeys())
 	for i := 0; i < np.NumKeys(); i++ {
-		key, value := np.LeafAt(i)
+		key, value, err := np.LeafAt(i)
+		if err != nil {
+			return nil, err
+		}
 		entries = append(entries, fixedLeafEntry{key: key, value: value})
 	}
-	return entries
+	return entries, nil
 }
 
-func collectInternalEntriesFixed(np *NodePage) (pagestore.PageID, []fixedInternalEntry) {
+func collectInternalEntriesFixed(np *NodePage) (pagestore.PageID, []fixedInternalEntry, error) {
 	entries := make([]fixedInternalEntry, 0, np.NumKeys())
 	for i := 0; i < np.NumKeys(); i++ {
-		key, child := np.InternalAt(i)
+		key, child, err := np.InternalAt(i)
+		if err != nil {
+			return pagestore.InvalidPageID, nil, err
+		}
 		entries = append(entries, fixedInternalEntry{key: key, child: child})
 	}
-	return np.LeftmostChild(), entries
+	return np.LeftmostChild(), entries, nil
 }
 
-func rebuildLeafFixed(np *NodePage, entries []fixedLeafEntry, nextLeaf pagestore.PageID) {
+func rebuildLeafFixed(np *NodePage, entries []fixedLeafEntry, nextLeaf pagestore.PageID) error {
 	InitLeafPage(np.page, np.maxBodySize, np.cmp)
 	np.setNextLeafPageID(nextLeaf)
 	for _, entry := range entries {
 		if err := np.LeafInsert(entry.key, entry.value); err != nil {
-			panic(err)
+			return err
 		}
 	}
+	return nil
 }
 
-func rebuildInternalFixed(np *NodePage, leftmost pagestore.PageID, entries []fixedInternalEntry) {
+func rebuildInternalFixed(np *NodePage, leftmost pagestore.PageID, entries []fixedInternalEntry) error {
 	InitInternalPage(np.page, np.maxBodySize, leftmost, np.cmp)
 	for _, entry := range entries {
 		if err := np.InsertSeparator(entry.key, entry.child); err != nil {
-			panic(err)
+			return err
 		}
 	}
+	return nil
 }
 
-func fixedChildPageIDAt(np *NodePage, idx int) pagestore.PageID {
+func fixedChildPageIDAt(np *NodePage, idx int) (pagestore.PageID, error) {
 	if idx == 0 {
-		return np.LeftmostChild()
+		return np.LeftmostChild(), nil
 	}
-	_, child := np.InternalAt(idx - 1)
-	return child
+	_, child, err := np.InternalAt(idx - 1)
+	return child, err
 }
 
 func fixedMinKeys(np *NodePage, isRoot bool) int {
@@ -74,19 +82,19 @@ func fixedMinKeys(np *NodePage, isRoot bool) int {
 	return min
 }
 
-func fixedFirstKey(np *NodePage) (uint64, bool) {
+func fixedFirstKey(np *NodePage) (uint64, bool, error) {
 	if np.IsLeaf() {
 		if np.NumKeys() == 0 {
-			return 0, false
+			return 0, false, nil
 		}
-		key, _ := np.LeafAt(0)
-		return key, true
+		key, _, err := np.LeafAt(0)
+		return key, err == nil, err
 	}
 	if np.NumKeys() == 0 {
-		return 0, false
+		return 0, false, nil
 	}
-	key, _ := np.InternalAt(0)
-	return key, true
+	key, _, err := np.InternalAt(0)
+	return key, err == nil, err
 }
 
 func (tr *BTreeV2) fixedSubtreeMin(np *NodePage, held map[pagestore.PageID]*NodePage) (uint64, bool, error) {
@@ -122,8 +130,7 @@ func (tr *BTreeV2) fixedSubtreeMin(np *NodePage, held map[pagestore.PageID]*Node
 		curr = next
 	}
 
-	key, ok := fixedFirstKey(curr)
-	return key, ok, nil
+	return fixedFirstKey(curr)
 }
 
 func (tr *BTreeV2) fixedSubtreeMinByPageID(pageID pagestore.PageID, held map[pagestore.PageID]*NodePage) (uint64, bool, error) {
@@ -145,7 +152,10 @@ func (tr *BTreeV2) fixedSubtreeMinByPageID(pageID pagestore.PageID, held map[pag
 }
 
 func (tr *BTreeV2) refreshInternalSeparatorsFixed(parentNP *NodePage, held map[pagestore.PageID]*NodePage) error {
-	leftmost, entries := collectInternalEntriesFixed(parentNP)
+	leftmost, entries, err := collectInternalEntriesFixed(parentNP)
+	if err != nil {
+		return err
+	}
 	for i := range entries {
 		minKey, ok, err := tr.fixedSubtreeMinByPageID(entries[i].child, held)
 		if err != nil {
@@ -156,10 +166,10 @@ func (tr *BTreeV2) refreshInternalSeparatorsFixed(parentNP *NodePage, held map[p
 		}
 		entries[i].key = minKey
 	}
-	rebuildInternalFixed(parentNP, leftmost, entries)
-	return nil
+	return rebuildInternalFixed(parentNP, leftmost, entries)
 }
 
+//nolint:gocyclo // Fixed-key B-tree underflow repair is a compact structural case analysis with latch ownership.
 func (tr *BTreeV2) fixChildUnderflowFixed(
 	parentH *pagestore.PageHandle,
 	parentNP *NodePage,
@@ -172,7 +182,11 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 	}
 
 	if childPos > 0 {
-		leftH, err := tr.bp.FetchForWrite(fixedChildPageIDAt(parentNP, childPos-1))
+		leftPageID, err := fixedChildPageIDAt(parentNP, childPos-1)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		leftH, err := tr.bp.FetchForWrite(leftPageID)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -183,24 +197,56 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 		}
 		if leftNP.NumKeys() > fixedMinKeys(leftNP, false) {
 			if childNP.IsLeaf() {
-				leftEntries := collectLeafEntriesFixed(leftNP)
-				childEntries := collectLeafEntriesFixed(childNP)
+				leftEntries, err := collectLeafEntriesFixed(leftNP)
+				if err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
+				childEntries, err := collectLeafEntriesFixed(childNP)
+				if err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
 				moved := leftEntries[len(leftEntries)-1]
 				leftEntries = leftEntries[:len(leftEntries)-1]
 				childEntries = append([]fixedLeafEntry{moved}, childEntries...)
 
-				rebuildLeafFixed(leftNP, leftEntries, leftNP.NextLeafPageID())
-				rebuildLeafFixed(childNP, childEntries, childNP.NextLeafPageID())
+				if err := rebuildLeafFixed(leftNP, leftEntries, leftNP.NextLeafPageID()); err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
+				if err := rebuildLeafFixed(childNP, childEntries, childNP.NextLeafPageID()); err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
 			} else {
-				leftLeftmost, leftEntries := collectInternalEntriesFixed(leftNP)
-				childLeftmost, childEntries := collectInternalEntriesFixed(childNP)
-				parentSep, _ := parentNP.InternalAt(childPos - 1)
+				leftLeftmost, leftEntries, err := collectInternalEntriesFixed(leftNP)
+				if err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
+				childLeftmost, childEntries, err := collectInternalEntriesFixed(childNP)
+				if err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
+				parentSep, _, err := parentNP.InternalAt(childPos - 1)
+				if err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
 				movedChild := leftEntries[len(leftEntries)-1].child
 				leftEntries = leftEntries[:len(leftEntries)-1]
 				childEntries = append([]fixedInternalEntry{{key: parentSep, child: childLeftmost}}, childEntries...)
 
-				rebuildInternalFixed(leftNP, leftLeftmost, leftEntries)
-				rebuildInternalFixed(childNP, movedChild, childEntries)
+				if err := rebuildInternalFixed(leftNP, leftLeftmost, leftEntries); err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
+				if err := rebuildInternalFixed(childNP, movedChild, childEntries); err != nil {
+					leftH.Release()
+					return nil, nil, 0, err
+				}
 			}
 
 			tr.markDirty(leftH)
@@ -213,7 +259,11 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 	}
 
 	if childPos < parentNP.NumKeys() {
-		rightH, err := tr.bp.FetchForWrite(fixedChildPageIDAt(parentNP, childPos+1))
+		rightPageID, err := fixedChildPageIDAt(parentNP, childPos+1)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		rightH, err := tr.bp.FetchForWrite(rightPageID)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -224,24 +274,56 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 		}
 		if rightNP.NumKeys() > fixedMinKeys(rightNP, false) {
 			if childNP.IsLeaf() {
-				childEntries := collectLeafEntriesFixed(childNP)
-				rightEntries := collectLeafEntriesFixed(rightNP)
+				childEntries, err := collectLeafEntriesFixed(childNP)
+				if err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
+				rightEntries, err := collectLeafEntriesFixed(rightNP)
+				if err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
 				childEntries = append(childEntries, rightEntries[0])
 				rightEntries = rightEntries[1:]
 
-				rebuildLeafFixed(childNP, childEntries, childNP.NextLeafPageID())
-				rebuildLeafFixed(rightNP, rightEntries, rightNP.NextLeafPageID())
+				if err := rebuildLeafFixed(childNP, childEntries, childNP.NextLeafPageID()); err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
+				if err := rebuildLeafFixed(rightNP, rightEntries, rightNP.NextLeafPageID()); err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
 			} else {
-				childLeftmost, childEntries := collectInternalEntriesFixed(childNP)
-				rightLeftmost, rightEntries := collectInternalEntriesFixed(rightNP)
-				parentSep, _ := parentNP.InternalAt(childPos)
+				childLeftmost, childEntries, err := collectInternalEntriesFixed(childNP)
+				if err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
+				rightLeftmost, rightEntries, err := collectInternalEntriesFixed(rightNP)
+				if err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
+				parentSep, _, err := parentNP.InternalAt(childPos)
+				if err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
 
 				childEntries = append(childEntries, fixedInternalEntry{key: parentSep, child: rightLeftmost})
 				newRightLeftmost := rightEntries[0].child
 				rightEntries = rightEntries[1:]
 
-				rebuildInternalFixed(childNP, childLeftmost, childEntries)
-				rebuildInternalFixed(rightNP, newRightLeftmost, rightEntries)
+				if err := rebuildInternalFixed(childNP, childLeftmost, childEntries); err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
+				if err := rebuildInternalFixed(rightNP, newRightLeftmost, rightEntries); err != nil {
+					rightH.Release()
+					return nil, nil, 0, err
+				}
 			}
 
 			tr.markDirty(childH)
@@ -254,7 +336,11 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 	}
 
 	if childPos > 0 {
-		leftH, err := tr.bp.FetchForWrite(fixedChildPageIDAt(parentNP, childPos-1))
+		leftPageID, err := fixedChildPageIDAt(parentNP, childPos-1)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		leftH, err := tr.bp.FetchForWrite(leftPageID)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -265,22 +351,55 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 		}
 
 		if childNP.IsLeaf() {
-			leftEntries := collectLeafEntriesFixed(leftNP)
-			childEntries := collectLeafEntriesFixed(childNP)
+			leftEntries, err := collectLeafEntriesFixed(leftNP)
+			if err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
+			childEntries, err := collectLeafEntriesFixed(childNP)
+			if err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
 			leftEntries = append(leftEntries, childEntries...)
-			rebuildLeafFixed(leftNP, leftEntries, childNP.NextLeafPageID())
+			if err := rebuildLeafFixed(leftNP, leftEntries, childNP.NextLeafPageID()); err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
 		} else {
-			leftLeftmost, leftEntries := collectInternalEntriesFixed(leftNP)
-			childLeftmost, childEntries := collectInternalEntriesFixed(childNP)
-			parentSep, _ := parentNP.InternalAt(childPos - 1)
+			leftLeftmost, leftEntries, err := collectInternalEntriesFixed(leftNP)
+			if err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
+			childLeftmost, childEntries, err := collectInternalEntriesFixed(childNP)
+			if err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
+			parentSep, _, err := parentNP.InternalAt(childPos - 1)
+			if err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
 			leftEntries = append(leftEntries, fixedInternalEntry{key: parentSep, child: childLeftmost})
 			leftEntries = append(leftEntries, childEntries...)
-			rebuildInternalFixed(leftNP, leftLeftmost, leftEntries)
+			if err := rebuildInternalFixed(leftNP, leftLeftmost, leftEntries); err != nil {
+				leftH.Release()
+				return nil, nil, 0, err
+			}
 		}
 
-		parentLeftmost, parentEntries := collectInternalEntriesFixed(parentNP)
+		parentLeftmost, parentEntries, err := collectInternalEntriesFixed(parentNP)
+		if err != nil {
+			leftH.Release()
+			return nil, nil, 0, err
+		}
 		parentEntries = append(parentEntries[:childPos-1], parentEntries[childPos:]...)
-		rebuildInternalFixed(parentNP, parentLeftmost, parentEntries)
+		if err := rebuildInternalFixed(parentNP, parentLeftmost, parentEntries); err != nil {
+			leftH.Release()
+			return nil, nil, 0, err
+		}
 
 		tr.markDirty(leftH)
 		tr.markDirty(parentH)
@@ -288,7 +407,11 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 		return leftH, leftNP, childPos - 1, nil
 	}
 
-	rightH, err := tr.bp.FetchForWrite(fixedChildPageIDAt(parentNP, childPos+1))
+	rightPageID, err := fixedChildPageIDAt(parentNP, childPos+1)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	rightH, err := tr.bp.FetchForWrite(rightPageID)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -299,22 +422,55 @@ func (tr *BTreeV2) fixChildUnderflowFixed(
 	}
 
 	if childNP.IsLeaf() {
-		childEntries := collectLeafEntriesFixed(childNP)
-		rightEntries := collectLeafEntriesFixed(rightNP)
+		childEntries, err := collectLeafEntriesFixed(childNP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
+		rightEntries, err := collectLeafEntriesFixed(rightNP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
 		childEntries = append(childEntries, rightEntries...)
-		rebuildLeafFixed(childNP, childEntries, rightNP.NextLeafPageID())
+		if err := rebuildLeafFixed(childNP, childEntries, rightNP.NextLeafPageID()); err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
 	} else {
-		childLeftmost, childEntries := collectInternalEntriesFixed(childNP)
-		rightLeftmost, rightEntries := collectInternalEntriesFixed(rightNP)
-		parentSep, _ := parentNP.InternalAt(childPos)
+		childLeftmost, childEntries, err := collectInternalEntriesFixed(childNP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
+		rightLeftmost, rightEntries, err := collectInternalEntriesFixed(rightNP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
+		parentSep, _, err := parentNP.InternalAt(childPos)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
 		childEntries = append(childEntries, fixedInternalEntry{key: parentSep, child: rightLeftmost})
 		childEntries = append(childEntries, rightEntries...)
-		rebuildInternalFixed(childNP, childLeftmost, childEntries)
+		if err := rebuildInternalFixed(childNP, childLeftmost, childEntries); err != nil {
+			rightH.Release()
+			return nil, nil, 0, err
+		}
 	}
 
-	parentLeftmost, parentEntries := collectInternalEntriesFixed(parentNP)
+	parentLeftmost, parentEntries, err := collectInternalEntriesFixed(parentNP)
+	if err != nil {
+		rightH.Release()
+		return nil, nil, 0, err
+	}
 	parentEntries = append(parentEntries[:childPos], parentEntries[childPos+1:]...)
-	rebuildInternalFixed(parentNP, parentLeftmost, parentEntries)
+	if err := rebuildInternalFixed(parentNP, parentLeftmost, parentEntries); err != nil {
+		rightH.Release()
+		return nil, nil, 0, err
+	}
 
 	tr.markDirty(childH)
 	tr.markDirty(parentH)

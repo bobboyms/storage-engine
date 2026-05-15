@@ -69,7 +69,10 @@ func TestInternalPage_InsertSeparatorAndFindChild(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := np.FindChild(c.key)
+		got, err := np.FindChild(c.key)
+		if err != nil {
+			t.Fatalf("FindChild(%d): %v", c.key, err)
+		}
 		if got != c.wantChild {
 			t.Errorf("%s: FindChild(%d) = %d, expected %d", c.descricao, c.key, got, c.wantChild)
 		}

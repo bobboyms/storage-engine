@@ -1,86 +1,102 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
 
-// Comparable é a interface que todas as keys mustm implementar
+var ErrIncompatibleComparableTypes = errors.New("types: incompatible comparable types")
+
+// Comparable is implemented by all storage keys.
 type Comparable interface {
-	Compare(other Comparable) int // Retorna -1 se <, 0 se ==, 1 se >
+	// Compare returns -1 when less than other, 0 when equal, and 1 when
+	// greater than other. It returns ErrIncompatibleComparableTypes when
+	// the concrete key types cannot be compared.
+	Compare(other Comparable) (int, error)
 }
 
-// === Implementações de Chave ===
-
-// IntKey: Chave de Inteiro
 type IntKey int
 
-func (k IntKey) Compare(other Comparable) int {
-	o := other.(IntKey)
+func (k IntKey) Compare(other Comparable) (int, error) {
+	o, ok := other.(IntKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: IntKey and %T", ErrIncompatibleComparableTypes, other)
+	}
 	if k < o {
-		return -1
+		return -1, nil
 	}
 	if k > o {
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
-// VarcharKey: Chave de String
 type VarcharKey string
 
-func (k VarcharKey) Compare(other Comparable) int {
-	o := other.(VarcharKey)
+func (k VarcharKey) Compare(other Comparable) (int, error) {
+	o, ok := other.(VarcharKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: VarcharKey and %T", ErrIncompatibleComparableTypes, other)
+	}
 	if k < o {
-		return -1
+		return -1, nil
 	}
 	if k > o {
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
-// FloatKey: Chave de Float
 type FloatKey float64
 
-func (k FloatKey) Compare(other Comparable) int {
-	o := other.(FloatKey)
+func (k FloatKey) Compare(other Comparable) (int, error) {
+	o, ok := other.(FloatKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: FloatKey and %T", ErrIncompatibleComparableTypes, other)
+	}
 	if k < o {
-		return -1
+		return -1, nil
 	}
 	if k > o {
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
-// BoolKey: Chave Booleana (false < true)
+// BoolKey sorts false before true.
 type BoolKey bool
 
-func (k BoolKey) Compare(other Comparable) int {
-	o := other.(BoolKey)
+func (k BoolKey) Compare(other Comparable) (int, error) {
+	o, ok := other.(BoolKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: BoolKey and %T", ErrIncompatibleComparableTypes, other)
+	}
 	if k == o {
-		return 0
+		return 0, nil
 	}
 	if !k && o {
-		return -1
+		return -1, nil
 	}
-	return 1
+	return 1, nil
 }
 
-// DateKey: Chave de Data/Hora
 type DateKey time.Time
 
-func (k DateKey) Compare(other Comparable) int {
-	o := time.Time(other.(DateKey))
+func (k DateKey) Compare(other Comparable) (int, error) {
+	otherDate, ok := other.(DateKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: DateKey and %T", ErrIncompatibleComparableTypes, other)
+	}
+	o := time.Time(otherDate)
 	t := time.Time(k)
 	if t.Before(o) {
-		return -1
+		return -1, nil
 	}
 	if t.After(o) {
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
 func (k DateKey) String() string {

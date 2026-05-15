@@ -29,14 +29,20 @@ func TestSplitLeafInto_HalfAndHalf(t *testing.T) {
 
 	wantLeft := []uint64{0, 2, 4, 6, 8}
 	for i, w := range wantLeft {
-		k, v := left.LeafAt(i)
+		k, v, err := left.LeafAt(i)
+		if err != nil {
+			t.Fatalf("left.LeafAt(%d): %v", i, err)
+		}
 		if k != w || v != int64(w)*10 {
 			t.Fatalf("left[%d]: expected (%d,%d), got (%d,%d)", i, w, int64(w)*10, k, v)
 		}
 	}
 	wantRight := []uint64{10, 12, 14, 16, 18}
 	for i, w := range wantRight {
-		k, v := right.LeafAt(i)
+		k, v, err := right.LeafAt(i)
+		if err != nil {
+			t.Fatalf("right.LeafAt(%d): %v", i, err)
+		}
 		if k != w || v != int64(w)*10 {
 			t.Fatalf("right[%d]: expected (%d,%d), got (%d,%d)", i, w, int64(w)*10, k, v)
 		}
@@ -87,7 +93,10 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 		c pagestore.PageID
 	}{{10, 101}, {20, 102}, {30, 103}}
 	for i, w := range wantLeftSlots {
-		k, c := left.InternalAt(i)
+		k, c, err := left.InternalAt(i)
+		if err != nil {
+			t.Fatalf("left.InternalAt(%d): %v", i, err)
+		}
 		if k != w.k || c != w.c {
 			t.Fatalf("left[%d]: expected (%d,%d), got (%d,%d)", i, w.k, w.c, k, c)
 		}
@@ -101,7 +110,10 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 		c pagestore.PageID
 	}{{50, 105}, {60, 106}, {70, 107}}
 	for i, w := range wantRightSlots {
-		k, c := right.InternalAt(i)
+		k, c, err := right.InternalAt(i)
+		if err != nil {
+			t.Fatalf("right.InternalAt(%d): %v", i, err)
+		}
 		if k != w.k || c != w.c {
 			t.Fatalf("right[%d]: expected (%d,%d), got (%d,%d)", i, w.k, w.c, k, c)
 		}

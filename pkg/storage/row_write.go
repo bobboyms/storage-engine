@@ -210,7 +210,8 @@ func sameComparableKey(a, b types.Comparable) bool {
 	if getTypeFromKey(a) != getTypeFromKey(b) {
 		return false
 	}
-	return a.Compare(b) == 0
+	cmp, err := a.Compare(b)
+	return err == nil && cmp == 0
 }
 
 func primaryIndexAndKey(table *Table, keys map[string]types.Comparable) (*Index, types.Comparable, error) {

@@ -2,32 +2,37 @@ package v2
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
-// VariableKeyCodec é a interface paralela pra keys de tamanho variável
-// (hoje só VarcharKey). Usa representação byte-slice em vez de uint64.
-// BTreeV2 detecta via type switch qual layout de page usar.
+// VariableKeyCodec is the companion interface for variable-size keys
+// (currently VarcharKey). It uses byte slices instead of uint64.
+// BTreeV2 selects the page layout through the codec type.
 type VariableKeyCodec interface {
-	// Encode serializa k em bytes. Tamanho varia.
-	Encode(k types.Comparable) []byte
+	// Encode serializes k into bytes. Size varies.
+	Encode(k types.Comparable) ([]byte, error)
 
-	// Decode inverte Encode.
+	// Decode reverses Encode.
 	Decode(b []byte) types.Comparable
 
-	// Compare é a comparação semântica (-1/0/1).
+	// Compare returns semantic ordering (-1/0/1).
 	Compare(a, b []byte) int
 }
 
-// VarcharKeyCodec: serializa strings como UTF-8 puro (sem prefixo de tamanho
-// — o tamanho vem do slot dir). Comparação lexicográfica bytewise.
+// VarcharKeyCodec serializes strings as raw UTF-8 bytes. The slot directory
+// stores the size, so no length prefix is needed. Ordering is bytewise.
 type VarcharKeyCodec struct{}
 
-func (VarcharKeyCodec) Encode(k types.Comparable) []byte {
-	return []byte(string(k.(types.VarcharKey)))
+func (VarcharKeyCodec) Encode(k types.Comparable) ([]byte, error) {
+	v, ok := k.(types.VarcharKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: VarcharKeyCodec expected types.VarcharKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return []byte(string(v)), nil
 }
 
 func (VarcharKeyCodec) Decode(b []byte) types.Comparable {
@@ -38,42 +43,42 @@ func (VarcharKeyCodec) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
-// KeyCodec abstrai encoding/decoding/comparison de keys para a B+ tree v2.
+// KeyCodec abstracts key encoding, decoding, and comparison for B+ tree v2.
 //
-// Todas as keys são armazenadas em 8 bytes no page (uint64). O codec é
-// responsável pela conversão types.Comparable ↔ uint64 e pela comparação
-// semântica — NOT podemos confiar em comparação uint64 direta porque:
-//   - IntKey negativo (bits com sign-bit 1) compararia maior que positivo
-//   - FloatKey bits not seguem ordem numérica (negativos em sign-magnitude)
+// Fixed-size keys are stored in 8 bytes on page (uint64). The codec converts
+// between types.Comparable and uint64 and owns semantic comparison. Direct
+// uint64 comparison is not correct for:
+//   - negative IntKey values, whose sign bit would sort after positives
+//   - FloatKey bit patterns, which do not match numeric ordering
 //
-// Types de key de tamanho variável (VarcharKey) NOT são suportados
-// nesta versão — requerem layout de slot diferente (indirection ou
-// overflow pages). Fica pra sub-etapa futura.
+// Variable-size keys such as VarcharKey use VariableKeyCodec and the variable
+// node-page layout.
 type KeyCodec interface {
-	// Encode converte k pra representação binária de 8 bytes.
-	Encode(k types.Comparable) uint64
+	// Encode converts k to its 8-byte binary representation.
+	Encode(k types.Comparable) (uint64, error)
 
-	// Decode inverte Encode.
+	// Decode reverses Encode.
 	Decode(u uint64) types.Comparable
 
-	// Compare retorna -1/0/1 pra ordem semântica dos types.Comparable
-	// correspondentes a `a` e `b` (ambos representações encoded).
+	// Compare returns -1/0/1 for the semantic order of the Comparable values
+	// represented by a and b.
 	Compare(a, b uint64) int
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// IntKeyCodec — IntKey ↔ uint64 (preserva bits do int64)
-// Comparação via cast pra int64 (respeita sign bit).
-// ─────────────────────────────────────────────────────────────────────
+// IntKeyCodec stores IntKey as uint64 while preserving int64 bits.
 
 type IntKeyCodec struct{}
 
-func (IntKeyCodec) Encode(k types.Comparable) uint64 {
-	return uint64(int64(k.(types.IntKey))) //nolint:gosec // preserve bit pattern int64 → uint64
+func (IntKeyCodec) Encode(k types.Comparable) (uint64, error) {
+	v, ok := k.(types.IntKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: IntKeyCodec expected types.IntKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return uint64(int64(v)), nil //nolint:gosec // preserve bit pattern int64 -> uint64
 }
 
 func (IntKeyCodec) Decode(u uint64) types.Comparable {
-	return types.IntKey(int64(u)) //nolint:gosec // preserve bit pattern uint64 → int64
+	return types.IntKey(int64(u)) //nolint:gosec // preserve bit pattern uint64 -> int64
 }
 
 func (IntKeyCodec) Compare(a, b uint64) int {
@@ -87,15 +92,16 @@ func (IntKeyCodec) Compare(a, b uint64) int {
 	return 0
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// FloatKeyCodec — FloatKey ↔ uint64 (bits IEEE 754)
-// Comparação via float64 (respeita NaN/-0 conforme Comparable.Compare).
-// ─────────────────────────────────────────────────────────────────────
+// FloatKeyCodec stores FloatKey as IEEE 754 bits and compares as float64.
 
 type FloatKeyCodec struct{}
 
-func (FloatKeyCodec) Encode(k types.Comparable) uint64 {
-	return math.Float64bits(float64(k.(types.FloatKey)))
+func (FloatKeyCodec) Encode(k types.Comparable) (uint64, error) {
+	v, ok := k.(types.FloatKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: FloatKeyCodec expected types.FloatKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return math.Float64bits(float64(v)), nil
 }
 
 func (FloatKeyCodec) Decode(u uint64) types.Comparable {
@@ -113,17 +119,19 @@ func (FloatKeyCodec) Compare(a, b uint64) int {
 	return 0
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// BoolKeyCodec — BoolKey ↔ 0/1
-// ─────────────────────────────────────────────────────────────────────
+// BoolKeyCodec stores BoolKey as 0/1.
 
 type BoolKeyCodec struct{}
 
-func (BoolKeyCodec) Encode(k types.Comparable) uint64 {
-	if bool(k.(types.BoolKey)) {
-		return 1
+func (BoolKeyCodec) Encode(k types.Comparable) (uint64, error) {
+	v, ok := k.(types.BoolKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: BoolKeyCodec expected types.BoolKey, got %T", types.ErrIncompatibleComparableTypes, k)
 	}
-	return 0
+	if bool(v) {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (BoolKeyCodec) Decode(u uint64) types.Comparable {
@@ -131,7 +139,7 @@ func (BoolKeyCodec) Decode(u uint64) types.Comparable {
 }
 
 func (BoolKeyCodec) Compare(a, b uint64) int {
-	// false (0) < true (1) — ordem uint64 direta já vale
+	// false (0) < true (1), so direct uint64 ordering is valid.
 	if a < b {
 		return -1
 	}
@@ -141,14 +149,16 @@ func (BoolKeyCodec) Compare(a, b uint64) int {
 	return 0
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// DateKeyCodec — DateKey ↔ UnixNano (int64)
-// ─────────────────────────────────────────────────────────────────────
+// DateKeyCodec stores DateKey as UnixNano int64 bits.
 
 type DateKeyCodec struct{}
 
-func (DateKeyCodec) Encode(k types.Comparable) uint64 {
-	return uint64(time.Time(k.(types.DateKey)).UnixNano())
+func (DateKeyCodec) Encode(k types.Comparable) (uint64, error) {
+	v, ok := k.(types.DateKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: DateKeyCodec expected types.DateKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return uint64(time.Time(v).UnixNano()), nil
 }
 
 func (DateKeyCodec) Decode(u uint64) types.Comparable {

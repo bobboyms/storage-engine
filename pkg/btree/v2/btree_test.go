@@ -2,6 +2,7 @@ package v2
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
 	"path/filepath"
 	"testing"
@@ -65,6 +66,15 @@ func TestBTreeV2_InsertAndGet_Single(t *testing.T) {
 	}
 	if v != 1000 {
 		t.Fatalf("expected value 1000, got %d", v)
+	}
+}
+
+func TestBTreeV2_InsertReturnsErrorForWrongKeyType(t *testing.T) {
+	tr := newTree(t, nil)
+
+	err := tr.Insert(types.VarcharKey("not-int"), 100)
+	if !errors.Is(err, types.ErrIncompatibleComparableTypes) {
+		t.Fatalf("expected ErrIncompatibleComparableTypes, got %v", err)
 	}
 }
 

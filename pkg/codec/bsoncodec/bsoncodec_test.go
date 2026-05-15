@@ -73,7 +73,11 @@ func TestKeyExtractionTypes(t *testing.T) {
 			if !tc.exists {
 				return
 			}
-			if got.Compare(tc.want) != 0 {
+			cmp, err := got.Compare(tc.want)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			if cmp != 0 {
 				t.Fatalf("key value: got %v want %v", got, tc.want)
 			}
 		})
@@ -100,7 +104,11 @@ func TestOpenExtractsKeyFromEncodedBytes(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Key id: ok=%v err=%v", ok, err)
 	}
-	if k.Compare(types.IntKey(7)) != 0 {
+	cmp, err := k.Compare(types.IntKey(7))
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if cmp != 0 {
 		t.Fatalf("key id: got %v want 7", k)
 	}
 }
@@ -144,7 +152,11 @@ func TestKeyExtractionHandlesNativeBSONTypes(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Key big: ok=%v err=%v", ok, err)
 	}
-	if k.Compare(types.IntKey(1<<40)) != 0 {
+	cmp, err := k.Compare(types.IntKey(1 << 40))
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if cmp != 0 {
 		t.Fatalf("int64 key mismatch: got %v", k)
 	}
 

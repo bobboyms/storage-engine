@@ -41,7 +41,10 @@ func TestNodePage_LeafInsertAndGet(t *testing.T) {
 	}
 	want := []kv{{10, 1000}, {20, 2000}, {30, 3000}}
 	for i, w := range want {
-		k, v := np.LeafAt(i)
+		k, v, err := np.LeafAt(i)
+		if err != nil {
+			t.Fatalf("LeafAt(%d): %v", i, err)
+		}
 		if k != w.k || v != w.v {
 			t.Fatalf("slot %d: expected (%d,%d), got (%d,%d)", i, w.k, w.v, k, v)
 		}
@@ -102,7 +105,10 @@ func TestNodePage_LeafDelete(t *testing.T) {
 		{10, 100}, {30, 300}, {40, 400},
 	}
 	for i, w := range want {
-		k, v := np.LeafAt(i)
+		k, v, err := np.LeafAt(i)
+		if err != nil {
+			t.Fatalf("LeafAt(%d): %v", i, err)
+		}
 		if k != w.key || v != w.val {
 			t.Fatalf("slot %d: expected (%d,%d), got (%d,%d)", i, w.key, w.val, k, v)
 		}
@@ -149,5 +155,14 @@ func TestNodePage_InitLeaf_Empty(t *testing.T) {
 	}
 	if np.NextLeafPageID() != pagestore.InvalidPageID {
 		t.Fatal("NextLeaf should be Invalid (sem sibling)")
+	}
+}
+
+func TestNodePage_LeafAtOutOfRangeReturnsError(t *testing.T) {
+	_, np := newLeafPage(t)
+
+	_, _, err := np.LeafAt(0)
+	if !errors.Is(err, ErrNodePageIndexOutOfRange) {
+		t.Fatalf("expected ErrNodePageIndexOutOfRange, got %v", err)
 	}
 }

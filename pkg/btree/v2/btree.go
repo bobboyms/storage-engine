@@ -300,16 +300,27 @@ func (tr *BTreeV2) markDirty(h *pagestore.PageHandle) {
 func (tr *BTreeV2) InsertWithLSN(key types.Comparable, value int64, lsn uint64) error {
 	return tr.withMutationLSN(lsn, func() error {
 		if tr.isVariable {
-			return tr.insertCrabbingVar(tr.varCodec.Encode(key), value)
+			encKey, err := tr.varCodec.Encode(key)
+			if err != nil {
+				return err
+			}
+			return tr.insertCrabbingVar(encKey, value)
 		}
-		return tr.insertCrabbingFixed(tr.codec.Encode(key), value)
+		encKey, err := tr.codec.Encode(key)
+		if err != nil {
+			return err
+		}
+		return tr.insertCrabbingFixed(encKey, value)
 	})
 }
 
 func (tr *BTreeV2) UpsertWithLSN(key types.Comparable, lsn uint64, fn func(oldValue int64, exists bool) (int64, error)) error {
 	return tr.withMutationLSN(lsn, func() error {
 		if tr.isVariable {
-			encKey := tr.varCodec.Encode(key)
+			encKey, err := tr.varCodec.Encode(key)
+			if err != nil {
+				return err
+			}
 			leafH, leafVP, err := tr.descendToLeafForInsertVar(encKey)
 			if err != nil {
 				return err
@@ -328,7 +339,10 @@ func (tr *BTreeV2) UpsertWithLSN(key types.Comparable, lsn uint64, fn func(oldVa
 			return nil
 		}
 
-		encKey := tr.codec.Encode(key)
+		encKey, err := tr.codec.Encode(key)
+		if err != nil {
+			return err
+		}
 		leafH, leafNP, err := tr.descendToLeafForInsertFixed(encKey)
 		if err != nil {
 			return err
@@ -360,10 +374,18 @@ func (tr *BTreeV2) DeleteWithLSN(key types.Comparable, lsn uint64) (bool, error)
 	)
 	err = tr.withMutationLSN(lsn, func() error {
 		if tr.isVariable {
-			found, err = tr.removeCrabbingVar(tr.varCodec.Encode(key))
+			encKey, encErr := tr.varCodec.Encode(key)
+			if encErr != nil {
+				return encErr
+			}
+			found, err = tr.removeCrabbingVar(encKey)
 			return err
 		}
-		found, err = tr.removeCrabbingFixed(tr.codec.Encode(key))
+		encKey, encErr := tr.codec.Encode(key)
+		if encErr != nil {
+			return encErr
+		}
+		found, err = tr.removeCrabbingFixed(encKey)
 		return err
 	})
 	return found, err
@@ -634,7 +656,11 @@ func (tr *BTreeV2) descendToLeafForInsertFixed(encKey uint64) (*pagestore.PageHa
 	}
 
 	for !currNP.IsLeaf() {
-		childPageID := currNP.FindChild(encKey)
+		childPageID, err := currNP.FindChild(encKey)
+		if err != nil {
+			currH.Release()
+			return nil, nil, err
+		}
 		childH, err := tr.bp.FetchForWrite(childPageID)
 		if err != nil {
 			currH.Release()
@@ -702,13 +728,20 @@ func (tr *BTreeV2) removeCrabbingFixed(encKey uint64) (bool, error) {
 	currNP := rootNP
 	for !currNP.IsLeaf() {
 		childPos := currNP.internalBinarySearch(encKey)
-		childH, err := tr.bp.FetchForWrite(fixedChildPageIDAt(currNP, childPos))
+		childPageID, err := fixedChildPageIDAt(currNP, childPos)
 		if err != nil {
+			releaseDescendantHandles(handles)
+			return false, err
+		}
+		childH, err := tr.bp.FetchForWrite(childPageID)
+		if err != nil {
+			releaseDescendantHandles(handles)
 			return false, err
 		}
 		childNP, err := OpenNodePage(childH.Page(), tr.maxBodySize, tr.codec.Compare)
 		if err != nil {
 			childH.Release()
+			releaseDescendantHandles(handles)
 			return false, err
 		}
 
@@ -786,6 +819,14 @@ func (tr *BTreeV2) removeCrabbingFixed(encKey uint64) (bool, error) {
 	return true, nil
 }
 
+func releaseDescendantHandles(handles []*pagestore.PageHandle) {
+	for i := len(handles) - 1; i >= 1; i-- {
+		if handles[i] != nil {
+			handles[i].Release()
+		}
+	}
+}
+
 func (tr *BTreeV2) updateRoot(newRootPageID pagestore.PageID) error {
 	tr.metaMu.Lock()
 	defer tr.metaMu.Unlock()
@@ -854,7 +895,11 @@ func (tr *BTreeV2) findLeafForKey(encKey uint64) (pagestore.PageID, error) {
 			h.Release()
 			return pageID, nil
 		}
-		nextPageID := np.FindChild(encKey)
+		nextPageID, err := np.FindChild(encKey)
+		if err != nil {
+			h.Release()
+			return pagestore.InvalidPageID, err
+		}
 		h.Release()
 		pageID = nextPageID
 	}
@@ -885,9 +930,17 @@ func (tr *BTreeV2) findLeftmostLeaf() (pagestore.PageID, error) {
 // Get busca `key`. RLock — múltiplos Gets em paralelo.
 func (tr *BTreeV2) Get(key types.Comparable) (int64, bool, error) {
 	if tr.isVariable {
-		return tr.getLockedVar(tr.varCodec.Encode(key))
+		encKey, err := tr.varCodec.Encode(key)
+		if err != nil {
+			return 0, false, err
+		}
+		return tr.getLockedVar(encKey)
 	}
-	return tr.getLocked(tr.codec.Encode(key))
+	encKey, err := tr.codec.Encode(key)
+	if err != nil {
+		return 0, false, err
+	}
+	return tr.getLocked(encKey)
 }
 
 // getLocked lê a tree usando apenas um snapshot rápido do rootPageID
@@ -909,7 +962,11 @@ func (tr *BTreeV2) getLocked(encKey uint64) (int64, bool, error) {
 			h.Release()
 			return v, found, nil
 		}
-		nextPageID := np.FindChild(encKey)
+		nextPageID, err := np.FindChild(encKey)
+		if err != nil {
+			h.Release()
+			return 0, false, err
+		}
 		h.Release()
 		pageID = nextPageID
 	}
