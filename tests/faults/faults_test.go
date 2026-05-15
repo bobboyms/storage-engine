@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
@@ -15,6 +17,42 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/types"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
+
+func TestFaultEnvDirRequiresEnvWhenStrict(t *testing.T) {
+	if os.Getenv("STORAGE_ENGINE_STRICT_FAULT_HELPER") == "1" {
+		faultEnvDir(t, "STORAGE_ENGINE_TEST_FAULT_DIR", "skip local fault test")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestFaultEnvDirRequiresEnvWhenStrict", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"STORAGE_ENGINE_STRICT_FAULT_HELPER=1",
+		"STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected missing strict fault environment to fail, output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "STORAGE_ENGINE_TEST_FAULT_DIR must be set") {
+		t.Fatalf("expected failure to name missing env var, output:\n%s", output)
+	}
+}
+
+func faultEnvDir(t testing.TB, envName, skipMessage string) string {
+	t.Helper()
+
+	dir := os.Getenv(envName)
+	if dir != "" {
+		return dir
+	}
+
+	if os.Getenv("STORAGE_ENGINE_REQUIRE_ENV_FAULTS") == "1" {
+		t.Fatalf("%s must be set for required environmental fault tests", envName)
+	}
+
+	t.Skip(skipMessage)
+	return ""
+}
 
 type dbPaths struct {
 	dir       string
@@ -226,10 +264,10 @@ func TestFaultBTreePageCorruptionDetectedOnOpenOrRead(t *testing.T) {
 }
 
 func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
-	dir := os.Getenv("STORAGE_ENGINE_ENOSPC_DIR")
-	if dir == "" {
-		t.Skip("set STORAGE_ENGINE_ENOSPC_DIR to a small mounted filesystem to run real ENOSPC test")
-	}
+	dir := faultEnvDir(t,
+		"STORAGE_ENGINE_ENOSPC_DIR",
+		"set STORAGE_ENGINE_ENOSPC_DIR to a small mounted filesystem to run real ENOSPC test",
+	)
 
 	p := pathsFor(filepath.Join(dir, "storage-engine-enospc-"+strconvLikeTime()))
 	if err := os.MkdirAll(p.dir, 0755); err != nil {
@@ -256,10 +294,10 @@ func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
 }
 
 func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {
-	dir := os.Getenv("STORAGE_ENGINE_FSYNC_FAIL_DIR")
-	if dir == "" {
-		t.Skip("set STORAGE_ENGINE_FSYNC_FAIL_DIR to enable fsync fault injection")
-	}
+	dir := faultEnvDir(t,
+		"STORAGE_ENGINE_FSYNC_FAIL_DIR",
+		"set STORAGE_ENGINE_FSYNC_FAIL_DIR to enable fsync fault injection",
+	)
 	markerPath := filepath.Join(dir, ".fail_fsync_now")
 	_ = os.Remove(markerPath)
 

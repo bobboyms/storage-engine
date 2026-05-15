@@ -102,24 +102,5 @@ jobs:
       - name: Run corruption fault tests
         run: go test ./tests/faults -tags faults -run 'TestFault(WAL|Heap|BTree)' -count=1 -v
 
-      - name: Mount small filesystem for ENOSPC
-        run: |
-          sudo mkdir -p /mnt/se-enospc
-          sudo mount -t tmpfs -o size=32M tmpfs /mnt/se-enospc
-          sudo chown "$USER:$USER" /mnt/se-enospc
-
-      - name: Run ENOSPC fault test
-        env:
-          STORAGE_ENGINE_ENOSPC_DIR: /mnt/se-enospc
-        run: go test ./tests/faults -tags faults -run TestFaultENOSPCOnConstrainedFilesystem -count=1 -v
-
-      - name: Unmount ENOSPC filesystem
-        if: always()
-        run: sudo umount /mnt/se-enospc || true
-
-      - name: Run fsync failure fault test
-        env:
-          STORAGE_ENGINE_FSYNC_FAIL_DIR: ${{ runner.temp }}/se-fsync-fail
-        run: |
-          mkdir -p "$STORAGE_ENGINE_FSYNC_FAIL_DIR"
-          go test ./tests/faults -tags faults -run TestFaultFsyncFailureOnFaultingFilesystem -count=1 -v
+      - name: Run required environmental fault tests
+        run: make test-faults-env

@@ -1,4 +1,4 @@
-.PHONY: test test-race test-chaos test-faults test-stress test-stress-race test-safety build run clean help lint lint-fix vuln tidy-check
+.PHONY: test test-race test-chaos test-faults test-faults-env test-stress test-stress-race test-safety build run clean help lint lint-fix vuln tidy-check
 
 # Default target
 all: build
@@ -24,6 +24,37 @@ test-chaos:
 test-faults:
 	@echo "Running fault-injection tests..."
 	@go test ./tests/faults -tags faults -count=1 -v
+
+test-faults-env:
+	@echo "Running required environmental fault tests..."
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+		echo "test-faults-env requires Linux for tmpfs-backed ENOSPC testing"; \
+		exit 1; \
+	fi
+	@mount_dir="$${STORAGE_ENGINE_ENOSPC_DIR:-/mnt/se-enospc}"; \
+	set -e; \
+	fsync_dir="$$(mktemp -d)"; \
+	mounted=0; \
+	cleanup() { \
+		status="$$?"; \
+		if [ "$$mounted" = "1" ]; then sudo umount "$$mount_dir" || true; fi; \
+		rm -rf "$$fsync_dir"; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	sudo mkdir -p "$$mount_dir"; \
+	if ! mountpoint -q "$$mount_dir"; then \
+		sudo mount -t tmpfs -o size=32M tmpfs "$$mount_dir"; \
+		mounted=1; \
+	fi; \
+	sudo chown "$$(id -u):$$(id -g)" "$$mount_dir"; \
+	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
+	STORAGE_ENGINE_ENOSPC_DIR="$$mount_dir" \
+	go test ./tests/faults -tags faults -run TestFaultENOSPCOnConstrainedFilesystem -count=1 -v; \
+	mkdir -p "$$fsync_dir"; \
+	STORAGE_ENGINE_REQUIRE_ENV_FAULTS=1 \
+	STORAGE_ENGINE_FSYNC_FAIL_DIR="$$fsync_dir" \
+	go test ./tests/faults -tags faults -run TestFaultFsyncFailureOnFaultingFilesystem -count=1 -v
 
 test-stress:
 	@echo "Running stress tests..."
@@ -75,6 +106,7 @@ help:
 	@echo "  make test-race   - Run package tests with race detector"
 	@echo "  make test-chaos  - Run kill -9 and reopen recovery tests"
 	@echo "  make test-faults - Run corruption and environmental fault tests"
+	@echo "  make test-faults-env - Run required ENOSPC/fsync environmental fault tests"
 	@echo "  make test-stress - Run concurrent stress tests"
 	@echo "  make test-stress-race - Run concurrent stress tests with race detector"
 	@echo "  make test-safety - Run race, chaos, faults, and stress suites"
