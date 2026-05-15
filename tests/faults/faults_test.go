@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/pagestore"
@@ -52,6 +53,31 @@ func faultEnvDir(t testing.TB, envName, skipMessage string) string {
 
 	t.Skip(skipMessage)
 	return ""
+}
+
+func TestFaultENOSPCClassifierRejectsBufferPoolFull(t *testing.T) {
+	err := fmt.Errorf("heap write failed: %w", pagestore.ErrBufferPoolFull)
+	if isENOSPC(err) {
+		t.Fatalf("buffer pool exhaustion must not be treated as ENOSPC: %v", err)
+	}
+}
+
+func TestFaultENOSPCClassifierRejectsPathOnlyENOSPC(t *testing.T) {
+	err := errors.New("write /tmp/storage-engine-enospc/pages.db: file too large")
+	if isENOSPC(err) {
+		t.Fatalf("path text containing enospc must not be treated as ENOSPC: %v", err)
+	}
+}
+
+func isENOSPC(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ENOSPC) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no space left on device")
 }
 
 type dbPaths struct {
@@ -269,28 +295,44 @@ func TestFaultENOSPCOnConstrainedFilesystem(t *testing.T) {
 		"set STORAGE_ENGINE_ENOSPC_DIR to a small mounted filesystem to run real ENOSPC test",
 	)
 
-	p := pathsFor(filepath.Join(dir, "storage-engine-enospc-"+strconvLikeTime()))
-	if err := os.MkdirAll(p.dir, 0755); err != nil {
+	testDir := filepath.Join(dir, "storage-engine-enospc-"+strconvLikeTime())
+	if err := os.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("create constrained db dir: %v", err)
 	}
-	defer os.RemoveAll(p.dir)
+	defer os.RemoveAll(testDir)
 
-	se := openEngine(t, p)
-	defer se.Close()
+	pf, err := pagestore.NewPageFile(filepath.Join(testDir, "pages.db"), nil)
+	if err != nil {
+		t.Fatalf("open page file on constrained filesystem: %v", err)
+	}
+	defer pf.Close()
 
-	payload := make([]byte, 7000)
-	for i := range payload {
-		payload[i] = 'x'
+	var page pagestore.Page
+	for i := range page.Body() {
+		page.Body()[i] = byte(i%251 + 1)
 	}
 	for i := 1; i <= 1_000_000; i++ {
-		doc := fmt.Sprintf(`{"id":%d,"payload":"%s"}`, i, payload)
-		err := se.Put(context.Background(), "t", "id", types.IntKey(int64(i)), doc)
+		id, err := pf.AllocatePage()
 		if err != nil {
-			t.Logf("observed expected write failure after %d inserts: %v", i, err)
+			t.Fatalf("allocate page before ENOSPC: %v", err)
+		}
+		err = pf.WritePage(id, &page)
+		if err == nil {
+			continue
+		}
+		if isENOSPC(err) {
+			t.Logf("observed expected ENOSPC after %d page writes: %v", i, err)
 			return
 		}
+		t.Fatalf("expected ENOSPC from constrained filesystem, got unrelated error after %d page writes: %v", i, err)
 	}
-	t.Fatal("expected ENOSPC/write failure on constrained filesystem, but writes did not fail")
+	if err := pf.Sync(); isENOSPC(err) {
+		t.Logf("observed expected ENOSPC during sync: %v", err)
+		return
+	} else if err != nil {
+		t.Fatalf("expected ENOSPC from constrained filesystem, got unrelated sync error: %v", err)
+	}
+	t.Fatal("expected ENOSPC on constrained filesystem, but page writes did not fail")
 }
 
 func TestFaultFsyncFailureOnFaultingFilesystem(t *testing.T) {
