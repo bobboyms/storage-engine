@@ -605,6 +605,26 @@ Para `WriteTransaction`, o comportamento agora e:
 
 Esse mecanismo foi validado com fault injection no meio da aplicacao pos-commit, incluindo failure entre mutacao de heap e instalacao do indice.
 
+**In-process recovery (Heal)**
+
+A degraded engine no longer requires a process restart to recover. Since
+the COMMIT is durable, the partial in-memory state can be rebuilt by an
+idempotent WAL replay against the already-open files:
+
+- `StorageEngine.Heal(ctx)` performs that replay in place and clears the
+  degraded flag. It is a no-op on a healthy engine; if the underlying
+  fault persists, the replay fails and the engine stays degraded, so the
+  fail-stop guarantee holds.
+- `Options.AutoHealAfterApplyFailure` (default `false`) makes `Commit`
+  attempt the heal automatically when its post-commit apply fails. When
+  the heal succeeds `Commit` returns success and callers never observe
+  the degraded state; on failure the engine stays degraded and `Commit`
+  returns the apply error.
+
+Recommended pattern with the default fail-stop policy: on
+`storage.ErrEngineDegraded`, call `Heal(ctx)` and retry the operation.
+See `examples/auto_recovery` for both the explicit and automatic wiring.
+
 ### Nao implementado
 
 - Transacoes serializable.
