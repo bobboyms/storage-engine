@@ -107,6 +107,9 @@ func (k DecimalKey) coefficient() *big.Int {
 // larger scale before comparing coefficients, so 1.50 and 1.5 compare
 // equal. Returns ErrIncompatibleComparableTypes for any other type.
 func (k DecimalKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(DecimalKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: DecimalKey and %T", ErrIncompatibleComparableTypes, other)

@@ -49,6 +49,9 @@ func UUIDKeyFromBytes(b []byte) (UUIDKey, error) {
 // Compare orders two UUIDKey values bytewise. Returns
 // ErrIncompatibleComparableTypes for any other type.
 func (k UUIDKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(UUIDKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: UUIDKey and %T", ErrIncompatibleComparableTypes, other)

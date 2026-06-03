@@ -72,6 +72,9 @@ func (k CompositeKey) Compare(other Comparable) (int, error) {
 type IntKey int
 
 func (k IntKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(IntKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: IntKey and %T", ErrIncompatibleComparableTypes, other)
@@ -88,6 +91,9 @@ func (k IntKey) Compare(other Comparable) (int, error) {
 type VarcharKey string
 
 func (k VarcharKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(VarcharKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: VarcharKey and %T", ErrIncompatibleComparableTypes, other)
@@ -104,6 +110,9 @@ func (k VarcharKey) Compare(other Comparable) (int, error) {
 type FloatKey float64
 
 func (k FloatKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(FloatKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: FloatKey and %T", ErrIncompatibleComparableTypes, other)
@@ -121,6 +130,9 @@ func (k FloatKey) Compare(other Comparable) (int, error) {
 type BoolKey bool
 
 func (k BoolKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(BoolKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: BoolKey and %T", ErrIncompatibleComparableTypes, other)
@@ -137,6 +149,9 @@ func (k BoolKey) Compare(other Comparable) (int, error) {
 type DateKey time.Time
 
 func (k DateKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	otherDate, ok := other.(DateKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: DateKey and %T", ErrIncompatibleComparableTypes, other)

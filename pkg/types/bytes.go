@@ -14,6 +14,9 @@ type BytesKey []byte
 // Compare orders two BytesKey values bytewise. Returns
 // ErrIncompatibleComparableTypes for any other type.
 func (k BytesKey) Compare(other Comparable) (int, error) {
+	if c, isNull := nullOrderingAgainst(other); isNull {
+		return c, nil
+	}
 	o, ok := other.(BytesKey)
 	if !ok {
 		return 0, fmt.Errorf("%w: BytesKey and %T", ErrIncompatibleComparableTypes, other)
