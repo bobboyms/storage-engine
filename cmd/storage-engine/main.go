@@ -62,7 +62,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println(doc["nome"].(string))
+	if nome, ok := doc["nome"].(string); ok {
+		log.Println(nome)
+	}
 
 	// opts := &pebble.Options{}
 	// db, err := pebble.Open("/caminho/para/data", opts)
