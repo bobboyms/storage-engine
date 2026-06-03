@@ -588,11 +588,19 @@ func (tr *BTreeV2) splitFixedNode(h *pagestore.PageHandle, np *NodePage) (*pages
 	var sepKey uint64
 	if np.IsLeaf() {
 		rightNP := InitLeafPage(rightH.Page(), tr.maxBodySize, tr.codec.Compare)
-		sepKey = np.splitLeafInto(rightNP)
+		sepKey, err = np.splitLeafInto(rightNP)
+		if err != nil {
+			rightH.Release()
+			return nil, 0, err
+		}
 		np.setNextLeafPageID(rightH.ID())
 	} else {
 		rightNP := InitInternalPage(rightH.Page(), tr.maxBodySize, pagestore.InvalidPageID, tr.codec.Compare)
-		sepKey = np.splitInternalInto(rightNP)
+		sepKey, err = np.splitInternalInto(rightNP)
+		if err != nil {
+			rightH.Release()
+			return nil, 0, err
+		}
 	}
 
 	tr.markDirty(h)

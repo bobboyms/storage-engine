@@ -337,12 +337,12 @@ func (np *NodePage) LeafAt(i int) (uint64, int64, error) {
 // Esta função atualiza:
 //   - numKeys em ambas
 //   - other.nextLeafPageID = self.nextLeafPageID (other herda o link)
-func (np *NodePage) splitLeafInto(other *NodePage) uint64 {
+func (np *NodePage) splitLeafInto(other *NodePage) (uint64, error) {
 	if !np.IsLeaf() || !other.IsLeaf() {
-		panic("btree/v2: splitLeafInto requer dois leaf nodes")
+		return 0, fmt.Errorf("btree/v2: splitLeafInto requires leaf pages")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitLeafInto requer other empty")
+		return 0, fmt.Errorf("btree/v2: splitLeafInto requires an empty target")
 	}
 
 	n := np.NumKeys()
@@ -369,7 +369,7 @@ func (np *NodePage) splitLeafInto(other *NodePage) uint64 {
 
 	// Separador = primeira key da metade direita
 	sep, _ := other.readLeafSlot(0)
-	return sep
+	return sep, nil
 }
 
 // setNextLeafPageID atualiza o sibling pointer. Chamado pelo BTreeV2
@@ -556,12 +556,12 @@ func (np *NodePage) InternalAt(i int) (uint64, pagestore.PageID, error) {
 //   - Alocar o `other` via BufferPool
 //   - Inserir `promoted` no parent (com pointer pra `other`)
 //   - MarkDirty em ambos
-func (np *NodePage) splitInternalInto(other *NodePage) uint64 {
+func (np *NodePage) splitInternalInto(other *NodePage) (uint64, error) {
 	if !np.isInternal() || !other.isInternal() {
-		panic("btree/v2: splitInternalInto requer dois internal nodes")
+		return 0, fmt.Errorf("btree/v2: splitInternalInto requires internal pages")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitInternalInto requer other empty")
+		return 0, fmt.Errorf("btree/v2: splitInternalInto requires an empty target")
 	}
 
 	n := np.NumKeys()
@@ -587,5 +587,5 @@ func (np *NodePage) splitInternalInto(other *NodePage) uint64 {
 	selfHdr.numKeys = uint16(mid) //nolint:gosec // numKeys bounded by page slot count
 	np.writeHeader(selfHdr)
 
-	return promoted
+	return promoted, nil
 }

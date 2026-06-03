@@ -18,7 +18,10 @@ func TestSplitLeafInto_HalfAndHalf(t *testing.T) {
 	var rightP pagestore.Page
 	right := InitLeafPage(&rightP, pagestore.BodySize, nil)
 
-	sep := left.splitLeafInto(right)
+	sep, err := left.splitLeafInto(right)
+	if err != nil {
+		t.Fatalf("splitLeafInto: %v", err)
+	}
 
 	if left.NumKeys() != 5 || right.NumKeys() != 5 {
 		t.Fatalf("split desequilibrado: left=%d right=%d", left.NumKeys(), right.NumKeys())
@@ -61,7 +64,9 @@ func TestSplitLeafInto_PreservesSiblingLink(t *testing.T) {
 
 	var rightP pagestore.Page
 	right := InitLeafPage(&rightP, pagestore.BodySize, nil)
-	_ = left.splitLeafInto(right)
+	if _, err := left.splitLeafInto(right); err != nil {
+		t.Fatalf("splitLeafInto: %v", err)
+	}
 
 	if right.NextLeafPageID() != 99 {
 		t.Fatalf("right.NextLeaf expected 99 (herdado), got %d", right.NextLeafPageID())
@@ -76,7 +81,10 @@ func TestSplitInternalInto_MiddleKeyPromoted(t *testing.T) {
 
 	var rightP pagestore.Page
 	right := InitInternalPage(&rightP, pagestore.BodySize, pagestore.InvalidPageID, nil)
-	promoted := left.splitInternalInto(right)
+	promoted, err := left.splitInternalInto(right)
+	if err != nil {
+		t.Fatalf("splitInternalInto: %v", err)
+	}
 
 	if promoted != 40 {
 		t.Fatalf("promoted expected 40, got %d", promoted)
@@ -128,7 +136,10 @@ func TestSplitLeafInto_OddNumberOfKeys(t *testing.T) {
 
 	var rightP pagestore.Page
 	right := InitLeafPage(&rightP, pagestore.BodySize, nil)
-	sep := left.splitLeafInto(right)
+	sep, err := left.splitLeafInto(right)
+	if err != nil {
+		t.Fatalf("splitLeafInto: %v", err)
+	}
 
 	if left.NumKeys() != 3 || right.NumKeys() != 4 {
 		t.Fatalf("split ímpar: left=%d right=%d", left.NumKeys(), right.NumKeys())
