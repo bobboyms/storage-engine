@@ -370,10 +370,15 @@ func (vp *VariableNodePage) LeafDeleteVar(key []byte) (bool, error) {
 	return true, nil
 }
 
-// LeafAtVar devolve (keyBytes, value) do slot i.
+// LeafAtVar returns (keyBytes, value) for slot i.
+//
+// The bounds check is an invariant assertion, not a recoverable error:
+// pages are checksum-validated on read (so NumKeys is trustworthy) and
+// every caller iterates within [0, NumKeys()) or passes a midpoint
+// derived from it, so an out-of-range index can only mean a logic bug.
 func (vp *VariableNodePage) LeafAtVar(i int) ([]byte, int64) {
 	if i < 0 || i >= vp.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: LeafAtVar index %d fora de [0, %d)", i, vp.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: LeafAtVar index %d out of range [0, %d)", i, vp.NumKeys()))
 	}
 	off, length, v := vp.readSlot(i)
 	return vp.body[off : off+length], v
@@ -396,10 +401,15 @@ func (vp *VariableNodePage) internalBinarySearchVar(key []byte) int {
 	return lo
 }
 
-// FindChildVar retorna o child pra `key` num internal variable.
+// FindChildVar returns the child page for `key` in a variable internal
+// node.
+//
+// The node-type check is an invariant assertion, not a recoverable
+// error: callers only descend into FindChildVar after testing IsLeaf(),
+// so reaching it on a non-internal node can only mean a logic bug.
 func (vp *VariableNodePage) FindChildVar(key []byte) pagestore.PageID {
 	if !vp.isInternal() {
-		panic("btree/v2: FindChildVar em not-internal")
+		panic("btree/v2: FindChildVar on non-internal node")
 	}
 	firstGT := vp.internalBinarySearchVar(key)
 	if firstGT == 0 {
@@ -441,10 +451,14 @@ func (vp *VariableNodePage) InsertSeparatorVar(sepKey []byte, child pagestore.Pa
 	return nil
 }
 
-// InternalAtVar devolve (keyBytes, childPageID) do slot i.
+// InternalAtVar returns (keyBytes, childPageID) for slot i.
+//
+// As with LeafAtVar, the bounds check is an invariant assertion on a
+// checksum-validated page with in-range callers, not a recoverable
+// error.
 func (vp *VariableNodePage) InternalAtVar(i int) ([]byte, pagestore.PageID) {
 	if i < 0 || i >= vp.NumKeys() {
-		panic(fmt.Sprintf("btree/v2: InternalAtVar index %d fora de [0, %d)", i, vp.NumKeys()))
+		panic(fmt.Sprintf("btree/v2: InternalAtVar index %d out of range [0, %d)", i, vp.NumKeys()))
 	}
 	off, length, v := vp.readSlot(i)
 	return vp.body[off : off+length], pagestore.PageID(v) //nolint:gosec // v stored as int64, bit-pattern preserved
