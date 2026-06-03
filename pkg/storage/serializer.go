@@ -136,6 +136,8 @@ func serializeKeyToProto(key types.Comparable) (*Key, error) {
 		pk.Value = &Key_DateValue{DateValue: nano}
 	case types.BytesKey:
 		pk.Value = &Key_BytesValue{BytesValue: append([]byte(nil), k...)}
+	case types.UUIDKey:
+		pk.Value = &Key_UuidValue{UuidValue: append([]byte(nil), k[:]...)}
 	default:
 		return nil, fmt.Errorf("unsupported key type: %T", k)
 	}
@@ -160,6 +162,8 @@ func deserializeKeyFromProto(pk *Key) (types.Comparable, error) {
 		return types.DateKey(time.Unix(0, v.DateValue)), nil
 	case *Key_BytesValue:
 		return types.BytesKey(append([]byte(nil), v.BytesValue...)), nil
+	case *Key_UuidValue:
+		return types.UUIDKeyFromBytes(v.UuidValue)
 	default:
 		return nil, fmt.Errorf("unsupported key type in protobuf")
 	}

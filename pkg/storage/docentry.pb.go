@@ -99,6 +99,7 @@ type Key struct {
 	//	*Key_FloatValue
 	//	*Key_DateValue
 	//	*Key_BytesValue
+	//	*Key_UuidValue
 	Value         isKey_Value `protobuf_oneof:"value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -195,6 +196,15 @@ func (x *Key) GetBytesValue() []byte {
 	return nil
 }
 
+func (x *Key) GetUuidValue() []byte {
+	if x != nil {
+		if x, ok := x.Value.(*Key_UuidValue); ok {
+			return x.UuidValue
+		}
+	}
+	return nil
+}
+
 type isKey_Value interface {
 	isKey_Value()
 }
@@ -223,6 +233,10 @@ type Key_BytesValue struct {
 	BytesValue []byte `protobuf:"bytes,6,opt,name=bytes_value,json=bytesValue,proto3,oneof"`
 }
 
+type Key_UuidValue struct {
+	UuidValue []byte `protobuf:"bytes,7,opt,name=uuid_value,json=uuidValue,proto3,oneof"` // 16 raw bytes
+}
+
 func (*Key_IntValue) isKey_Value() {}
 
 func (*Key_StringValue) isKey_Value() {}
@@ -234,6 +248,8 @@ func (*Key_FloatValue) isKey_Value() {}
 func (*Key_DateValue) isKey_Value() {}
 
 func (*Key_BytesValue) isKey_Value() {}
+
+func (*Key_UuidValue) isKey_Value() {}
 
 type MultiIndexEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -306,7 +322,7 @@ const file_pkg_storage_docentry_proto_rawDesc = "" +
 	"\n" +
 	"index_name\x18\x02 \x01(\tR\tindexName\x12\x1e\n" +
 	"\x03key\x18\x03 \x01(\v2\f.storage.KeyR\x03key\x12\x1a\n" +
-	"\bdocument\x18\x04 \x01(\fR\bdocument\"\xda\x01\n" +
+	"\bdocument\x18\x04 \x01(\fR\bdocument\"\xfb\x01\n" +
 	"\x03Key\x12\x1d\n" +
 	"\tint_value\x18\x01 \x01(\x03H\x00R\bintValue\x12#\n" +
 	"\fstring_value\x18\x02 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
@@ -317,7 +333,9 @@ const file_pkg_storage_docentry_proto_rawDesc = "" +
 	"\n" +
 	"date_value\x18\x05 \x01(\x03H\x00R\tdateValue\x12!\n" +
 	"\vbytes_value\x18\x06 \x01(\fH\x00R\n" +
-	"bytesValueB\a\n" +
+	"bytesValue\x12\x1f\n" +
+	"\n" +
+	"uuid_value\x18\a \x01(\fH\x00R\tuuidValueB\a\n" +
 	"\x05value\"\xcb\x01\n" +
 	"\x0fMultiIndexEntry\x12\x1d\n" +
 	"\n" +
@@ -370,6 +388,7 @@ func file_pkg_storage_docentry_proto_init() {
 		(*Key_FloatValue)(nil),
 		(*Key_DateValue)(nil),
 		(*Key_BytesValue)(nil),
+		(*Key_UuidValue)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

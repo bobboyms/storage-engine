@@ -58,6 +58,9 @@ func NewBTreeForIndex(format BTreeFormat, primary bool, keyType DataType, path s
 		if keyType == TypeBytes {
 			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.BytesKeyCodec{})
 		}
+		if keyType == TypeUUID {
+			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.UUIDKeyCodec{})
+		}
 		codec, err := codecForDataType(keyType)
 		if err != nil {
 			return nil, err
@@ -102,11 +105,12 @@ const (
 	TypeFloat                   // 3: Float64
 	TypeDate                    // 4: Timestamp
 	TypeBytes                   // 5: Binary (BLOB)
+	TypeUUID                    // 6: 16-byte UUID
 )
 
 // Função auxiliar útil para debug
 func (d DataType) String() string {
-	return [...]string{"INT", "VARCHAR", "BOOL", "FLOAT", "DATE", "BYTES"}[d]
+	return [...]string{"INT", "VARCHAR", "BOOL", "FLOAT", "DATE", "BYTES", "UUID"}[d]
 }
 
 type Index struct {

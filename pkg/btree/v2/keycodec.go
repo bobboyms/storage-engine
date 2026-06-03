@@ -64,6 +64,30 @@ func (BytesKeyCodec) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
+// UUIDKeyCodec serializes UUIDKey as its 16 raw bytes, ordered bytewise
+// (the canonical UUID ordering).
+type UUIDKeyCodec struct{}
+
+func (UUIDKeyCodec) Encode(k types.Comparable) ([]byte, error) {
+	v, ok := k.(types.UUIDKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: UUIDKeyCodec expected types.UUIDKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return append([]byte(nil), v[:]...), nil
+}
+
+func (UUIDKeyCodec) Decode(b []byte) types.Comparable {
+	k, err := types.UUIDKeyFromBytes(b)
+	if err != nil {
+		return types.UUIDKey{}
+	}
+	return k
+}
+
+func (UUIDKeyCodec) Compare(a, b []byte) int {
+	return bytes.Compare(a, b)
+}
+
 // CompositeKeyCodec stores secondary index entries as variable-size
 // CompositeKey values. Its Compare method decodes and delegates to
 // CompositeKey.Compare, so the byte format only needs to be stable and
@@ -78,6 +102,7 @@ const (
 	compositeTypeFloat    byte = 4
 	compositeTypeDate     byte = 5
 	compositeTypeBytes    byte = 6
+	compositeTypeUUID     byte = 7
 )
 
 func (CompositeKeyCodec) Encode(k types.Comparable) ([]byte, error) {
@@ -174,6 +199,9 @@ func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) 
 	case types.BytesKey:
 		tag = compositeTypeBytes
 		payload = append([]byte(nil), v...)
+	case types.UUIDKey:
+		tag = compositeTypeUUID
+		payload = append([]byte(nil), v[:]...)
 	default:
 		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
 	}
@@ -223,6 +251,12 @@ func decodeCompositeComponent(b []byte, pos int) (types.Comparable, int, error) 
 		return types.DateKey(time.Unix(0, int64(binary.LittleEndian.Uint64(payload)))), pos, nil //nolint:gosec // inverse of encode
 	case compositeTypeBytes:
 		return types.BytesKey(append([]byte(nil), payload...)), pos, nil
+	case compositeTypeUUID:
+		k, err := types.UUIDKeyFromBytes(payload)
+		if err != nil {
+			return nil, pos, fmt.Errorf("btree/v2: invalid uuid component: %w", err)
+		}
+		return k, pos, nil
 	default:
 		return nil, pos, fmt.Errorf("btree/v2: unknown composite key component tag %d", tag)
 	}
