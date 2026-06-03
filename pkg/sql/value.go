@@ -43,3 +43,31 @@ func ColumnValue(lit *Literal, dt storage.DataType) (types.Comparable, error) {
 	}
 	return nil, fmt.Errorf("%w: literal %s is not compatible with column type %s", ErrValue, lit.String(), dt)
 }
+
+// NormalizeValue coerces a decoded value to the canonical key type for a
+// column's declared engine data type. Codecs may decode JSON numbers either as
+// integers or floats, so normalizing here keeps comparisons against typed
+// literals consistent. Values that already match (or cannot be coerced) are
+// returned unchanged; NULL is always preserved.
+func NormalizeValue(v types.Comparable, dt storage.DataType) types.Comparable {
+	if isNull(v) {
+		return v
+	}
+	switch dt {
+	case storage.TypeInt:
+		switch n := v.(type) {
+		case types.IntKey:
+			return n
+		case types.FloatKey:
+			return types.IntKey(int64(n))
+		}
+	case storage.TypeFloat:
+		switch n := v.(type) {
+		case types.FloatKey:
+			return n
+		case types.IntKey:
+			return types.FloatKey(float64(n))
+		}
+	}
+	return v
+}
