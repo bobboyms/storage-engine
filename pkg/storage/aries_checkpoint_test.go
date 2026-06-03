@@ -2,7 +2,10 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
+	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -40,6 +43,50 @@ func TestARIES_CheckpointPayloadRoundTrip(t *testing.T) {
 
 	if got := minRecLSN(dpt); got != 12 {
 		t.Fatalf("minRecLSN: got %d want 12", got)
+	}
+}
+
+// TestARIES_CheckpointPayloadRejectsImplausibleCounts guards against a
+// corrupt checkpoint record claiming a DPT/ATT entry count far larger
+// than the remaining payload can hold. parseCheckpointPayload must
+// reject it without attempting to pre-allocate a slice sized by the
+// untrusted count (which would exhaust memory during recovery).
+func TestARIES_CheckpointPayloadRejectsImplausibleCounts(t *testing.T) {
+	// beginLSN(8) + version(1) + dptCount(4) and then no entry bodies.
+	craft := func(dptCount, attCount uint32, includeATT bool) []byte {
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, 1)
+		buf = append(buf, checkpointPayloadV2)
+		var u32 [4]byte
+		binary.LittleEndian.PutUint32(u32[:], dptCount)
+		buf = append(buf, u32[:]...)
+		if includeATT {
+			binary.LittleEndian.PutUint32(u32[:], attCount)
+			buf = append(buf, u32[:]...)
+		}
+		return buf
+	}
+
+	// A large DPT count with an empty body cannot possibly be satisfied
+	// (each entry needs >= 18 bytes). The parser must reject the count up
+	// front rather than pre-allocating a slice sized by it.
+	if _, _, _, err := parseCheckpointPayload(craft(10_000_000, 0, false)); err == nil {
+		t.Fatal("expected error for DPT count exceeding payload capacity")
+	} else if !strings.Contains(err.Error(), "exceeds remaining payload") {
+		t.Fatalf("expected capacity-bound error for DPT, got %v", err)
+	}
+
+	// Same for the ATT count (each entry needs 16 bytes).
+	if _, _, _, err := parseCheckpointPayload(craft(0, 10_000_000, true)); err == nil {
+		t.Fatal("expected error for ATT count exceeding payload capacity")
+	} else if !strings.Contains(err.Error(), "exceeds remaining payload") {
+		t.Fatalf("expected capacity-bound error for ATT, got %v", err)
+	}
+
+	// The pathological uint32 max must also be rejected without
+	// attempting a multi-gigabyte allocation.
+	if _, _, _, err := parseCheckpointPayload(craft(math.MaxUint32, 0, false)); err == nil {
+		t.Fatal("expected error for max-uint32 DPT count")
 	}
 }
 

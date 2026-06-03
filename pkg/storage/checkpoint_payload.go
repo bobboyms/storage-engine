@@ -9,6 +9,13 @@ import (
 const (
 	checkpointPayloadV1 = 1 // legacy: [beginLSN:8]
 	checkpointPayloadV2 = 2 // v2: [beginLSN:8][version:1][dptCount:4][dpt...][attCount:4][att...]
+
+	// Minimum on-disk size of a single DPT entry: pathLen(2) + pageID(8)
+	// + recLSN(8), with a zero-length path. Used to bound the entry count
+	// against the remaining payload before allocating.
+	minDirtyPageEntrySize = 18
+	// Fixed on-disk size of a single ATT entry: txID(8) + lastLSN(8).
+	attEntrySize = 16
 )
 
 // dirtyPageEntry is a (path, pageID, recLSN) triple. recLSN is the
@@ -94,6 +101,13 @@ func parseCheckpointPayload(payload []byte) (beginLSN uint64, dpt []dirtyPageEnt
 	}
 	dptCount := binary.LittleEndian.Uint32(payload[off : off+4])
 	off += 4
+	// Reject counts that cannot fit in the remaining bytes before
+	// allocating. A corrupt record claiming a huge count would otherwise
+	// trigger a multi-gigabyte allocation and crash recovery. Each DPT
+	// entry needs at least pathLen(2)+pageID(8)+recLSN(8) = 18 bytes.
+	if int64(dptCount) > int64(len(payload)-off)/minDirtyPageEntrySize {
+		return 0, nil, nil, fmt.Errorf("checkpoint dpt count %d exceeds remaining payload (%d bytes)", dptCount, len(payload)-off)
+	}
 	dpt = make([]dirtyPageEntry, 0, dptCount)
 	for i := uint32(0); i < dptCount; i++ {
 		if off+2 > len(payload) {
@@ -117,6 +131,10 @@ func parseCheckpointPayload(payload []byte) (beginLSN uint64, dpt []dirtyPageEnt
 	}
 	attCount := binary.LittleEndian.Uint32(payload[off : off+4])
 	off += 4
+	// Same capacity guard as the DPT: each ATT entry is exactly 16 bytes.
+	if int64(attCount) > int64(len(payload)-off)/attEntrySize {
+		return 0, nil, nil, fmt.Errorf("checkpoint att count %d exceeds remaining payload (%d bytes)", attCount, len(payload)-off)
+	}
 	att = make([]activeTxEntry, 0, attCount)
 	for i := uint32(0); i < attCount; i++ {
 		if off+16 > len(payload) {
