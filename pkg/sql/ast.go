@@ -29,6 +29,38 @@ type OrderBy struct {
 	Desc   bool
 }
 
+// InsertStmt represents INSERT INTO table (cols...) VALUES (vals...).
+type InsertStmt struct {
+	Table   string
+	Columns []string
+	Values  []Expr // one literal per column, positionally aligned
+}
+
+func (*InsertStmt) stmtNode() {}
+
+// Assignment is a single "column = value" pair in an UPDATE SET clause.
+type Assignment struct {
+	Column string
+	Value  Expr
+}
+
+// UpdateStmt represents UPDATE table SET assignments... [WHERE expr].
+type UpdateStmt struct {
+	Table       string
+	Assignments []Assignment
+	Where       Expr // nil when no WHERE clause
+}
+
+func (*UpdateStmt) stmtNode() {}
+
+// DeleteStmt represents DELETE FROM table [WHERE expr].
+type DeleteStmt struct {
+	Table string
+	Where Expr // nil when no WHERE clause
+}
+
+func (*DeleteStmt) stmtNode() {}
+
 // Expr is a WHERE-clause expression node.
 type Expr interface {
 	// String returns a canonical, fully parenthesized representation.

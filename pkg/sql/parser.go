@@ -68,9 +68,161 @@ func (p *parser) parseStatement() (Statement, error) {
 	switch t.Literal {
 	case "SELECT":
 		return p.parseSelect()
+	case "INSERT":
+		return p.parseInsert()
+	case "UPDATE":
+		return p.parseUpdate()
+	case "DELETE":
+		return p.parseDelete()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
 	}
+}
+
+func (p *parser) parseInsert() (*InsertStmt, error) {
+	if err := p.expectKeyword("INSERT"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("INTO"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	ins := &InsertStmt{Table: p.next().Literal}
+
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return nil, err
+	}
+	ins.Columns = cols
+
+	if err := p.expectKeyword("VALUES"); err != nil {
+		return nil, err
+	}
+	vals, err := p.parseParenLiteralList()
+	if err != nil {
+		return nil, err
+	}
+	ins.Values = vals
+	return ins, nil
+}
+
+func (p *parser) parseUpdate() (*UpdateStmt, error) {
+	if err := p.expectKeyword("UPDATE"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	upd := &UpdateStmt{Table: p.next().Literal}
+
+	if err := p.expectKeyword("SET"); err != nil {
+		return nil, err
+	}
+	for {
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected column in SET, got %q", ErrParse, p.peek().Literal)
+		}
+		col := p.next().Literal
+		if t := p.peek(); t.Type != TokenOperator || t.Literal != "=" {
+			return nil, fmt.Errorf("%w: expected = in assignment, got %q", ErrParse, t.Literal)
+		}
+		p.next()
+		val, err := p.parseLiteralOperand()
+		if err != nil {
+			return nil, err
+		}
+		upd.Assignments = append(upd.Assignments, Assignment{Column: col, Value: val})
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+
+	if p.isKeyword("WHERE") {
+		p.next()
+		where, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		upd.Where = where
+	}
+	return upd, nil
+}
+
+func (p *parser) parseDelete() (*DeleteStmt, error) {
+	if err := p.expectKeyword("DELETE"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("FROM"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	del := &DeleteStmt{Table: p.next().Literal}
+
+	if p.isKeyword("WHERE") {
+		p.next()
+		where, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		del.Where = where
+	}
+	return del, nil
+}
+
+func (p *parser) parseParenColumnList() ([]string, error) {
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( before column list, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	cols, err := p.parseColumnList()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) after column list, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return cols, nil
+}
+
+func (p *parser) parseParenLiteralList() ([]Expr, error) {
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( before VALUES list, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	var vals []Expr
+	for {
+		lit, err := p.parseLiteralOperand()
+		if err != nil {
+			return nil, err
+		}
+		vals = append(vals, lit)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) after VALUES list, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return vals, nil
+}
+
+func (p *parser) parseLiteralOperand() (Expr, error) {
+	operand, err := p.parseOperand()
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := operand.(*Literal); !ok {
+		return nil, fmt.Errorf("%w: expected a literal value, got %s", ErrParse, operand.String())
+	}
+	return operand, nil
 }
 
 func (p *parser) parseSelect() (*SelectStmt, error) {
