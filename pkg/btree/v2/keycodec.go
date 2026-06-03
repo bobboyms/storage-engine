@@ -44,6 +44,26 @@ func (VarcharKeyCodec) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
+// BytesKeyCodec serializes BytesKey as its raw bytes, ordered bytewise.
+// Like VarcharKeyCodec, it relies on the slot directory for the length.
+type BytesKeyCodec struct{}
+
+func (BytesKeyCodec) Encode(k types.Comparable) ([]byte, error) {
+	v, ok := k.(types.BytesKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: BytesKeyCodec expected types.BytesKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return append([]byte(nil), v...), nil
+}
+
+func (BytesKeyCodec) Decode(b []byte) types.Comparable {
+	return types.BytesKey(append([]byte(nil), b...))
+}
+
+func (BytesKeyCodec) Compare(a, b []byte) int {
+	return bytes.Compare(a, b)
+}
+
 // CompositeKeyCodec stores secondary index entries as variable-size
 // CompositeKey values. Its Compare method decodes and delegates to
 // CompositeKey.Compare, so the byte format only needs to be stable and
@@ -57,6 +77,7 @@ const (
 	compositeTypeBool     byte = 3
 	compositeTypeFloat    byte = 4
 	compositeTypeDate     byte = 5
+	compositeTypeBytes    byte = 6
 )
 
 func (CompositeKeyCodec) Encode(k types.Comparable) ([]byte, error) {
@@ -150,6 +171,9 @@ func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) 
 		}
 		payload = make([]byte, 8)
 		binary.LittleEndian.PutUint64(payload, uint64(nano)) //nolint:gosec // preserve signed bit pattern
+	case types.BytesKey:
+		tag = compositeTypeBytes
+		payload = append([]byte(nil), v...)
 	default:
 		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
 	}
@@ -197,6 +221,8 @@ func decodeCompositeComponent(b []byte, pos int) (types.Comparable, int, error) 
 			return nil, pos, fmt.Errorf("btree/v2: invalid date component length")
 		}
 		return types.DateKey(time.Unix(0, int64(binary.LittleEndian.Uint64(payload)))), pos, nil //nolint:gosec // inverse of encode
+	case compositeTypeBytes:
+		return types.BytesKey(append([]byte(nil), payload...)), pos, nil
 	default:
 		return nil, pos, fmt.Errorf("btree/v2: unknown composite key component tag %d", tag)
 	}

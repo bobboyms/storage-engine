@@ -18,6 +18,7 @@ message Key {
         bool bool_value = 3;
         double float_value = 4;
         int64 date_value = 5; // UnixNano
+        bytes bytes_value = 6;
     }
 }
 

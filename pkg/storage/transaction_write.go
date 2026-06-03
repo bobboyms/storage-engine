@@ -719,6 +719,8 @@ func getTypeFromKey(k types.Comparable) DataType {
 		return TypeFloat
 	case types.DateKey:
 		return TypeDate
+	case types.BytesKey:
+		return TypeBytes
 	default:
 		return TypeVarchar // Fallback
 	}
