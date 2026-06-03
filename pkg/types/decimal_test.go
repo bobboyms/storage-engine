@@ -71,6 +71,35 @@ func TestDecimalKey_CompareIncompatibleType(t *testing.T) {
 	}
 }
 
+func TestDecimalKey_BinaryRoundTrip(t *testing.T) {
+	for _, s := range []string{"0", "123.45", "-0.01", "1.50", "-99999999999999999999.000001", "100"} {
+		d, err := ParseDecimal(s)
+		if err != nil {
+			t.Fatalf("ParseDecimal(%q): %v", s, err)
+		}
+		b, err := d.MarshalBinary()
+		if err != nil {
+			t.Fatalf("MarshalBinary(%q): %v", s, err)
+		}
+		back, err := DecimalFromBinary(b)
+		if err != nil {
+			t.Fatalf("DecimalFromBinary(%q): %v", s, err)
+		}
+		if c := mustCompare(t, d, back); c != 0 {
+			t.Fatalf("round-trip %q: cmp=%d", s, c)
+		}
+		if back.String() != d.String() {
+			t.Fatalf("round-trip %q: String %q != %q", s, back.String(), d.String())
+		}
+	}
+}
+
+func TestDecimalFromBinary_RejectsTruncated(t *testing.T) {
+	if _, err := DecimalFromBinary([]byte{0x00, 0x01}); err == nil {
+		t.Fatal("expected error for truncated decimal binary")
+	}
+}
+
 func TestNewDecimal_FromUnscaled(t *testing.T) {
 	// 12345 with scale 2 == 123.45
 	d := NewDecimal(12345, 2)

@@ -138,6 +138,12 @@ func serializeKeyToProto(key types.Comparable) (*Key, error) {
 		pk.Value = &Key_BytesValue{BytesValue: append([]byte(nil), k...)}
 	case types.UUIDKey:
 		pk.Value = &Key_UuidValue{UuidValue: append([]byte(nil), k[:]...)}
+	case types.DecimalKey:
+		bin, err := k.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		pk.Value = &Key_DecimalValue{DecimalValue: bin}
 	default:
 		return nil, fmt.Errorf("unsupported key type: %T", k)
 	}
@@ -164,6 +170,8 @@ func deserializeKeyFromProto(pk *Key) (types.Comparable, error) {
 		return types.BytesKey(append([]byte(nil), v.BytesValue...)), nil
 	case *Key_UuidValue:
 		return types.UUIDKeyFromBytes(v.UuidValue)
+	case *Key_DecimalValue:
+		return types.DecimalFromBinary(v.DecimalValue)
 	default:
 		return nil, fmt.Errorf("unsupported key type in protobuf")
 	}

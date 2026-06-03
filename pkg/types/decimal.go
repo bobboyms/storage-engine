@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"strings"
@@ -127,6 +128,34 @@ func (k DecimalKey) Compare(other Comparable) (int, error) {
 		}
 	}
 	return a.Cmp(b), nil
+}
+
+// MarshalBinary encodes the decimal as [scale:int32 LE][sign:1][magnitude
+// big-endian...]. The encoding is stable and reversible (used by the
+// index codec and the WAL); it is not order-preserving, so consumers
+// compare by decoding rather than by bytes.
+func (k DecimalKey) MarshalBinary() ([]byte, error) {
+	coef := k.coefficient()
+	mag := new(big.Int).Abs(coef).Bytes()
+	out := make([]byte, 5, 5+len(mag))
+	binary.LittleEndian.PutUint32(out[0:4], uint32(k.scale)) //nolint:gosec // scale bounded by maxDecimalDigits
+	if coef.Sign() < 0 {
+		out[4] = 1
+	}
+	return append(out, mag...), nil
+}
+
+// DecimalFromBinary reverses MarshalBinary.
+func DecimalFromBinary(b []byte) (DecimalKey, error) {
+	if len(b) < 5 {
+		return DecimalKey{}, fmt.Errorf("types: decimal binary too short (%d bytes)", len(b))
+	}
+	scale := int32(binary.LittleEndian.Uint32(b[0:4])) //nolint:gosec // inverse of MarshalBinary
+	coef := new(big.Int).SetBytes(b[5:])
+	if b[4] == 1 {
+		coef.Neg(coef)
+	}
+	return DecimalKey{coef: coef, scale: scale}, nil
 }
 
 // scaleUp returns n × 10^power without mutating n.

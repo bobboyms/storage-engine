@@ -723,6 +723,8 @@ func getTypeFromKey(k types.Comparable) DataType {
 		return TypeBytes
 	case types.UUIDKey:
 		return TypeUUID
+	case types.DecimalKey:
+		return TypeDecimal
 	default:
 		return TypeVarchar // Fallback
 	}

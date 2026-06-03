@@ -100,6 +100,7 @@ type Key struct {
 	//	*Key_DateValue
 	//	*Key_BytesValue
 	//	*Key_UuidValue
+	//	*Key_DecimalValue
 	Value         isKey_Value `protobuf_oneof:"value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -205,6 +206,15 @@ func (x *Key) GetUuidValue() []byte {
 	return nil
 }
 
+func (x *Key) GetDecimalValue() []byte {
+	if x != nil {
+		if x, ok := x.Value.(*Key_DecimalValue); ok {
+			return x.DecimalValue
+		}
+	}
+	return nil
+}
+
 type isKey_Value interface {
 	isKey_Value()
 }
@@ -237,6 +247,10 @@ type Key_UuidValue struct {
 	UuidValue []byte `protobuf:"bytes,7,opt,name=uuid_value,json=uuidValue,proto3,oneof"` // 16 raw bytes
 }
 
+type Key_DecimalValue struct {
+	DecimalValue []byte `protobuf:"bytes,8,opt,name=decimal_value,json=decimalValue,proto3,oneof"` // DecimalKey.MarshalBinary
+}
+
 func (*Key_IntValue) isKey_Value() {}
 
 func (*Key_StringValue) isKey_Value() {}
@@ -250,6 +264,8 @@ func (*Key_DateValue) isKey_Value() {}
 func (*Key_BytesValue) isKey_Value() {}
 
 func (*Key_UuidValue) isKey_Value() {}
+
+func (*Key_DecimalValue) isKey_Value() {}
 
 type MultiIndexEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -322,7 +338,7 @@ const file_pkg_storage_docentry_proto_rawDesc = "" +
 	"\n" +
 	"index_name\x18\x02 \x01(\tR\tindexName\x12\x1e\n" +
 	"\x03key\x18\x03 \x01(\v2\f.storage.KeyR\x03key\x12\x1a\n" +
-	"\bdocument\x18\x04 \x01(\fR\bdocument\"\xfb\x01\n" +
+	"\bdocument\x18\x04 \x01(\fR\bdocument\"\xa2\x02\n" +
 	"\x03Key\x12\x1d\n" +
 	"\tint_value\x18\x01 \x01(\x03H\x00R\bintValue\x12#\n" +
 	"\fstring_value\x18\x02 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
@@ -335,7 +351,8 @@ const file_pkg_storage_docentry_proto_rawDesc = "" +
 	"\vbytes_value\x18\x06 \x01(\fH\x00R\n" +
 	"bytesValue\x12\x1f\n" +
 	"\n" +
-	"uuid_value\x18\a \x01(\fH\x00R\tuuidValueB\a\n" +
+	"uuid_value\x18\a \x01(\fH\x00R\tuuidValue\x12%\n" +
+	"\rdecimal_value\x18\b \x01(\fH\x00R\fdecimalValueB\a\n" +
 	"\x05value\"\xcb\x01\n" +
 	"\x0fMultiIndexEntry\x12\x1d\n" +
 	"\n" +
@@ -389,6 +406,7 @@ func file_pkg_storage_docentry_proto_init() {
 		(*Key_DateValue)(nil),
 		(*Key_BytesValue)(nil),
 		(*Key_UuidValue)(nil),
+		(*Key_DecimalValue)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

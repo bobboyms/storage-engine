@@ -88,6 +88,40 @@ func (UUIDKeyCodec) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
+// DecimalKeyCodec serializes DecimalKey via its stable binary form. The
+// encoding is not order-preserving, so Compare decodes both operands and
+// compares them exactly (like CompositeKeyCodec).
+type DecimalKeyCodec struct{}
+
+func (DecimalKeyCodec) Encode(k types.Comparable) ([]byte, error) {
+	v, ok := k.(types.DecimalKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: DecimalKeyCodec expected types.DecimalKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return v.MarshalBinary()
+}
+
+func (DecimalKeyCodec) Decode(b []byte) types.Comparable {
+	d, err := types.DecimalFromBinary(b)
+	if err != nil {
+		return types.DecimalKey{}
+	}
+	return d
+}
+
+func (DecimalKeyCodec) Compare(a, b []byte) int {
+	ad, aerr := types.DecimalFromBinary(a)
+	bd, berr := types.DecimalFromBinary(b)
+	if aerr != nil || berr != nil {
+		return bytes.Compare(a, b)
+	}
+	cmp, err := ad.Compare(bd)
+	if err != nil {
+		return bytes.Compare(a, b)
+	}
+	return cmp
+}
+
 // CompositeKeyCodec stores secondary index entries as variable-size
 // CompositeKey values. Its Compare method decodes and delegates to
 // CompositeKey.Compare, so the byte format only needs to be stable and
@@ -103,6 +137,7 @@ const (
 	compositeTypeDate     byte = 5
 	compositeTypeBytes    byte = 6
 	compositeTypeUUID     byte = 7
+	compositeTypeDecimal  byte = 8
 )
 
 func (CompositeKeyCodec) Encode(k types.Comparable) ([]byte, error) {
@@ -202,6 +237,13 @@ func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) 
 	case types.UUIDKey:
 		tag = compositeTypeUUID
 		payload = append([]byte(nil), v[:]...)
+	case types.DecimalKey:
+		tag = compositeTypeDecimal
+		var err error
+		payload, err = v.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
 	}
@@ -257,6 +299,12 @@ func decodeCompositeComponent(b []byte, pos int) (types.Comparable, int, error) 
 			return nil, pos, fmt.Errorf("btree/v2: invalid uuid component: %w", err)
 		}
 		return k, pos, nil
+	case compositeTypeDecimal:
+		d, err := types.DecimalFromBinary(payload)
+		if err != nil {
+			return nil, pos, fmt.Errorf("btree/v2: invalid decimal component: %w", err)
+		}
+		return d, pos, nil
 	default:
 		return nil, pos, fmt.Errorf("btree/v2: unknown composite key component tag %d", tag)
 	}
