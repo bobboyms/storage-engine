@@ -36,18 +36,30 @@ func (e *SerializationConflictError) Unwrap() error {
 // undo. lastLSN is updated as BEGIN / op / CLR / COMMIT entries are
 // flushed to the WAL.
 type WriteTransaction struct {
-	engine    *StorageEngine
-	txID      uint64
-	readView  *Transaction
-	writeSet  []writeOp
-	readSet   map[string]readObservation
-	pending   map[string]int
-	lastLSN   uint64
-	committed bool
-	aborted   bool
-	abortErr  error
-	walBegun  bool
-	mu        sync.Mutex
+	engine     *StorageEngine
+	txID       uint64
+	readView   *Transaction
+	writeSet   []writeOp
+	readSet    map[string]readObservation
+	pending    map[string]int
+	savepoints []savepoint
+	lastLSN    uint64
+	committed  bool
+	aborted    bool
+	abortErr   error
+	walBegun   bool
+	mu         sync.Mutex
+}
+
+// savepoint marks a position in the transaction's buffered write set.
+// Because a WriteTransaction stages all writes in memory and only flushes
+// them to the WAL at Commit, a savepoint is simply the write-set length
+// at the moment it was established; rolling back to it truncates the
+// buffer. Row locks acquired after the savepoint are intentionally kept
+// (matching standard SQL: ROLLBACK TO SAVEPOINT does not release locks).
+type savepoint struct {
+	name        string
+	writeSetLen int
 }
 
 type readObservation struct {
@@ -386,6 +398,70 @@ func (tx *WriteTransaction) Rollback(ctx context.Context) error {
 	tx.writeSet = nil
 	tx.aborted = true
 	return nil
+}
+
+// Savepoint establishes a named savepoint at the current point in the
+// transaction. A later RollbackToSavepoint with the same name discards
+// every operation buffered after this call while preserving earlier
+// work. Establishing a savepoint with an existing name shadows the
+// previous one until it is rolled back to or the transaction ends.
+func (tx *WriteTransaction) Savepoint(name string) error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
+	}
+	tx.savepoints = append(tx.savepoints, savepoint{name: name, writeSetLen: len(tx.writeSet)})
+	return nil
+}
+
+// RollbackToSavepoint discards every operation buffered after the most
+// recent savepoint with the given name. The savepoint itself remains
+// usable, but any savepoints established after it are removed. Row locks
+// acquired after the savepoint are retained, matching standard SQL
+// semantics. Returns an error if no matching savepoint exists.
+func (tx *WriteTransaction) RollbackToSavepoint(name string) error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
+	}
+
+	idx := -1
+	for i := len(tx.savepoints) - 1; i >= 0; i-- {
+		if tx.savepoints[i].name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("storage: savepoint %q does not exist", name)
+	}
+
+	target := tx.savepoints[idx]
+	if target.writeSetLen <= len(tx.writeSet) {
+		tx.writeSet = tx.writeSet[:target.writeSetLen]
+	}
+	// Drop savepoints established after the matched one; keep the
+	// matched savepoint so it can be rolled back to again.
+	tx.savepoints = tx.savepoints[:idx+1]
+	tx.rebuildPendingLocked()
+	return nil
+}
+
+// rebuildPendingLocked recomputes the resource→write-set-index map from
+// the surviving write set after a savepoint truncation. The last write
+// to a resource wins, mirroring how Put/Del overwrite pending entries.
+func (tx *WriteTransaction) rebuildPendingLocked() {
+	tx.pending = make(map[string]int, len(tx.writeSet))
+	for i := range tx.writeSet {
+		op := &tx.writeSet[i]
+		resource, err := lockResourceForKey(op.tableName, op.indexName, op.key)
+		if err != nil {
+			continue
+		}
+		tx.pending[resource] = i
+	}
 }
 
 func (tx *WriteTransaction) ensureWritableLocked() error {

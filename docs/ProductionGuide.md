@@ -563,7 +563,6 @@ Rollback funciona bem before da aplicacao, porque as operacoes estao apenas no w
 Nao ha:
 
 - rollback de uma transacao ja parcialmente aplicada;
-- savepoints;
 - nested transactions;
 - undo log fisico;
 - rollback runtime all-or-nothing generico para caminhos fora de `WriteTransaction`.
@@ -611,7 +610,6 @@ Esse mecanismo foi validado com fault injection no meio da aplicacao pos-commit,
 - Transacoes serializable.
 - Lock manager transacional.
 - Two-phase locking.
-- Savepoints.
 - Nested transactions.
 - Undo log fisico.
 - Compensation log records.
