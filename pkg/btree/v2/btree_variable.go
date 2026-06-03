@@ -21,11 +21,19 @@ func (tr *BTreeV2) splitVarNode(h *pagestore.PageHandle, vp *VariableNodePage) (
 	var sepKey []byte
 	if vp.IsLeaf() {
 		rightVP := InitLeafPageVar(rightH.Page(), tr.maxBodySize, tr.varCodec.Compare)
-		sepKey = vp.splitLeafIntoVar(rightVP)
+		sepKey, err = vp.splitLeafIntoVar(rightVP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, err
+		}
 		vp.setNextLeafPageID(rightH.ID())
 	} else {
 		rightVP := InitInternalPageVar(rightH.Page(), tr.maxBodySize, pagestore.InvalidPageID, tr.varCodec.Compare)
-		sepKey = vp.splitInternalIntoVar(rightVP)
+		sepKey, err = vp.splitInternalIntoVar(rightVP)
+		if err != nil {
+			rightH.Release()
+			return nil, nil, err
+		}
 	}
 
 	tr.markDirty(h)

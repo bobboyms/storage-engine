@@ -202,7 +202,10 @@ func TestVarNode_SplitLeaf(t *testing.T) {
 	var rightP pagestore.Page
 	right := InitLeafPageVar(&rightP, pagestore.BodySize, bytes.Compare)
 
-	sep := left.splitLeafIntoVar(right)
+	sep, err := left.splitLeafIntoVar(right)
+	if err != nil {
+		t.Fatalf("splitLeafIntoVar: %v", err)
+	}
 
 	if left.NumKeys() != 5 || right.NumKeys() != 5 {
 		t.Fatalf("split desbalanceado: left=%d right=%d", left.NumKeys(), right.NumKeys())
@@ -242,7 +245,10 @@ func TestVarNode_SplitInternal_MiddleKeyPromoted(t *testing.T) {
 	var rightP pagestore.Page
 	right := InitInternalPageVar(&rightP, pagestore.BodySize, pagestore.InvalidPageID, bytes.Compare)
 
-	promoted := left.splitInternalIntoVar(right)
+	promoted, err := left.splitInternalIntoVar(right)
+	if err != nil {
+		t.Fatalf("splitInternalIntoVar: %v", err)
+	}
 
 	// mid = 7/2 = 3 → promovida = slot[3] = "f"
 	if string(promoted) != "f" {

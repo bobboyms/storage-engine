@@ -454,12 +454,12 @@ func (vp *VariableNodePage) InternalAtVar(i int) ([]byte, pagestore.PageID) {
 // slots) pra `other`. Retorna as bytes da key separadora (primeira
 // da metade direita) — cópia independente, caller not precisa se
 // preocupar com aliasing no body original.
-func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
+func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) ([]byte, error) {
 	if !vp.IsLeaf() || !other.IsLeaf() {
-		panic("btree/v2: splitLeafIntoVar requer leaves variable")
+		return nil, fmt.Errorf("btree/v2: splitLeafIntoVar requires leaf pages")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitLeafIntoVar requer other empty")
+		return nil, fmt.Errorf("btree/v2: splitLeafIntoVar requires an empty target")
 	}
 
 	n := vp.NumKeys()
@@ -469,7 +469,7 @@ func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	for i := mid; i < n; i++ {
 		keyBytes, value := vp.LeafAtVar(i)
 		if err := other.LeafInsertVar(keyBytes, value); err != nil {
-			panic(fmt.Sprintf("btree/v2: inserção no right pós-split failed: %v", err))
+			return nil, fmt.Errorf("btree/v2: leaf split right-half insert: %w", err)
 		}
 	}
 
@@ -496,17 +496,17 @@ func (vp *VariableNodePage) splitLeafIntoVar(other *VariableNodePage) []byte {
 	selfHdr.numKeys = uint16(mid) //nolint:gosec // mid bounded by page slot count
 	vp.writeHeader(selfHdr)
 
-	return sep
+	return sep, nil
 }
 
 // splitInternalIntoVar: promove key do meio; move slots[mid+1..n) pra other.
 // other.leftmost = slot[mid].child. Retorna a key promovida (cópia).
-func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte {
+func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) ([]byte, error) {
 	if !vp.isInternal() || !other.isInternal() {
-		panic("btree/v2: splitInternalIntoVar requer internals variable")
+		return nil, fmt.Errorf("btree/v2: splitInternalIntoVar requires internal pages")
 	}
 	if other.NumKeys() != 0 {
-		panic("btree/v2: splitInternalIntoVar requer other empty")
+		return nil, fmt.Errorf("btree/v2: splitInternalIntoVar requires an empty target")
 	}
 
 	n := vp.NumKeys()
@@ -524,7 +524,7 @@ func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte
 	for i := mid + 1; i < n; i++ {
 		keyBytes, child := vp.InternalAtVar(i)
 		if err := other.InsertSeparatorVar(keyBytes, child); err != nil {
-			panic(fmt.Sprintf("btree/v2: InsertSeparatorVar no right pós-split failed: %v", err))
+			return nil, fmt.Errorf("btree/v2: internal split right-half insert: %w", err)
 		}
 	}
 
@@ -533,5 +533,5 @@ func (vp *VariableNodePage) splitInternalIntoVar(other *VariableNodePage) []byte
 	selfHdr.numKeys = uint16(mid) //nolint:gosec // mid bounded by page slot count
 	vp.writeHeader(selfHdr)
 
-	return promoted
+	return promoted, nil
 }
