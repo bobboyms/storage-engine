@@ -14,9 +14,9 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
-// findLastCheckpointLSN varre o WAL e retorna o beginLSN do record de
-// checkpoint mais recente. Retorna (0, false) se not houver nenhum record
-// de checkpoint — recovery cai no caminho clássico (replay completo).
+// findLastCheckpointLSN scans the WAL and returns the beginLSN of the most
+// recent checkpoint record. Returns (0, false) if there is no checkpoint
+// record — recovery falls back to the classic path (full replay).
 func findLastCheckpointLSN(walPath string) (uint64, bool, error) {
 	return findLastCheckpointLSNWithCipher(walPath, nil)
 }
@@ -370,9 +370,9 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 }
 
 func (ra *recoveryAnalysis) shouldRedo(entry *wal.WALEntry) ([]byte, bool, error) {
-	// Entradas anteriores ao último checkpoint já estão em disco.
-	// Pular o redo reduz o tempo de startup de O(WAL inteiro) para
-	// O(WAL desde o último checkpoint).
+	// Entries prior to the last checkpoint are already on disk.
+	// Skipping the redo reduces startup time from O(entire WAL) to
+	// O(WAL since the last checkpoint).
 	if ra.CheckpointLSN > 0 && entry.Header.LSN < ra.CheckpointLSN {
 		_, payload, _, err := unwrapTxPayload(entry.Header, entry.Payload)
 		return payload, false, err

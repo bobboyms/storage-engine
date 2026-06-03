@@ -134,7 +134,7 @@ func prepareRowDocument(c codec.Codec, table *Table, doc string, providedKeys ma
 			return nil, nil, err
 		}
 		if !ok {
-			return nil, nil, fmt.Errorf("storage: documento JSON nao contem todos os campos indexados")
+			return nil, nil, fmt.Errorf("storage: JSON document does not contain all indexed fields")
 		}
 		for name, provided := range providedKeys {
 			derived, ok := keys[name]

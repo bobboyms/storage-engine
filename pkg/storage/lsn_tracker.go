@@ -4,12 +4,12 @@ import (
 	"sync/atomic"
 )
 
-// LSNTracker gerencia o Log Sequence Number de forma thread-safe
+// LSNTracker manages the Log Sequence Number in a thread-safe way
 type LSNTracker struct {
 	current uint64
-	// Utilizando sync.Mutex para operações que are not puramente atômicas se necessário,
-	// mas para um contador simples, atomic é suficiente e mais rápido.
-	// Mantemos a struct preparada para lógica mais complexa se precisar.
+	// We could use sync.Mutex for operations that are not purely atomic if needed,
+	// but for a simple counter, atomic is sufficient and faster.
+	// We keep the struct ready for more complex logic if required.
 }
 
 func NewLSNTracker(start uint64) *LSNTracker {
@@ -18,12 +18,12 @@ func NewLSNTracker(start uint64) *LSNTracker {
 	}
 }
 
-// Next incrementa e retorna o próximo LSN
+// Next increments and returns the next LSN
 func (lt *LSNTracker) Next() uint64 {
 	return atomic.AddUint64(&lt.current, 1)
 }
 
-// Current retorna o LSN atual
+// Current returns the current LSN
 func (lt *LSNTracker) Current() uint64 {
 	return atomic.LoadUint64(&lt.current)
 }

@@ -6,21 +6,21 @@ import (
 	"path/filepath"
 )
 
-// durableWriteFile escreve `data` em `path` com garantias fortes de
-// durabilidade. Substitui `os.WriteFile`, que:
-//   - NOT fsync o arquivo (content fica em page cache do SO)
-//   - NOT fsync o diretório (entrada no inode table pode sumir after crash)
+// durableWriteFile writes `data` to `path` with strong durability
+// guarantees. It replaces `os.WriteFile`, which:
+//   - does NOT fsync the file (content stays in the OS page cache)
+//   - does NOT fsync the directory (the inode table entry can vanish after a crash)
 //
-// Contrato de durability after retorno bem-sucedido:
-//   - Conteúdo do arquivo está no disco (fsync do file)
-//   - Entrada do arquivo no diretório está no disco (fsync do parent dir)
-//   - Arquivo antigo, se existia no mesmo path, foi substituído atomicamente
+// Durability contract after a successful return:
+//   - The file content is on disk (file fsync)
+//   - The file's directory entry is on disk (parent dir fsync)
+//   - The old file, if it existed at the same path, was replaced atomically
 //
-// Padrão: write temp → fsync temp → rename → fsync dir.
+// Pattern: write temp → fsync temp → rename → fsync dir.
 func durableWriteFile(path string, data []byte) error {
 	tmpPath := path + ".tmp"
 
-	// 1. Grava no arquivo temporário
+	// 1. Write to the temporary file
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("durableWriteFile: open temp: %w", err)
@@ -31,7 +31,7 @@ func durableWriteFile(path string, data []byte) error {
 		return fmt.Errorf("durableWriteFile: write: %w", err)
 	}
 
-	// 2. fsync do arquivo temp — garante que os bytes estão no disco
+	// 2. fsync the temp file — guarantees the bytes are on disk
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
@@ -42,26 +42,26 @@ func durableWriteFile(path string, data []byte) error {
 		return fmt.Errorf("durableWriteFile: close temp: %w", err)
 	}
 
-	// 3. Rename atômico
+	// 3. Atomic rename
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("durableWriteFile: rename: %w", err)
 	}
 
-	// 4. fsync do diretório — garante que a entry do nome está no disco
-	// Sem isso, after crash o rename pode "sumir" (filesystem not persistiu o dir).
+	// 4. fsync the directory — guarantees the name entry is on disk
+	// Without this, after a crash the rename can "vanish" (filesystem did not persist the dir).
 	return fsyncDir(filepath.Dir(path))
 }
 
-// fsyncDir abre o diretório e faz fsync. Crítico em POSIX pra garantir
-// que operações no nível do dir (create, rename) sobrevivem crash.
-// No Windows, open de diretório not funciona como expected — retornamos
-// nil por convenção (Windows tem comportamento diferente de durabilidade).
+// fsyncDir opens the directory and fsyncs it. Critical on POSIX to guarantee
+// that dir-level operations (create, rename) survive a crash.
+// On Windows, opening a directory does not work as expected — we return
+// nil by convention (Windows has different durability behavior).
 func fsyncDir(dirPath string) error {
 	d, err := os.Open(dirPath)
 	if err != nil {
-		// Em alguns FSs/OSes o diretório cannot ser aberto pra write;
-		// usamos apenas Sync read-only. Se fail, propaga o erro.
+		// On some FSes/OSes the directory cannot be opened for write;
+		// we use a read-only Sync only. If it fails, propagate the error.
 		return fmt.Errorf("fsyncDir: open %s: %w", dirPath, err)
 	}
 	defer func() { _ = d.Close() }()

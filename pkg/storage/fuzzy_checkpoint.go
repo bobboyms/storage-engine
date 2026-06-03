@@ -1,29 +1,28 @@
 package storage
 
-// FuzzyCheckpoint é um checkpoint not-bloqueante para writes.
+// FuzzyCheckpoint is a non-blocking checkpoint for writes.
 //
-// Diferença do CreateCheckpoint (hard checkpoint):
-//   - CreateCheckpoint: comportamento idêntico, mas NOT grava record WAL.
-//     Recovery precisa reprocessar o WAL inteiro.
-//   - FuzzyCheckpoint: grava um record EntryCheckpoint no WAL com o
-//     beginLSN. Recovery usa esse LSN para pular entradas antigas e
-//     iniciar o redo só a partir daí, reduzindo O(WAL completo) para
-//     O(WAL desde o último checkpoint).
+// Difference from CreateCheckpoint (hard checkpoint):
+//   - CreateCheckpoint: identical behavior, but does NOT write a WAL record.
+//     Recovery must reprocess the entire WAL.
+//   - FuzzyCheckpoint: writes an EntryCheckpoint record in the WAL with the
+//     beginLSN. Recovery uses that LSN to skip old entries and start the
+//     redo only from there, reducing O(full WAL) to
+//     O(WAL since the last checkpoint).
 //
-// Semântica de not-bloqueio:
-//   Not adquire lock global de tabelas. As pages são flushadas com
-//   latches por-frame (como sempre), então writes em pages DIFERENTES
-//   das que estão sendo flushadas prosseguem em paralelo. O único
-//   "bloqueio" é por-page e é de curtíssima duração.
+// Non-blocking semantics:
+//   It does not acquire a global table lock. Pages are flushed with
+//   per-frame latches (as always), so writes to pages DIFFERENT from the
+//   ones being flushed proceed in parallel. The only "blocking" is
+//   per-page and very short-lived.
 //
-// Garantia para recovery:
-//   Todas as pages sujas com LSN ≤ beginLSN são flushadas antes do
-//   record de checkpoint ser escrito. Portanto, recovery pode assumir
-//   que operações com LSN < beginLSN estão duravelmente em disco e pode
-//   pular o redo delas.
+// Guarantee for recovery:
+//   All dirty pages with LSN ≤ beginLSN are flushed before the checkpoint
+//   record is written. Therefore, recovery can assume that operations with
+//   LSN < beginLSN are durably on disk and can skip their redo.
 //
-// Uso recomendado: substitui CreateCheckpoint em produção. O engine
-// mantém CreateCheckpoint para compatibilidade e uso em testes.
+// Recommended use: replaces CreateCheckpoint in production. The engine
+// keeps CreateCheckpoint for compatibility and use in tests.
 
 import (
 	"context"
@@ -87,11 +86,11 @@ func (se *StorageEngine) fuzzyCheckpointLocked(ctx context.Context) error {
 		return fmt.Errorf("fuzzy checkpoint: flush pages: %w", err)
 	}
 
-	// 4. Grava o record de checkpoint no WAL com o beginLSN.
-	//    Recovery encontrará este record e iniciará o redo a partir de beginLSN.
+	// 4. Write the checkpoint record in the WAL with the beginLSN.
+	//    Recovery will find this record and start the redo from beginLSN.
 	payload := serializeCheckpointPayloadV2(beginLSN, dpt, att)
 	if err := se.WAL.WriteCheckpointRecordPayload(beginLSN, payload); err != nil {
-		return fmt.Errorf("fuzzy checkpoint: escrever record WAL: %w", err)
+		return fmt.Errorf("fuzzy checkpoint: write WAL record: %w", err)
 	}
 
 	if err := se.WAL.CheckpointLifecycle(beginLSN); err != nil {
@@ -192,8 +191,8 @@ func (se *StorageEngine) oldestDirtyPageLSN() uint64 {
 	return oldest
 }
 
-// flushAllDirtyPages flusha todas as pages sujas de heaps e trees
-// sem adquirir locks globais de tabela.
+// flushAllDirtyPages flushes all dirty pages of heaps and trees
+// without acquiring global table locks.
 func (se *StorageEngine) flushAllDirtyPages() error {
 	syncedTrees := make(map[btree.Tree]bool)
 	syncedHeaps := make(map[heap.Heap]bool)
