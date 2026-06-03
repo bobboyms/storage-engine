@@ -138,6 +138,7 @@ const (
 	compositeTypeBytes    byte = 6
 	compositeTypeUUID     byte = 7
 	compositeTypeDecimal  byte = 8
+	compositeTypeDateOnly byte = 9
 )
 
 func (CompositeKeyCodec) Encode(k types.Comparable) ([]byte, error) {
@@ -244,6 +245,10 @@ func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) 
 		if err != nil {
 			return nil, err
 		}
+	case types.DateOnlyKey:
+		tag = compositeTypeDateOnly
+		payload = make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, uint64(v.Ordinal())) //nolint:gosec // ordinal bit pattern
 	default:
 		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
 	}
@@ -305,6 +310,11 @@ func decodeCompositeComponent(b []byte, pos int) (types.Comparable, int, error) 
 			return nil, pos, fmt.Errorf("btree/v2: invalid decimal component: %w", err)
 		}
 		return d, pos, nil
+	case compositeTypeDateOnly:
+		if len(payload) != 8 {
+			return nil, pos, fmt.Errorf("btree/v2: invalid date-only component length")
+		}
+		return types.DateOnlyFromOrdinal(int64(binary.LittleEndian.Uint64(payload))), pos, nil //nolint:gosec // inverse of encode
 	default:
 		return nil, pos, fmt.Errorf("btree/v2: unknown composite key component tag %d", tag)
 	}
@@ -414,6 +424,34 @@ func (BoolKeyCodec) Compare(a, b uint64) int {
 		return 1
 	}
 	return 0
+}
+
+// DateOnlyKeyCodec stores DateOnlyKey as its order-preserving int64
+// ordinal (year*10000+month*100+day), compared as a signed integer.
+type DateOnlyKeyCodec struct{}
+
+func (DateOnlyKeyCodec) Encode(k types.Comparable) (uint64, error) {
+	v, ok := k.(types.DateOnlyKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: DateOnlyKeyCodec expected types.DateOnlyKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	return uint64(v.Ordinal()), nil //nolint:gosec // ordinal bit pattern round-trip
+}
+
+func (DateOnlyKeyCodec) Decode(u uint64) types.Comparable {
+	return types.DateOnlyFromOrdinal(int64(u)) //nolint:gosec // inverse of Encode
+}
+
+func (DateOnlyKeyCodec) Compare(a, b uint64) int {
+	ai, bi := int64(a), int64(b) //nolint:gosec // signed ordinal comparison
+	switch {
+	case ai < bi:
+		return -1
+	case ai > bi:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // DateKeyCodec stores DateKey as UnixNano int64 bits.

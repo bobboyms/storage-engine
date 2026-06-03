@@ -92,6 +92,8 @@ func codecForDataType(t DataType) (btreev2.KeyCodec, error) {
 		return btreev2.BoolKeyCodec{}, nil
 	case TypeDate:
 		return btreev2.DateKeyCodec{}, nil
+	case TypeDateOnly:
+		return btreev2.DateOnlyKeyCodec{}, nil
 	case TypeVarchar:
 		return nil, fmt.Errorf("codecForDataType: TypeVarchar is not accepted here - use NewBTreeV2Varchar")
 	default:
@@ -102,19 +104,20 @@ func codecForDataType(t DataType) (btreev2.KeyCodec, error) {
 type DataType int
 
 const (
-	TypeInt     DataType = iota // 0: Inteiro (int64)
-	TypeVarchar                 // 1: String variável
-	TypeBoolean                 // 2: Bool
-	TypeFloat                   // 3: Float64
-	TypeDate                    // 4: Timestamp
-	TypeBytes                   // 5: Binary (BLOB)
-	TypeUUID                    // 6: 16-byte UUID
-	TypeDecimal                 // 7: Exact-precision decimal
+	TypeInt      DataType = iota // 0: Inteiro (int64)
+	TypeVarchar                  // 1: String variável
+	TypeBoolean                  // 2: Bool
+	TypeFloat                    // 3: Float64
+	TypeDate                     // 4: Timestamp
+	TypeBytes                    // 5: Binary (BLOB)
+	TypeUUID                     // 6: 16-byte UUID
+	TypeDecimal                  // 7: Exact-precision decimal
+	TypeDateOnly                 // 8: Calendar date (no time, no timezone)
 )
 
 // Função auxiliar útil para debug
 func (d DataType) String() string {
-	return [...]string{"INT", "VARCHAR", "BOOL", "FLOAT", "DATE", "BYTES", "UUID", "DECIMAL"}[d]
+	return [...]string{"INT", "VARCHAR", "BOOL", "FLOAT", "DATE", "BYTES", "UUID", "DECIMAL", "DATEONLY"}[d]
 }
 
 type Index struct {

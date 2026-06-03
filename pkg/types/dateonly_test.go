@@ -67,6 +67,35 @@ func TestDateOnlyKey_NullSortsFirst(t *testing.T) {
 	}
 }
 
+func TestDateOnlyKey_OrdinalRoundTripAndOrder(t *testing.T) {
+	mk := func(y int, m time.Month, d int) DateOnlyKey {
+		k, err := NewDateOnly(y, m, d)
+		if err != nil {
+			t.Fatalf("NewDateOnly(%d,%d,%d): %v", y, m, d, err)
+		}
+		return k
+	}
+	cases := []DateOnlyKey{
+		mk(-44, time.March, 15), // proleptic / negative year
+		mk(1, time.January, 1),
+		mk(1969, time.December, 31),
+		mk(2024, time.February, 29),
+		mk(9999, time.December, 31),
+	}
+	for _, d := range cases {
+		back := DateOnlyFromOrdinal(d.Ordinal())
+		if back.String() != d.String() {
+			t.Fatalf("ordinal round-trip: %q -> %q", d.String(), back.String())
+		}
+	}
+	// Ordinal must be monotonic with calendar order, including negatives.
+	for i := 0; i+1 < len(cases); i++ {
+		if cases[i].Ordinal() >= cases[i+1].Ordinal() {
+			t.Fatalf("ordinal not monotonic at %d: %d >= %d", i, cases[i].Ordinal(), cases[i+1].Ordinal())
+		}
+	}
+}
+
 func TestDateOnlyKey_IncompatibleWithTimestamp(t *testing.T) {
 	d, _ := ParseDateOnly("2024-06-01")
 	if _, err := d.Compare(DateKey(time.Now())); !errors.Is(err, ErrIncompatibleComparableTypes) {

@@ -144,6 +144,8 @@ func serializeKeyToProto(key types.Comparable) (*Key, error) {
 			return nil, err
 		}
 		pk.Value = &Key_DecimalValue{DecimalValue: bin}
+	case types.DateOnlyKey:
+		pk.Value = &Key_DateOnlyValue{DateOnlyValue: k.Ordinal()}
 	default:
 		return nil, fmt.Errorf("unsupported key type: %T", k)
 	}
@@ -172,6 +174,8 @@ func deserializeKeyFromProto(pk *Key) (types.Comparable, error) {
 		return types.UUIDKeyFromBytes(v.UuidValue)
 	case *Key_DecimalValue:
 		return types.DecimalFromBinary(v.DecimalValue)
+	case *Key_DateOnlyValue:
+		return types.DateOnlyFromOrdinal(v.DateOnlyValue), nil
 	default:
 		return nil, fmt.Errorf("unsupported key type in protobuf")
 	}

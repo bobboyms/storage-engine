@@ -21,6 +21,7 @@ message Key {
         bytes bytes_value = 6;
         bytes uuid_value = 7; // 16 raw bytes
         bytes decimal_value = 8; // DecimalKey.MarshalBinary
+        int64 date_only_value = 9; // DateOnlyKey ordinal
     }
 }
 

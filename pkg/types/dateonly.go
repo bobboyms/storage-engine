@@ -74,6 +74,36 @@ func (k DateOnlyKey) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", k.year, k.month, k.day)
 }
 
+// Ordinal packs the date into a single order-preserving int64,
+// year*10000 + month*100 + day. Because month and day occupy disjoint
+// positive ranges, the ordinal is monotonic with calendar order for any
+// year (including negative/proleptic ones). It is the on-disk and WAL
+// representation of a DATE.
+func (k DateOnlyKey) Ordinal() int64 {
+	return int64(k.year)*10000 + int64(k.month)*100 + int64(k.day)
+}
+
+// DateOnlyFromOrdinal reverses Ordinal using floored division so that
+// negative years decode correctly.
+func DateOnlyFromOrdinal(o int64) DateOnlyKey {
+	year := floorDiv(o, 10000)
+	rem := o - year*10000 // always in [101, 1231]
+	return DateOnlyKey{
+		year:  int32(year),      //nolint:gosec // year originates from a validated int32 date
+		month: uint8(rem / 100), //nolint:gosec // rem in [101,1231] => rem/100 in [1,12]
+		day:   uint8(rem % 100), //nolint:gosec // rem%100 in [0,99]
+	}
+}
+
+// floorDiv divides rounding toward negative infinity (b must be > 0).
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && a < 0 {
+		q--
+	}
+	return q
+}
+
 func cmpInt32(a, b int32) int {
 	switch {
 	case a < b:

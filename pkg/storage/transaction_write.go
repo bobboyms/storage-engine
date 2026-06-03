@@ -725,6 +725,8 @@ func getTypeFromKey(k types.Comparable) DataType {
 		return TypeUUID
 	case types.DecimalKey:
 		return TypeDecimal
+	case types.DateOnlyKey:
+		return TypeDateOnly
 	default:
 		return TypeVarchar // Fallback
 	}
