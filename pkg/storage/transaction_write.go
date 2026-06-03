@@ -229,6 +229,63 @@ func (tx *WriteTransaction) GetBytes(ctx context.Context, tableName string, inde
 	return record.Raw, true, nil
 }
 
+// GetForUpdate reads a row for a read-then-write decision, taking the
+// row lock and returning the latest committed version (not the
+// transaction's fixed snapshot). Holding the lock until the transaction
+// ends serializes it against any other GetForUpdate or write on the same
+// key, and reading the latest version means that once a blocking holder
+// commits, this transaction observes their change. Together this lets
+// callers prevent write skew on a known set of rows: lock every row the
+// invariant depends on with GetForUpdate before deciding.
+//
+// It is the engine's equivalent of SQL `SELECT ... FOR UPDATE`. ctx is
+// honored while waiting for the row lock.
+func (tx *WriteTransaction) GetForUpdate(ctx context.Context, tableName string, indexName string, key types.Comparable) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	if err := tx.ensureWritableLocked(); err != nil {
+		return nil, false, err
+	}
+
+	resource, err := lockResourceForKey(tableName, indexName, key)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Acquire the row lock first so concurrent FOR-UPDATE reads / writes
+	// on this key block until we finish. Once granted, any previous
+	// holder has committed, so the latest version below reflects it.
+	if err := tx.acquireLockLocked(ctx, resource); err != nil {
+		return nil, false, err
+	}
+
+	// A pending write in this transaction wins, mirroring GetBytes.
+	if idx, ok := tx.pending[resource]; ok {
+		op := tx.writeSet[idx]
+		if op.opType == wal.EntryDelete {
+			return nil, false, nil
+		}
+		return encodeDocumentOrRaw(tx.engine.codec, op.document), true, nil
+	}
+
+	record, err := tx.currentCommittedRecordRawLocked(tableName, indexName, key)
+	if err != nil {
+		return nil, false, err
+	}
+	tx.readSet[resource] = readObservation{
+		found:     record.Found,
+		createLSN: record.CreateLSN,
+	}
+	if !record.Found {
+		return nil, false, nil
+	}
+	return record.Raw, true, nil
+}
+
 // Commit persists all operations atomically.
 //
 // Cancellation: ctx is honored up to and including the moment the WAL
@@ -568,6 +625,26 @@ func (tx *WriteTransaction) readCommittedRecordRawLocked(tableName string, index
 	}
 	tx.readView.refreshSnapshot()
 	return se.visibleRecordForKeyRaw(context.Background(), tx.readView, tableName, indexName, key)
+}
+
+// currentCommittedRecordRawLocked reads the latest committed version of
+// the row (at the engine's current LSN) rather than the transaction's
+// fixed snapshot. Used by GetForUpdate so a locking read observes the
+// freshest committed state.
+func (tx *WriteTransaction) currentCommittedRecordRawLocked(tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return visibleRecordRaw{}, err
+	}
+
+	view := &Transaction{
+		SnapshotLSN: se.lsnTracker.Current(),
+		Level:       RepeatableRead,
+		engine:      se,
+	}
+	return se.visibleRecordForKeyRaw(context.Background(), view, tableName, indexName, key)
 }
 
 func (tx *WriteTransaction) currentCommittedObservationLocked(tableName string, indexName string, key types.Comparable) (readObservation, error) {
