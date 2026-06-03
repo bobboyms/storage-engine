@@ -27,11 +27,6 @@ type compensationEntry struct {
 	UndoNextLSN       uint64
 }
 
-func (se *StorageEngine) undoLoserTransactions(walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis) error {
-	_, err := se.undoLoserTransactionsWithLimit(walPath, cipher, analysis, 0)
-	return err
-}
-
 func (se *StorageEngine) undoLoserTransactionsWithLimit(walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis, maxSteps int) (int, error) {
 	tasks, err := se.collectLoserUndoTasks(walPath, cipher, analysis)
 	if err != nil {

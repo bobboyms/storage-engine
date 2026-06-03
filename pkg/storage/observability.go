@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/codec"
 )
@@ -29,8 +30,20 @@ type RecoveryEvent struct {
 	PhysicalSkipped int
 	LogicalApplied  int
 	LogicalSkipped  int
-	CheckpointLSN   uint64
-	MaxLSN          uint64
+	// CLRsApplied counts the compensation log records written and
+	// applied while undoing loser transactions.
+	CLRsApplied int
+	// LoserTxsUndone counts the in-flight transactions rolled back
+	// during the undo phase.
+	LoserTxsUndone int
+	// PartialNTAsRolledBack counts the nested top actions whose Commit
+	// never reached disk and whose before-images were restored.
+	PartialNTAsRolledBack int
+	CheckpointLSN         uint64
+	MaxLSN                uint64
+	// Duration is the wall-clock time spent inside the recovery routine
+	// (analysis + redo + undo). Zero when no WAL was present.
+	Duration time.Duration
 }
 
 type VacuumEvent struct {
@@ -153,8 +166,12 @@ func (se *StorageEngine) fireRecoveryComplete(ev RecoveryEvent) {
 		"physical_skipped", ev.PhysicalSkipped,
 		"logical_applied", ev.LogicalApplied,
 		"logical_skipped", ev.LogicalSkipped,
+		"clrs_applied", ev.CLRsApplied,
+		"loser_txs_undone", ev.LoserTxsUndone,
+		"partial_ntas_rolled_back", ev.PartialNTAsRolledBack,
 		"checkpoint_lsn", ev.CheckpointLSN,
 		"max_lsn", ev.MaxLSN,
+		"duration", ev.Duration,
 	)
 	if se.listener.OnRecoveryComplete != nil {
 		se.listener.OnRecoveryComplete(ev)

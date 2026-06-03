@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/btree"
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
@@ -886,6 +887,7 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	recoveryStart := time.Now()
 	var maxLSN uint64
 	loadedLSNs := make(map[string]uint64)
 	pageRedoTargets := se.pageRedoTargets()
@@ -926,13 +928,16 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	}
 	// 2a. Undo-lite: loser txs never reached the visible state because the
 	// write path only applies heap/tree after a durable COMMIT.
-	if err := se.undoLoserTransactions(walPath, cipher, analysis); err != nil {
+	loserTxsUndone := len(analysis.LoserTxs)
+	clrsApplied, err := se.undoLoserTransactionsWithLimit(walPath, cipher, analysis, 0)
+	if err != nil {
 		return err
 	}
 	// 2b. Roll back nested top actions that started but never
 	// committed. Their captured before-images get written back to
 	// the on-disk pages so a half-applied split / merge is reverted.
-	if err := se.rollbackPartialNTAs(analysis); err != nil {
+	partialNTAsRolledBack, err := se.rollbackPartialNTAs(analysis)
+	if err != nil {
 		return err
 	}
 
@@ -943,12 +948,16 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	// change and is deliberately deferred.
 	se.clearDegraded()
 	se.fireRecoveryComplete(RecoveryEvent{
-		PhysicalApplied: physicalApplied,
-		PhysicalSkipped: physicalSkipped,
-		LogicalApplied:  count,
-		LogicalSkipped:  skipped,
-		CheckpointLSN:   analysis.CheckpointLSN,
-		MaxLSN:          maxLSN,
+		PhysicalApplied:       physicalApplied,
+		PhysicalSkipped:       physicalSkipped,
+		LogicalApplied:        count,
+		LogicalSkipped:        skipped,
+		CLRsApplied:           clrsApplied,
+		LoserTxsUndone:        loserTxsUndone,
+		PartialNTAsRolledBack: partialNTAsRolledBack,
+		CheckpointLSN:         analysis.CheckpointLSN,
+		MaxLSN:                maxLSN,
+		Duration:              time.Since(recoveryStart),
 	})
 	return nil
 }

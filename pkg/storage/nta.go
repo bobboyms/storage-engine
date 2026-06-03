@@ -77,23 +77,25 @@ type pageWriter interface {
 // buffer pool) because recovery still owns the engine exclusively at
 // this point; any in-memory frame for the affected pages will be
 // re-fetched fresh on the first read after recovery completes.
-func (se *StorageEngine) rollbackPartialNTAs(analysis *recoveryAnalysis) error {
+func (se *StorageEngine) rollbackPartialNTAs(analysis *recoveryAnalysis) (int, error) {
 	if se == nil || analysis == nil || len(analysis.PartialNTAs) == 0 {
-		return nil
+		return 0, nil
 	}
 	writers := se.ntaPageWriters()
+	rolledBack := 0
 	for ntaLSN, nta := range analysis.PartialNTAs {
 		for _, p := range nta.Pages {
 			writer, ok := writers[p.Path]
 			if !ok {
-				return fmt.Errorf("storage: NTA rollback: no writer registered for path %q (nta lsn %d)", p.Path, ntaLSN)
+				return rolledBack, fmt.Errorf("storage: NTA rollback: no writer registered for path %q (nta lsn %d)", p.Path, ntaLSN)
 			}
 			if err := writer.WritePageBytes(p.PageID, p.PreImage); err != nil {
-				return fmt.Errorf("storage: NTA rollback page %s/%d: %w", p.Path, p.PageID, err)
+				return rolledBack, fmt.Errorf("storage: NTA rollback page %s/%d: %w", p.Path, p.PageID, err)
 			}
 		}
+		rolledBack++
 	}
-	return nil
+	return rolledBack, nil
 }
 
 // ntaPageWriters returns a path-keyed view of every page file the
