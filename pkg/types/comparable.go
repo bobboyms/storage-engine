@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -169,6 +170,33 @@ func (k DateKey) Compare(other Comparable) (int, error) {
 
 func (k DateKey) String() string {
 	return time.Time(k).Format("2006-01-02 15:04:05")
+}
+
+// minDateNano and maxDateNano bound the instants whose UnixNano fits in
+// int64 (approximately 1678-09-21 .. 2262-04-11). Outside this range
+// time.Time.UnixNano silently wraps, so callers must validate first.
+var (
+	minDateNano = time.Unix(0, math.MinInt64)
+	maxDateNano = time.Unix(0, math.MaxInt64)
+)
+
+// UnixNanoChecked returns the UnixNano representation of the date,
+// returning an error when the instant is outside the int64-nanosecond
+// range instead of silently wrapping to a bogus value. Encoders that
+// persist DateKey as 8-byte UnixNano use this to avoid corrupting
+// out-of-range timestamps.
+func (k DateKey) UnixNanoChecked() (int64, error) {
+	t := time.Time(k)
+	if t.Before(minDateNano) || t.After(maxDateNano) {
+		return 0, fmt.Errorf("types: DateKey %s is outside the representable range (1678-2262)", t.Format(time.RFC3339))
+	}
+	return t.UnixNano(), nil
+}
+
+// DateKeyFromUnixNano reverses UnixNanoChecked, building a DateKey (UTC)
+// from a UnixNano offset.
+func DateKeyFromUnixNano(nano int64) DateKey {
+	return DateKey(time.Unix(0, nano).UTC())
 }
 
 func (k IntKey) String() string     { return fmt.Sprintf("%d", k) }

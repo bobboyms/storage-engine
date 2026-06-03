@@ -129,7 +129,11 @@ func serializeKeyToProto(key types.Comparable) (*Key, error) {
 	case types.FloatKey:
 		pk.Value = &Key_FloatValue{FloatValue: float64(k)}
 	case types.DateKey:
-		pk.Value = &Key_DateValue{DateValue: time.Time(k).UnixNano()}
+		nano, err := k.UnixNanoChecked()
+		if err != nil {
+			return nil, err
+		}
+		pk.Value = &Key_DateValue{DateValue: nano}
 	default:
 		return nil, fmt.Errorf("unsupported key type: %T", k)
 	}

@@ -144,8 +144,12 @@ func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) 
 		binary.LittleEndian.PutUint64(payload, math.Float64bits(float64(v)))
 	case types.DateKey:
 		tag = compositeTypeDate
+		nano, err := v.UnixNanoChecked()
+		if err != nil {
+			return nil, err
+		}
 		payload = make([]byte, 8)
-		binary.LittleEndian.PutUint64(payload, uint64(time.Time(v).UnixNano())) //nolint:gosec // preserve signed bit pattern
+		binary.LittleEndian.PutUint64(payload, uint64(nano)) //nolint:gosec // preserve signed bit pattern
 	default:
 		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
 	}
@@ -313,7 +317,11 @@ func (DateKeyCodec) Encode(k types.Comparable) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: DateKeyCodec expected types.DateKey, got %T", types.ErrIncompatibleComparableTypes, k)
 	}
-	return uint64(time.Time(v).UnixNano()), nil
+	nano, err := v.UnixNanoChecked()
+	if err != nil {
+		return 0, err
+	}
+	return uint64(nano), nil //nolint:gosec // UnixNano bit pattern round-trip
 }
 
 func (DateKeyCodec) Decode(u uint64) types.Comparable {
