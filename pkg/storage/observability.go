@@ -89,6 +89,14 @@ type Options struct {
 	// methods take their own ctx parameter so this only governs the
 	// startup-time recovery.
 	RecoveryContext context.Context
+
+	// AutoHealAfterApplyFailure, when true, makes Commit attempt an
+	// in-process Heal if its post-commit apply fails, instead of leaving
+	// the engine degraded until an explicit Heal or reopen. When the heal
+	// succeeds Commit returns success; if it fails the engine stays
+	// degraded and Commit returns the apply error. Defaults to false,
+	// preserving the fail-stop contract.
+	AutoHealAfterApplyFailure bool
 }
 
 // Stats is a point-in-time snapshot of cumulative engine counters.

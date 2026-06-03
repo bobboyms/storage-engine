@@ -62,6 +62,10 @@ type StorageEngine struct {
 	listener    EventListener
 	codec       codec.Codec
 	counters    engineCounters
+	// autoHealAfterApplyFailure mirrors Options.AutoHealAfterApplyFailure:
+	// when set, Commit attempts an in-process Heal on post-commit apply
+	// failure instead of staying degraded until reopen.
+	autoHealAfterApplyFailure bool
 	// Note: per-table lock now lives in Table.mu
 }
 
@@ -144,14 +148,15 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 	}
 
 	se := &StorageEngine{
-		TableMetaData: tableMetaData,
-		WAL:           walWriter,
-		lsnTracker:    NewLSNTracker(initialLSN),
-		appliedLSN:    NewAppliedLSNTracker(),
-		TxRegistry:    NewTransactionRegistry(),
-		logger:        logger,
-		listener:      opts.Listener,
-		codec:         docCodec,
+		TableMetaData:             tableMetaData,
+		WAL:                       walWriter,
+		lsnTracker:                NewLSNTracker(initialLSN),
+		appliedLSN:                NewAppliedLSNTracker(),
+		TxRegistry:                NewTransactionRegistry(),
+		logger:                    logger,
+		listener:                  opts.Listener,
+		codec:                     docCodec,
+		autoHealAfterApplyFailure: opts.AutoHealAfterApplyFailure,
 	}
 	if tailTruncations > 0 {
 		se.counters.walTailTruncations.Add(tailTruncations)

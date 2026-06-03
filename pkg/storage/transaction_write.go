@@ -353,6 +353,16 @@ func (tx *WriteTransaction) Commit(ctx context.Context) (err error) {
 		if err := tx.applyCommittedWriteOp(i+1, len(tx.writeSet), op); err != nil {
 			applyErr := fmt.Errorf("post-commit apply failed for tx %d at op %d/%d (%s.%s): %w", tx.txID, i+1, len(tx.writeSet), op.tableName, op.indexName, err)
 			se.markDegraded(applyErr)
+			// Optionally recover in place: the COMMIT is durable, so an
+			// idempotent WAL replay reconstructs the full committed state
+			// without a reopen. We already hold se.opMu exclusively, so
+			// call the lock-free heal variant. On success the commit is
+			// complete; on failure the engine stays degraded.
+			if se.autoHealAfterApplyFailure {
+				if healErr := se.healLocked(ctx); healErr == nil {
+					return nil
+				}
+			}
 			return applyErr
 		}
 	}

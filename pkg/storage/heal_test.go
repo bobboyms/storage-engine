@@ -100,6 +100,67 @@ func TestHeal_RecoversDegradedEngineInPlace(t *testing.T) {
 	}
 }
 
+// TestAutoHeal_CommitRecoversInProcess verifies that, with the auto-heal
+// option enabled, a transient post-commit apply failure is recovered
+// inside Commit itself: Commit returns success, the engine stays
+// available, and the transaction converges to its full committed state.
+func TestAutoHeal_CommitRecoversInProcess(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	se := openHealEngine(t, filepath.Join(dir, "wal.log"), filepath.Join(dir, "heap.data"), Options{
+		AutoHealAfterApplyFailure: true,
+	})
+	defer se.Close()
+
+	injected := errors.New("transient apply fault")
+	var fired bool
+	se.testHooks.onPostCommitApplyStage = func(info postCommitApplyInfo) error {
+		// Fail exactly once on the first live apply; the heal replay uses
+		// the redo path, which does not invoke this hook.
+		if !fired && info.Stage == postCommitStageAfterHeapMutation && info.Step == 1 {
+			fired = true
+			return injected
+		}
+		return nil
+	}
+
+	tx := se.BeginWriteTransaction()
+	if err := tx.Put(ctx, "users", "id", types.IntKey(1), `{"id":1,"name":"Alice"}`); err != nil {
+		t.Fatalf("put k1: %v", err)
+	}
+	if err := tx.Put(ctx, "users", "id", types.IntKey(2), `{"id":2,"name":"Bob"}`); err != nil {
+		t.Fatalf("put k2: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("expected Commit to auto-heal and succeed, got %v", err)
+	}
+
+	if se.Stats().DegradedSince {
+		t.Fatalf("engine should have auto-healed, not stay degraded")
+	}
+	if doc, found, err := getDocString(t, se, "users", "id", types.IntKey(1)); err != nil || !found || doc != `{"id":1,"name":"Alice"}` {
+		t.Fatalf("k1 after auto-heal: found=%v doc=%q err=%v", found, doc, err)
+	}
+	if doc, found, err := getDocString(t, se, "users", "id", types.IntKey(2)); err != nil || !found || doc != `{"id":2,"name":"Bob"}` {
+		t.Fatalf("k2 after auto-heal: found=%v doc=%q err=%v", found, doc, err)
+	}
+}
+
+// TestAutoHeal_DisabledByDefault verifies the fail-stop contract is
+// preserved when the option is not set: a failed apply leaves the engine
+// degraded rather than silently healing.
+func TestAutoHeal_DisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	se := openHealEngine(t, filepath.Join(dir, "wal.log"), filepath.Join(dir, "heap.data"), Options{})
+	defer se.Close()
+
+	degradeViaFailedApply(t, se)
+
+	if !se.Stats().DegradedSince {
+		t.Fatalf("without auto-heal the engine must stay degraded after a failed apply")
+	}
+}
+
 // TestHeal_NoOpWhenHealthy verifies Heal is a no-op on a healthy engine.
 func TestHeal_NoOpWhenHealthy(t *testing.T) {
 	ctx := context.Background()
