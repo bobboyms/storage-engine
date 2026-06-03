@@ -265,7 +265,8 @@ func (se *StorageEngine) undoDocumentEntry(entryType uint8, originalLSN uint64, 
 	table.Lock()
 	defer table.Unlock()
 
-	head, found, err := index.Tree.Get(key)
+	physicalKey := singleIndexPhysicalKey(index, key)
+	head, found, err := index.Tree.Get(physicalKey)
 	if err != nil {
 		return err
 	}
@@ -294,10 +295,10 @@ func (se *StorageEngine) undoDocumentEntry(entryType uint8, originalLSN uint64, 
 			return nil
 		}
 		if targetHdr.PrevRecordID == -1 {
-			if err := removeIndexKeyWithLSN(index, key, clrLSN); err != nil {
+			if err := removeIndexKeyWithLSN(index, physicalKey, clrLSN); err != nil {
 				return err
 			}
-		} else if err := replaceIndexKeyWithLSN(index, key, targetHdr.PrevRecordID, clrLSN); err != nil {
+		} else if err := replaceIndexKeyWithLSN(index, physicalKey, targetHdr.PrevRecordID, clrLSN); err != nil {
 			return err
 		}
 	default:
@@ -349,7 +350,7 @@ func (se *StorageEngine) undoMultiInsertEntry(originalLSN uint64, payload []byte
 			if !ok {
 				continue
 			}
-			if err := removeIndexKeyIfMatchesWithLSN(idx, key, targetRID, clrLSN); err != nil {
+			if err := removeIndexKeyIfMatchesWithLSN(idx, physicalIndexKey(idx, key, primaryKey), targetRID, clrLSN); err != nil {
 				return err
 			}
 			se.appliedLSN.MarkApplied(tableName, indexName, clrLSN)
@@ -383,7 +384,7 @@ func (se *StorageEngine) undoMultiInsertEntry(originalLSN uint64, payload []byte
 		if !ok {
 			continue
 		}
-		if err := removeIndexKeyIfMatchesWithLSN(idx, newKey, targetRID, clrLSN); err != nil {
+		if err := removeIndexKeyIfMatchesWithLSN(idx, physicalIndexKey(idx, newKey, primaryKey), targetRID, clrLSN); err != nil {
 			return err
 		}
 		se.appliedLSN.MarkApplied(tableName, indexName, clrLSN)

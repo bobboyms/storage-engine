@@ -420,7 +420,8 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 			se.appliedLSN.MarkApplied(tableName, indexName, entry.Header.LSN)
 			return nil
 		}
-		if offset, found, _ := index.Tree.Get(key); found {
+		physicalKey := singleIndexPhysicalKey(index, key)
+		if offset, found, _ := index.Tree.Get(physicalKey); found {
 			if err := table.Heap.Delete(offset, entry.Header.LSN); err != nil {
 				if isChainEndErr(err) {
 					loadedLSNs[lookupKey] = entry.Header.LSN
@@ -441,7 +442,8 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 			return nil
 		}
 		prevOffset := int64(-1)
-		if prev, found, _ := index.Tree.Get(key); found {
+		physicalKey := singleIndexPhysicalKey(index, key)
+		if prev, found, _ := index.Tree.Get(physicalKey); found {
 			prevOffset = prev
 		}
 
@@ -450,9 +452,9 @@ func (se *StorageEngine) redoDocumentEntry(entry *wal.WALEntry, payload []byte, 
 			return fmt.Errorf("heap write failed: %w", err)
 		}
 		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-			err = treeV2.ReplaceWithLSN(key, offset, entry.Header.LSN)
+			err = treeV2.ReplaceWithLSN(physicalKey, offset, entry.Header.LSN)
 		} else {
-			err = index.Tree.Replace(key, offset)
+			err = index.Tree.Replace(physicalKey, offset)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to update tree during recovery: %w", err)
@@ -535,7 +537,7 @@ func (se *StorageEngine) redoMultiInsertEntry(entry *wal.WALEntry, payload []byt
 }
 
 func shouldSkipDeleteRedo(table *Table, index *Index, key types.Comparable, lsn uint64) bool {
-	offset, found, err := index.Tree.Get(key)
+	offset, found, err := index.Tree.Get(singleIndexPhysicalKey(index, key))
 	if err != nil || !found {
 		return err == nil
 	}
@@ -547,7 +549,7 @@ func shouldSkipDeleteRedo(table *Table, index *Index, key types.Comparable, lsn 
 }
 
 func shouldSkipInsertRedo(table *Table, index *Index, key types.Comparable, docBytes []byte, lsn uint64) (bool, error) {
-	offset, found, err := index.Tree.Get(key)
+	offset, found, err := index.Tree.Get(singleIndexPhysicalKey(index, key))
 	if err != nil || !found {
 		return false, err
 	}

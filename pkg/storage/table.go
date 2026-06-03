@@ -109,7 +109,10 @@ type Index struct {
 	Name    string
 	Primary bool
 	Type    DataType
-	// Tree é a implementação page-based do index.
+	// Secondary indexes store physical composite keys:
+	// (logical_secondary_key, primary_key) -> record pointer. This keeps each
+	// B+ tree entry unique while allowing duplicate logical secondary keys.
+	// Tree is the page-based index implementation.
 	Tree btree.Tree
 }
 
@@ -225,9 +228,25 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 		}
 	}
 
+	primaryCount := 0
+	for _, value := range indices {
+		if value.Primary {
+			primaryCount++
+		}
+	}
+	if primaryCount == 0 {
+		return &errors.PrimarykeyNotDefinedError{
+			TableName: tableName,
+		}
+	}
+	if primaryCount > 1 {
+		return &errors.TwoPrimarykeysError{
+			Total: primaryCount,
+		}
+	}
+
 	tempIndices := make(map[string]*Index, len(indices))
 
-	primaryCount := 0
 	for _, value := range indices {
 		// Se o caller já forneceu uma Tree, usamos ela. Caso contrário,
 		// criamos automaticamente um index BTreeV2 sidecar para a tabela.
@@ -237,16 +256,16 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 		} else if _, ok := hm.(*v2.HeapV2); ok {
 			treePath := defaultV2IndexPath(hm.Path(), tableName, value.Name)
 			var err error
-			tree, err = NewBTreeForIndex(BTreeFormatV2, value.Primary, value.Type, treePath, tb.defaultIndexCipher)
+			if value.Primary {
+				tree, err = NewBTreeForIndex(BTreeFormatV2, true, value.Type, treePath, tb.defaultIndexCipher)
+			} else {
+				tree, err = btreev2.NewBTreeV2Varchar(treePath, 16, tb.defaultIndexCipher, btreev2.CompositeKeyCodec{})
+			}
 			if err != nil {
 				return err
 			}
 		} else {
 			return fmt.Errorf("storage: legacy heap is no longer supported; use NewHeapForTable(HeapFormatV2, ...)")
-		}
-
-		if value.Primary {
-			primaryCount++
 		}
 
 		idxPtr := &Index{
@@ -258,18 +277,6 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 
 		tempIndices[value.Name] = idxPtr
 
-	}
-
-	if primaryCount == 0 {
-		return &errors.PrimarykeyNotDefinedError{
-			TableName: tableName,
-		}
-	}
-
-	if primaryCount > 1 {
-		return &errors.TwoPrimarykeysError{
-			Total: primaryCount,
-		}
 	}
 
 	tb.tables[tableName] = &Table{

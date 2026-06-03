@@ -48,6 +48,7 @@ type storageIterator struct {
 	ctx    context.Context
 	tx     *Transaction
 	table  *Table
+	index  *Index
 	cursor *btreev2.Cursor
 
 	curKey   types.Comparable
@@ -101,7 +102,12 @@ func (tx *Transaction) NewIterator(ctx context.Context, tableName, indexName str
 		return nil, fmt.Errorf("storage: iterator: index %s uses unsupported tree type %T", indexName, index.Tree)
 	}
 
-	cur, err := treeV2.NewCursor(opts.Lower, opts.Upper)
+	lower, upper := opts.Lower, opts.Upper
+	if !index.Primary {
+		lower = secondaryLowerBound(opts.Lower)
+		upper = secondaryUpperBound(opts.Upper)
+	}
+	cur, err := treeV2.NewCursor(lower, upper)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +116,7 @@ func (tx *Transaction) NewIterator(ctx context.Context, tableName, indexName str
 		ctx:    ctx,
 		tx:     tx,
 		table:  table,
+		index:  index,
 		cursor: cur,
 	}
 	tx.trackIterator(it)
@@ -151,7 +158,7 @@ func (it *storageIterator) Next() bool {
 			}
 			continue
 		}
-		it.curKey = it.cursor.Key()
+		it.curKey = logicalIndexKey(it.index, it.cursor.Key())
 		it.curValue = rec.Raw
 		it.curLSN = rec.CreateLSN
 		return true

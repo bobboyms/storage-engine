@@ -2,6 +2,7 @@ package v2
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"time"
@@ -41,6 +42,160 @@ func (VarcharKeyCodec) Decode(b []byte) types.Comparable {
 
 func (VarcharKeyCodec) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
+}
+
+// CompositeKeyCodec stores secondary index entries as variable-size
+// CompositeKey values. Its Compare method decodes and delegates to
+// CompositeKey.Compare, so the byte format only needs to be stable and
+// reversible; it does not need to be lexicographically sortable.
+type CompositeKeyCodec struct{}
+
+const (
+	compositeCodecVersion byte = 1
+	compositeTypeInt      byte = 1
+	compositeTypeVarchar  byte = 2
+	compositeTypeBool     byte = 3
+	compositeTypeFloat    byte = 4
+	compositeTypeDate     byte = 5
+)
+
+func (CompositeKeyCodec) Encode(k types.Comparable) ([]byte, error) {
+	v, ok := k.(types.CompositeKey)
+	if !ok {
+		return nil, fmt.Errorf("%w: CompositeKeyCodec expected types.CompositeKey, got %T", types.ErrIncompatibleComparableTypes, k)
+	}
+	if v.Secondary == nil {
+		return nil, fmt.Errorf("%w: CompositeKeyCodec requires secondary key", types.ErrIncompatibleComparableTypes)
+	}
+	out := make([]byte, 0, 32)
+	out = append(out, compositeCodecVersion)
+	var err error
+	out, err = appendCompositeComponent(out, v.Secondary)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, byte(v.PrimaryBound+1)) //nolint:gosec // PrimaryBound is constrained to {-1,0,1}, so PrimaryBound+1 is in {0,1,2}
+	if v.PrimaryBound == types.CompositePrimaryKey {
+		if v.Primary == nil {
+			return nil, fmt.Errorf("%w: CompositeKeyCodec requires primary key", types.ErrIncompatibleComparableTypes)
+		}
+		out, err = appendCompositeComponent(out, v.Primary)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (CompositeKeyCodec) Decode(b []byte) types.Comparable {
+	if len(b) == 0 || b[0] != compositeCodecVersion {
+		return types.CompositeKey{}
+	}
+	secondary, pos, err := decodeCompositeComponent(b, 1)
+	if err != nil || pos >= len(b) {
+		return types.CompositeKey{}
+	}
+	bound := int(b[pos]) - 1
+	pos++
+	if bound != types.CompositePrimaryKey {
+		return types.CompositeKey{Secondary: secondary, PrimaryBound: bound}
+	}
+	primary, _, err := decodeCompositeComponent(b, pos)
+	if err != nil {
+		return types.CompositeKey{}
+	}
+	return types.NewCompositeKey(secondary, primary)
+}
+
+func (c CompositeKeyCodec) Compare(a, b []byte) int {
+	ak, aok := c.Decode(a).(types.CompositeKey)
+	bk, bok := c.Decode(b).(types.CompositeKey)
+	if !aok || !bok || ak.Secondary == nil || bk.Secondary == nil {
+		return bytes.Compare(a, b)
+	}
+	cmp, err := ak.Compare(bk)
+	if err != nil {
+		return bytes.Compare(a, b)
+	}
+	return cmp
+}
+
+func appendCompositeComponent(out []byte, key types.Comparable) ([]byte, error) {
+	var payload []byte
+	var tag byte
+	switch v := key.(type) {
+	case types.IntKey:
+		tag = compositeTypeInt
+		payload = make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, uint64(int64(v))) //nolint:gosec // preserve signed bit pattern
+	case types.VarcharKey:
+		tag = compositeTypeVarchar
+		payload = []byte(string(v))
+	case types.BoolKey:
+		tag = compositeTypeBool
+		if bool(v) {
+			payload = []byte{1}
+		} else {
+			payload = []byte{0}
+		}
+	case types.FloatKey:
+		tag = compositeTypeFloat
+		payload = make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, math.Float64bits(float64(v)))
+	case types.DateKey:
+		tag = compositeTypeDate
+		payload = make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, uint64(time.Time(v).UnixNano())) //nolint:gosec // preserve signed bit pattern
+	default:
+		return nil, fmt.Errorf("%w: unsupported composite key component %T", types.ErrIncompatibleComparableTypes, key)
+	}
+	out = append(out, tag)
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(payload))) //nolint:gosec // key payload is page bounded
+	out = append(out, lenBuf[:]...)
+	out = append(out, payload...)
+	return out, nil
+}
+
+func decodeCompositeComponent(b []byte, pos int) (types.Comparable, int, error) {
+	if pos+5 > len(b) {
+		return nil, pos, fmt.Errorf("btree/v2: truncated composite key component")
+	}
+	tag := b[pos]
+	pos++
+	n := int(binary.LittleEndian.Uint32(b[pos : pos+4]))
+	pos += 4
+	if n < 0 || pos+n > len(b) {
+		return nil, pos, fmt.Errorf("btree/v2: invalid composite key component length")
+	}
+	payload := b[pos : pos+n]
+	pos += n
+	switch tag {
+	case compositeTypeInt:
+		if len(payload) != 8 {
+			return nil, pos, fmt.Errorf("btree/v2: invalid int component length")
+		}
+		return types.IntKey(int64(binary.LittleEndian.Uint64(payload))), pos, nil //nolint:gosec // inverse of encode
+	case compositeTypeVarchar:
+		return types.VarcharKey(string(payload)), pos, nil
+	case compositeTypeBool:
+		if len(payload) != 1 {
+			return nil, pos, fmt.Errorf("btree/v2: invalid bool component length")
+		}
+		return types.BoolKey(payload[0] != 0), pos, nil
+	case compositeTypeFloat:
+		if len(payload) != 8 {
+			return nil, pos, fmt.Errorf("btree/v2: invalid float component length")
+		}
+		return types.FloatKey(math.Float64frombits(binary.LittleEndian.Uint64(payload))), pos, nil
+	case compositeTypeDate:
+		if len(payload) != 8 {
+			return nil, pos, fmt.Errorf("btree/v2: invalid date component length")
+		}
+		return types.DateKey(time.Unix(0, int64(binary.LittleEndian.Uint64(payload)))), pos, nil //nolint:gosec // inverse of encode
+	default:
+		return nil, pos, fmt.Errorf("btree/v2: unknown composite key component tag %d", tag)
+	}
 }
 
 // KeyCodec abstracts key encoding, decoding, and comparison for B+ tree v2.

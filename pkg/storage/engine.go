@@ -445,6 +445,27 @@ func (se *StorageEngine) visibleRecordForKeyRaw(ctx context.Context, tx *Transac
 	if err != nil {
 		return visibleRecordRaw{}, err
 	}
+	if !index.Primary {
+		treeV2, ok := index.Tree.(*btreev2.BTreeV2)
+		if !ok {
+			return visibleRecordRaw{}, fmt.Errorf("storage: secondary lookup: index %s uses unsupported tree type %T", indexName, index.Tree)
+		}
+		cur, err := treeV2.NewCursor(secondaryLowerBound(key), secondaryUpperBound(key))
+		if err != nil {
+			return visibleRecordRaw{}, err
+		}
+		defer func() { _ = cur.Close() }()
+		for cur.Next() {
+			rec, err := se.readVisibleRecordRaw(ctx, tx, table, key, cur.Value())
+			if err != nil {
+				return visibleRecordRaw{}, err
+			}
+			if rec.Found {
+				return rec, nil
+			}
+		}
+		return visibleRecordRaw{}, cur.Err()
+	}
 	currentOffset, found, err := index.Tree.Get(key)
 	if err != nil {
 		return visibleRecordRaw{}, fmt.Errorf("tree get: %w", err)
@@ -535,6 +556,7 @@ func (se *StorageEngine) Put(ctx context.Context, tableName string, indexName st
 		// LSN Management
 		// Geramos o LSN *antes* de escrever no WAL ou Heap para garantir ordem
 		currentLSN := se.lsnTracker.Next()
+		physicalKey := singleIndexPhysicalKey(index, key)
 
 		// 1. Write Ahead Log
 		if se.WAL != nil {
@@ -583,9 +605,9 @@ func (se *StorageEngine) Put(ctx context.Context, tableName string, indexName st
 		}
 
 		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-			err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+			err = treeV2.UpsertWithLSN(physicalKey, currentLSN, upsert)
 		} else {
-			err = index.Tree.Upsert(key, upsert)
+			err = index.Tree.Upsert(physicalKey, upsert)
 		}
 
 		if err != nil {
@@ -692,6 +714,7 @@ func (se *StorageEngine) Del(ctx context.Context, tableName string, indexName st
 	err = se.withAutoCommitLocks(ctx, []string{resource}, func() error {
 		// LSN Management
 		currentLSN := se.lsnTracker.Next()
+		physicalKey := singleIndexPhysicalKey(index, key)
 
 		// 1. Write Ahead Log
 		if se.WAL != nil {
@@ -753,9 +776,9 @@ func (se *StorageEngine) Del(ctx context.Context, tableName string, indexName st
 		}
 
 		if treeV2, ok := index.Tree.(*btreev2.BTreeV2); ok {
-			err = treeV2.UpsertWithLSN(key, currentLSN, upsert)
+			err = treeV2.UpsertWithLSN(physicalKey, currentLSN, upsert)
 		} else {
-			err = index.Tree.Upsert(key, upsert)
+			err = index.Tree.Upsert(physicalKey, upsert)
 		}
 
 		if err != nil {

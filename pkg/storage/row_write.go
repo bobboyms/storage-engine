@@ -214,6 +214,44 @@ func sameComparableKey(a, b types.Comparable) bool {
 	return err == nil && cmp == 0
 }
 
+func physicalIndexKey(index *Index, logicalKey, primaryKey types.Comparable) types.Comparable {
+	if index.Primary {
+		return logicalKey
+	}
+	return types.NewCompositeKey(logicalKey, primaryKey)
+}
+
+func singleIndexPhysicalKey(index *Index, logicalKey types.Comparable) types.Comparable {
+	if index.Primary {
+		return logicalKey
+	}
+	return types.NewCompositeKey(logicalKey, logicalKey)
+}
+
+func logicalIndexKey(index *Index, physicalKey types.Comparable) types.Comparable {
+	if index.Primary {
+		return physicalKey
+	}
+	if composite, ok := physicalKey.(types.CompositeKey); ok {
+		return composite.Secondary
+	}
+	return physicalKey
+}
+
+func secondaryLowerBound(key types.Comparable) types.Comparable {
+	if key == nil {
+		return nil
+	}
+	return types.CompositeLowerBound(key)
+}
+
+func secondaryUpperBound(key types.Comparable) types.Comparable {
+	if key == nil {
+		return nil
+	}
+	return types.CompositeUpperBound(key)
+}
+
 func primaryIndexAndKey(table *Table, keys map[string]types.Comparable) (*Index, types.Comparable, error) {
 	for _, idx := range table.GetIndicesUnsafe() {
 		if !idx.Primary {
@@ -221,11 +259,11 @@ func primaryIndexAndKey(table *Table, keys map[string]types.Comparable) (*Index,
 		}
 		key, ok := keys[idx.Name]
 		if !ok {
-			return nil, nil, fmt.Errorf("storage: key primaria %s ausente", idx.Name)
+			return nil, nil, fmt.Errorf("storage: primary key %s missing", idx.Name)
 		}
 		return idx, key, nil
 	}
-	return nil, nil, fmt.Errorf("storage: tabela %s sem key primaria", table.Name)
+	return nil, nil, fmt.Errorf("storage: table %s has no primary key", table.Name)
 }
 
 func applyIndexPointers(table *Table, keys map[string]types.Comparable, offset int64) error {
@@ -234,24 +272,29 @@ func applyIndexPointers(table *Table, keys map[string]types.Comparable, offset i
 
 func applyIndexPointersWithLSN(table *Table, keys map[string]types.Comparable, offset int64, lsn uint64) error {
 	undos := make([]indexUpdateUndo, 0, len(keys))
+	_, primaryKey, err := primaryIndexAndKey(table, keys)
+	if err != nil {
+		return err
+	}
 	for indexName, key := range keys {
 		idx, ok := table.Indices[indexName]
 		if !ok {
 			rollbackIndexPointers(undos)
 			return &errors.IndexNotFoundError{Name: indexName}
 		}
-		old, exists, err := idx.Tree.Get(key)
+		physicalKey := physicalIndexKey(idx, key, primaryKey)
+		old, exists, err := idx.Tree.Get(physicalKey)
 		if err != nil {
 			rollbackIndexPointers(undos)
 			return fmt.Errorf("index %s get failed: %w", indexName, err)
 		}
-		undo := indexUpdateUndo{index: idx, key: key, old: old, exists: exists}
+		undo := indexUpdateUndo{index: idx, key: physicalKey, old: old, exists: exists}
 		if treeV2, ok := idx.Tree.(*btreev2.BTreeV2); ok {
-			if err := treeV2.ReplaceWithLSN(key, offset, lsn); err != nil {
+			if err := treeV2.ReplaceWithLSN(physicalKey, offset, lsn); err != nil {
 				rollbackIndexPointers(undos)
 				return fmt.Errorf("failed to update index %s: %w", indexName, err)
 			}
-		} else if err := idx.Tree.Replace(key, offset); err != nil {
+		} else if err := idx.Tree.Replace(physicalKey, offset); err != nil {
 			rollbackIndexPointers(undos)
 			return fmt.Errorf("failed to update index %s: %w", indexName, err)
 		}

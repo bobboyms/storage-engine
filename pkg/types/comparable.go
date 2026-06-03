@@ -16,6 +16,59 @@ type Comparable interface {
 	Compare(other Comparable) (int, error)
 }
 
+const (
+	CompositePrimaryMin = -1
+	CompositePrimaryKey = 0
+	CompositePrimaryMax = 1
+)
+
+// CompositeKey is the physical key used by non-unique secondary indexes.
+// Secondary carries the logical indexed value; Primary makes each physical
+// index entry unique, mirroring a B-tree ordered by (secondary_key, row_id).
+type CompositeKey struct {
+	Secondary    Comparable
+	Primary      Comparable
+	PrimaryBound int
+}
+
+func NewCompositeKey(secondary, primary Comparable) CompositeKey {
+	return CompositeKey{Secondary: secondary, Primary: primary, PrimaryBound: CompositePrimaryKey}
+}
+
+func CompositeLowerBound(secondary Comparable) CompositeKey {
+	return CompositeKey{Secondary: secondary, PrimaryBound: CompositePrimaryMin}
+}
+
+func CompositeUpperBound(secondary Comparable) CompositeKey {
+	return CompositeKey{Secondary: secondary, PrimaryBound: CompositePrimaryMax}
+}
+
+func (k CompositeKey) Compare(other Comparable) (int, error) {
+	o, ok := other.(CompositeKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: CompositeKey and %T", ErrIncompatibleComparableTypes, other)
+	}
+	if k.Secondary == nil || o.Secondary == nil {
+		return 0, fmt.Errorf("%w: CompositeKey with nil secondary", ErrIncompatibleComparableTypes)
+	}
+	if cmp, err := k.Secondary.Compare(o.Secondary); err != nil || cmp != 0 {
+		return cmp, err
+	}
+	if k.PrimaryBound != CompositePrimaryKey || o.PrimaryBound != CompositePrimaryKey {
+		if k.PrimaryBound < o.PrimaryBound {
+			return -1, nil
+		}
+		if k.PrimaryBound > o.PrimaryBound {
+			return 1, nil
+		}
+		return 0, nil
+	}
+	if k.Primary == nil || o.Primary == nil {
+		return 0, fmt.Errorf("%w: CompositeKey with nil primary", ErrIncompatibleComparableTypes)
+	}
+	return k.Primary.Compare(o.Primary)
+}
+
 type IntKey int
 
 func (k IntKey) Compare(other Comparable) (int, error) {
@@ -107,3 +160,6 @@ func (k IntKey) String() string     { return fmt.Sprintf("%d", k) }
 func (k VarcharKey) String() string { return string(k) }
 func (k FloatKey) String() string   { return fmt.Sprintf("%f", k) }
 func (k BoolKey) String() string    { return fmt.Sprintf("%t", bool(k)) }
+func (k CompositeKey) String() string {
+	return fmt.Sprintf("(%v,%v,%d)", k.Secondary, k.Primary, k.PrimaryBound)
+}

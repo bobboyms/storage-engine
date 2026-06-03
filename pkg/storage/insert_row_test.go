@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -113,6 +114,150 @@ func TestInsertRow_FullFlow(t *testing.T) {
 	valRec, found, _ := getDocStringExt(t, se2, "users", "email", types.VarcharKey("test@example.com"))
 	if !found || valRec == "" {
 		t.Errorf("Recovered document not found in index")
+	}
+}
+
+func TestInsertRow_AllowsDuplicateSecondaryIndexAndScansAllMatchingRows(t *testing.T) {
+	tmpDir := t.TempDir()
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
+	if err != nil {
+		t.Fatalf("NewHeapForTable: %v", err)
+	}
+
+	tableMgr := storage.NewTableMenager()
+	if err := tableMgr.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm); err != nil {
+		t.Fatalf("NewTable: %v", err)
+	}
+
+	se, err := storage.NewStorageEngine(tableMgr, nil)
+	if err != nil {
+		t.Fatalf("NewStorageEngine: %v", err)
+	}
+	defer se.Close()
+
+	firstDoc := `{"id":1,"email":"shared@example.com","name":"first"}`
+	firstKeys := map[string]types.Comparable{
+		"id":    types.IntKey(1),
+		"email": types.VarcharKey("shared@example.com"),
+	}
+	if err := se.InsertRow(context.Background(), "users", firstDoc, firstKeys); err != nil {
+		t.Fatalf("InsertRow first: %v", err)
+	}
+
+	secondDoc := `{"id":2,"email":"shared@example.com","name":"second"}`
+	secondKeys := map[string]types.Comparable{
+		"id":    types.IntKey(2),
+		"email": types.VarcharKey("shared@example.com"),
+	}
+	if err := se.InsertRow(context.Background(), "users", secondDoc, secondKeys); err != nil {
+		t.Fatalf("InsertRow second with duplicate secondary key: %v", err)
+	}
+
+	it, err := se.NewIterator(context.Background(), "users", "email", storage.IterOptions{
+		Lower: types.VarcharKey("shared@example.com"),
+		Upper: types.VarcharKey("shared@example.com"),
+	})
+	if err != nil {
+		t.Fatalf("NewIterator by email: %v", err)
+	}
+	defer it.Close()
+
+	var got []string
+	for it.Next() {
+		got = append(got, externalLegacyDecode(t, it.Value()))
+		if it.Key() != types.VarcharKey("shared@example.com") {
+			t.Fatalf("secondary iterator key = %v, want shared@example.com", it.Key())
+		}
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected two rows for duplicate secondary key, got %d: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], `"id":1`) || !strings.Contains(got[1], `"id":2`) {
+		t.Fatalf("secondary index scan returned wrong rows/order: %v", got)
+	}
+}
+
+func TestRecover_PreservesDuplicateSecondaryIndexEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	walPath := filepath.Join(tmpDir, "wal.log")
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
+	hm, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
+	if err != nil {
+		t.Fatalf("NewHeapForTable: %v", err)
+	}
+	tableMgr := storage.NewTableMenager()
+	if err := tableMgr.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm); err != nil {
+		t.Fatalf("NewTable: %v", err)
+	}
+	walWriter, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("NewWALWriter: %v", err)
+	}
+	se, err := storage.NewStorageEngine(tableMgr, walWriter)
+	if err != nil {
+		walWriter.Close()
+		t.Fatalf("NewStorageEngine: %v", err)
+	}
+
+	for id, name := range map[int]string{1: "first", 2: "second"} {
+		doc := `{"id":` + types.IntKey(id).String() + `,"email":"shared@example.com","name":"` + name + `"}`
+		if err := se.InsertRow(context.Background(), "users", doc, map[string]types.Comparable{
+			"id":    types.IntKey(id),
+			"email": types.VarcharKey("shared@example.com"),
+		}); err != nil {
+			t.Fatalf("InsertRow %d: %v", id, err)
+		}
+	}
+	if err := se.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	hm2, err := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
+	if err != nil {
+		t.Fatalf("NewHeapForTable reopen: %v", err)
+	}
+	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("NewWALWriter reopen: %v", err)
+	}
+	tableMgr2 := storage.NewTableMenager()
+	if err := tableMgr2.NewTable("users", []storage.Index{
+		{Name: "id", Primary: true, Type: storage.TypeInt},
+		{Name: "email", Primary: false, Type: storage.TypeVarchar},
+	}, 3, hm2); err != nil {
+		t.Fatalf("NewTable reopen: %v", err)
+	}
+	recovered, err := storage.NewStorageEngine(tableMgr2, walWriter2)
+	if err != nil {
+		walWriter2.Close()
+		t.Fatalf("NewStorageEngine reopen: %v", err)
+	}
+	defer recovered.Close()
+
+	if err := recovered.Recover(context.Background(), walPath); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	rows, err := scanRangeDocsExt(t, recovered, "users", "email", types.VarcharKey("shared@example.com"), types.VarcharKey("shared@example.com"))
+	if err != nil {
+		t.Fatalf("scan recovered secondary: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected two recovered secondary rows, got %d: %v", len(rows), rows)
+	}
+	if !strings.Contains(rows[0], `"id":1`) || !strings.Contains(rows[1], `"id":2`) {
+		t.Fatalf("recovered secondary index returned wrong rows/order: %v", rows)
 	}
 }
 

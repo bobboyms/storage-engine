@@ -585,7 +585,8 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 	}
 
 	if op.opType == wal.EntryDelete {
-		err = index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+		physicalKey := singleIndexPhysicalKey(index, op.key)
+		err = index.Tree.Upsert(physicalKey, func(oldOffset int64, exists bool) (int64, error) {
 			if !exists {
 				return 0, nil
 			}
@@ -605,8 +606,9 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 		}
 	} else {
 		bsonData := tx.opDocumentBytes(op)
+		physicalKey := singleIndexPhysicalKey(index, op.key)
 
-		err = index.Tree.Upsert(op.key, func(oldOffset int64, exists bool) (int64, error) {
+		err = index.Tree.Upsert(physicalKey, func(oldOffset int64, exists bool) (int64, error) {
 			prevOffset := int64(-1)
 			if exists {
 				prevOffset = oldOffset
