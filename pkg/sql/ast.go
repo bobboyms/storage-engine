@@ -19,6 +19,9 @@ type SelectStmt struct {
 	OrderBy *OrderBy // nil when no ORDER BY clause
 	Limit   *int64   // nil when no LIMIT clause
 	Offset  *int64   // nil when no OFFSET clause
+	// ForUpdate is set by a trailing FOR UPDATE clause; it requests row
+	// locks on the matched rows and is only meaningful inside a transaction.
+	ForUpdate bool
 }
 
 func (*SelectStmt) stmtNode() {}

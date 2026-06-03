@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -113,7 +114,7 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 
 	var affected int64
 	for _, raw := range matches {
-		doc, err := e.rawToMap(raw)
+		doc, err := rawToMap(e.codec, raw)
 		if err != nil {
 			return 0, err
 		}
@@ -228,7 +229,7 @@ func (e *Executor) matchingPrimaryKeys(ctx context.Context, schema *TableSchema,
 	var keys []types.Comparable
 	for it.Next() {
 		raw := it.Value()
-		row, err := e.decodeRow(schema, raw)
+		row, err := decodeRow(e.codec, schema, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -253,15 +254,15 @@ func (e *Executor) rowMatches(schema *TableSchema, raw []byte, where Expr) (bool
 	if where == nil {
 		return true, nil
 	}
-	row, err := e.decodeRow(schema, raw)
+	row, err := decodeRow(e.codec, schema, raw)
 	if err != nil {
 		return false, err
 	}
 	return Evaluate(where, row)
 }
 
-func (e *Executor) rawToMap(raw []byte) (map[string]any, error) {
-	text, err := e.codec.DecodeToText(raw)
+func rawToMap(c codec.Codec, raw []byte) (map[string]any, error) {
+	text, err := c.DecodeToText(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode row: %v", ErrExec, err)
 	}

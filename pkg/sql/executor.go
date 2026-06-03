@@ -98,7 +98,7 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, plan *Quer
 
 	var rows []Row
 	for it.Next() {
-		row, err := e.decodeRow(schema, it.Value())
+		row, err := decodeRow(e.codec, schema, it.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -122,8 +122,8 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, plan *Quer
 // decodeRow decodes raw heap bytes into a Row keyed by every schema column,
 // normalizing each value to the column's declared type. Absent fields become
 // NULL.
-func (e *Executor) decodeRow(schema *TableSchema, raw []byte) (Row, error) {
-	doc, err := e.codec.Open(raw)
+func decodeRow(c codec.Codec, schema *TableSchema, raw []byte) (Row, error) {
+	doc, err := c.Open(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode row: %v", ErrExec, err)
 	}

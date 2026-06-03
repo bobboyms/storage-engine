@@ -285,6 +285,14 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		sel.Offset = &n
 	}
 
+	if p.isKeyword("FOR") {
+		p.next()
+		if err := p.expectKeyword("UPDATE"); err != nil {
+			return nil, err
+		}
+		sel.ForUpdate = true
+	}
+
 	return sel, nil
 }
 
