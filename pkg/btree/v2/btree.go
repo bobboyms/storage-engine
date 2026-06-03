@@ -261,6 +261,12 @@ func (tr *BTreeV2) DirtyPages() []pagestore.DirtyPageInfo {
 	return tr.bp.DirtyPages()
 }
 
+// BufferPoolStats exposes the cache hit/miss/eviction counters of this
+// tree's buffer pool.
+func (tr *BTreeV2) BufferPoolStats() pagestore.BufferPoolStats {
+	return tr.bp.Stats()
+}
+
 func (tr *BTreeV2) ApplyPageRedo(pageID pagestore.PageID, page *pagestore.Page, lsn uint64) (bool, error) {
 	current, err := tr.pf.ReadPage(pageID)
 	if err == nil {

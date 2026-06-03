@@ -92,6 +92,12 @@ func (h *HeapV2) DirtyPages() []pagestore.DirtyPageInfo {
 	return h.bp.DirtyPages()
 }
 
+// BufferPoolStats exposes the cache hit/miss/eviction counters of this
+// heap's buffer pool.
+func (h *HeapV2) BufferPoolStats() pagestore.BufferPoolStats {
+	return h.bp.Stats()
+}
+
 func (h *HeapV2) ApplyPageRedo(pageID pagestore.PageID, page *pagestore.Page, lsn uint64) (bool, error) {
 	current, err := h.pf.ReadPage(pageID)
 	if err == nil {

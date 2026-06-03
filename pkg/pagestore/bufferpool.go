@@ -44,6 +44,44 @@ type BufferPool struct {
 	lru    *list.List // front = mais recente, back = menos recente
 
 	beforeFlush func(pageID PageID, page *Page) error
+
+	// Cache effectiveness counters. Updated with atomics so Stats can be
+	// read without taking pool.mu.
+	hits      atomic.Uint64
+	misses    atomic.Uint64
+	evictions atomic.Uint64
+}
+
+// BufferPoolStats is a point-in-time snapshot of cache counters.
+type BufferPoolStats struct {
+	// Hits counts Fetch/FetchForWrite calls served from a resident page.
+	Hits uint64
+	// Misses counts Fetch/FetchForWrite calls that had to load the page
+	// from disk.
+	Misses uint64
+	// Evictions counts pages removed from the pool to make room.
+	Evictions uint64
+}
+
+// HitRatio returns Hits / (Hits + Misses), or 0 when there were no
+// lookups. It is the primary signal of cache effectiveness.
+func (s BufferPoolStats) HitRatio() float64 {
+	total := s.Hits + s.Misses
+	if total == 0 {
+		return 0
+	}
+	return float64(s.Hits) / float64(total)
+}
+
+// Stats returns a snapshot of the cache counters. It does not take the
+// pool lock, so the three values are individually consistent but may
+// reflect slightly different instants under concurrency.
+func (bp *BufferPool) Stats() BufferPoolStats {
+	return BufferPoolStats{
+		Hits:      bp.hits.Load(),
+		Misses:    bp.misses.Load(),
+		Evictions: bp.evictions.Load(),
+	}
 }
 
 type DirtyPageInfo struct {
@@ -160,6 +198,7 @@ func (bp *BufferPool) fetch(pageID PageID, write bool) (*PageHandle, error) {
 	bp.mu.Lock()
 
 	if f, ok := bp.frames[pageID]; ok {
+		bp.hits.Add(1)
 		bp.lru.MoveToFront(f.lruElem)
 		f.pinCount.Add(1)
 		bp.mu.Unlock()
@@ -167,6 +206,8 @@ func (bp *BufferPool) fetch(pageID PageID, write bool) (*PageHandle, error) {
 		bp.acquireLatch(f, write)
 		return &PageHandle{bp: bp, frame: f, write: write}, nil
 	}
+
+	bp.misses.Add(1)
 
 	// Miss: garante espaço antes de carregar.
 	for len(bp.frames) >= bp.capacity {
@@ -234,6 +275,7 @@ func (bp *BufferPool) tryEvictLocked() bool {
 
 		delete(bp.frames, f.pageID)
 		bp.lru.Remove(e)
+		bp.evictions.Add(1)
 		return true
 	}
 	return false

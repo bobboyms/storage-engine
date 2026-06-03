@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/codec"
+	"github.com/bobboyms/storage-engine/pkg/pagestore"
 )
 
 // EventListener receives notifications about significant engine activity.
@@ -120,6 +121,14 @@ type Stats struct {
 	// Postgres assigns XIDs.
 	NextTxID      uint64
 	DegradedSince bool
+	// CacheHits / CacheMisses / CacheEvictions aggregate the buffer-pool
+	// counters across every table's heap and index page files.
+	// CacheHitRatio is CacheHits / (CacheHits + CacheMisses), the primary
+	// signal of cache effectiveness (0 when there were no lookups).
+	CacheHits      uint64
+	CacheMisses    uint64
+	CacheEvictions uint64
+	CacheHitRatio  float64
 }
 
 type engineCounters struct {
@@ -144,6 +153,9 @@ func (se *StorageEngine) Stats() Stats {
 	se.runtimeMu.RLock()
 	degraded := se.degradedErr != nil
 	se.runtimeMu.RUnlock()
+
+	cache := se.aggregateCacheStats()
+
 	return Stats{
 		CurrentLSN:         se.lsnTracker.Current(),
 		ActiveTransactions: se.TxRegistry.Active(),
@@ -156,7 +168,48 @@ func (se *StorageEngine) Stats() Stats {
 		WALTailTruncations: se.counters.walTailTruncations.Load(),
 		NextTxID:           se.txIDCounter.Load() + 1,
 		DegradedSince:      degraded,
+		CacheHits:          cache.Hits,
+		CacheMisses:        cache.Misses,
+		CacheEvictions:     cache.Evictions,
+		CacheHitRatio:      cache.HitRatio(),
 	}
+}
+
+// cacheStatsProvider is implemented by storage components backed by a
+// buffer pool (HeapV2, BTreeV2).
+type cacheStatsProvider interface {
+	BufferPoolStats() pagestore.BufferPoolStats
+}
+
+// aggregateCacheStats sums the buffer-pool counters across every table's
+// heap and indexes. Each page file has its own pool, so the engine-wide
+// view is their sum.
+func (se *StorageEngine) aggregateCacheStats() pagestore.BufferPoolStats {
+	var total pagestore.BufferPoolStats
+	if se.TableMetaData == nil {
+		return total
+	}
+	add := func(p cacheStatsProvider) {
+		s := p.BufferPoolStats()
+		total.Hits += s.Hits
+		total.Misses += s.Misses
+		total.Evictions += s.Evictions
+	}
+	for _, tableName := range se.TableMetaData.ListTables() {
+		table, err := se.TableMetaData.GetTableByName(tableName)
+		if err != nil {
+			continue
+		}
+		if p, ok := table.Heap.(cacheStatsProvider); ok {
+			add(p)
+		}
+		for _, idx := range table.GetIndices() {
+			if p, ok := idx.Tree.(cacheStatsProvider); ok {
+				add(p)
+			}
+		}
+	}
+	return total
 }
 
 // Logger returns the engine's logger. Always non-nil.
