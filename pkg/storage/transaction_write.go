@@ -72,8 +72,12 @@ type writeOp struct {
 	tableName string
 	indexName string
 	key       types.Comparable
-	document  string
-	lsn       uint64
+	// keys is set only for multi-index row ops (opType == wal.EntryMultiInsert):
+	// it maps every index name to the row's logical key for that index. For
+	// single-index ops it is nil and indexName/key are used instead.
+	keys     map[string]types.Comparable
+	document string
+	lsn      uint64
 }
 
 // BeginWriteTransaction starts a new write transaction
@@ -183,6 +187,89 @@ func (tx *WriteTransaction) Del(ctx context.Context, tableName string, indexName
 		key:       key,
 	})
 	tx.pending[resource] = len(tx.writeSet) - 1
+	return nil
+}
+
+// WriteRow buffers a multi-index row write (insert or upsert) that keeps every
+// index of the table in sync, mirroring the engine's auto-commit InsertRow /
+// UpsertRow but staged transactionally. keys must contain the logical key for
+// every index of the table (including the primary). When insertOnly is true the
+// row is rejected if its primary key already exists in the latest committed
+// state. ctx is honored while waiting for row locks; the actual heap and index
+// mutations happen atomically at Commit.
+func (tx *WriteTransaction) WriteRow(ctx context.Context, tableName string, document string, keys map[string]types.Comparable, insertOnly bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	if err := tx.ensureWritableLocked(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("storage: WriteRow requires at least the primary key")
+	}
+
+	table, err := tx.engine.TableMetaData.GetTableByName(tableName)
+	if err != nil {
+		return err
+	}
+	for indexName, key := range keys {
+		index, err := table.GetIndex(indexName)
+		if err != nil {
+			return err
+		}
+		if index.Type != getTypeFromKey(key) {
+			return &storageerrors.InvalidKeyTypeError{Name: indexName, TypeName: index.Type.String()}
+		}
+	}
+	primary, primaryKey, err := primaryIndexAndKey(table, keys)
+	if err != nil {
+		return err
+	}
+
+	// Acquire every row lock in a deterministic order to avoid deadlocks,
+	// then check for read/write conflicts on each indexed key.
+	resources, err := lockResourcesForKeys(tableName, keys)
+	if err != nil {
+		return err
+	}
+	for _, resource := range resources {
+		if err := tx.acquireLockLocked(ctx, resource); err != nil {
+			return err
+		}
+	}
+	for indexName, key := range keys {
+		resource, err := lockResourceForKey(tableName, indexName, key)
+		if err != nil {
+			return err
+		}
+		if err := tx.checkReadWriteConflictLocked(resource, tableName, indexName, key); err != nil {
+			return err
+		}
+	}
+
+	if insertOnly {
+		rec, err := tx.currentCommittedRecordRawLocked(tableName, primary.Name, primaryKey)
+		if err != nil {
+			return err
+		}
+		if rec.Found {
+			return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
+		}
+	}
+
+	opIdx := len(tx.writeSet)
+	tx.writeSet = append(tx.writeSet, writeOp{
+		opType:    wal.EntryMultiInsert,
+		tableName: tableName,
+		keys:      keys,
+		document:  document,
+	})
+	for _, resource := range resources {
+		tx.pending[resource] = opIdx
+	}
 	return nil
 }
 
@@ -365,9 +452,13 @@ func (tx *WriteTransaction) Commit(ctx context.Context) (err error) {
 			var payload []byte
 			var err error
 
-			if op.opType == wal.EntryDelete {
+			switch op.opType {
+			case wal.EntryDelete:
 				payload, err = SerializeDocumentEntry(op.tableName, op.indexName, op.key, nil)
-			} else {
+			case wal.EntryMultiInsert:
+				bsonData := encodeDocumentOrRaw(tx.engine.codec, op.document)
+				payload, err = SerializeMultiIndexEntry(op.tableName, op.keys, bsonData)
+			default:
 				bsonData := encodeDocumentOrRaw(tx.engine.codec, op.document)
 				payload, err = SerializeDocumentEntry(op.tableName, op.indexName, op.key, bsonData)
 			}
@@ -523,6 +614,14 @@ func (tx *WriteTransaction) rebuildPendingLocked() {
 	tx.pending = make(map[string]int, len(tx.writeSet))
 	for i := range tx.writeSet {
 		op := &tx.writeSet[i]
+		if op.opType == wal.EntryMultiInsert {
+			for indexName, key := range op.keys {
+				if resource, err := lockResourceForKey(op.tableName, indexName, key); err == nil {
+					tx.pending[resource] = i
+				}
+			}
+			continue
+		}
 		resource, err := lockResourceForKey(op.tableName, op.indexName, op.key)
 		if err != nil {
 			continue
@@ -733,6 +832,10 @@ func getTypeFromKey(k types.Comparable) DataType {
 }
 
 func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeOp) error {
+	if op.opType == wal.EntryMultiInsert {
+		return tx.applyCommittedRowOp(step, total, op)
+	}
+
 	table, err := tx.engine.TableMetaData.GetTableByName(op.tableName)
 	if err != nil {
 		return err
@@ -803,6 +906,71 @@ func (tx *WriteTransaction) applyCommittedWriteOp(step int, total int, op writeO
 	}
 
 	tx.engine.appliedLSN.MarkApplied(op.tableName, op.indexName, op.lsn)
+	return nil
+}
+
+// applyCommittedRowOp installs a committed multi-index row write: it writes the
+// document to the heap exactly once and points every index at that single
+// offset, mirroring the auto-commit writeRowLocked path so recovery (which
+// redoes the same EntryMultiInsert) reconstructs an identical state. On an
+// upsert the previous primary version is tombstoned.
+func (tx *WriteTransaction) applyCommittedRowOp(step int, total int, op writeOp) error {
+	table, err := tx.engine.TableMetaData.GetTableByName(op.tableName)
+	if err != nil {
+		return err
+	}
+	primary, primaryKey, err := primaryIndexAndKey(table, op.keys)
+	if err != nil {
+		return err
+	}
+
+	info := postCommitApplyInfo{
+		TxID:      tx.txID,
+		Step:      step,
+		Total:     total,
+		OpType:    op.opType,
+		TableName: op.tableName,
+		IndexName: primary.Name,
+		Key:       primaryKey,
+	}
+	if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageBeforeOp)); err != nil {
+		return err
+	}
+
+	oldOffset, exists, err := primary.Tree.Get(primaryKey)
+	if err != nil {
+		return fmt.Errorf("primary index get failed: %w", err)
+	}
+
+	bsonData := tx.opDocumentBytes(op)
+	prevOffset := int64(-1)
+	if exists {
+		prevOffset = oldOffset
+	}
+	offset, err := table.Heap.Write(bsonData, op.lsn, prevOffset)
+	if err != nil {
+		return fmt.Errorf("heap write failed: %w", err)
+	}
+	if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageAfterHeapMutation)); err != nil {
+		return err
+	}
+
+	if err := applyIndexPointersWithLSN(table, op.keys, offset, op.lsn); err != nil {
+		return err
+	}
+
+	if exists {
+		if err := table.Heap.Delete(oldOffset, op.lsn); err != nil && !isChainEndErr(err) {
+			return fmt.Errorf("heap delete previous version failed: %w", err)
+		}
+	}
+	if err := tx.engine.runPostCommitApplyHook(withPostCommitStage(info, postCommitStageAfterIndexInstall)); err != nil {
+		return err
+	}
+
+	for indexName := range op.keys {
+		tx.engine.appliedLSN.MarkApplied(op.tableName, indexName, op.lsn)
+	}
 	return nil
 }
 
