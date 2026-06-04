@@ -245,6 +245,10 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
 	}
 	sel.Table = p.next().Literal
+	sel.Alias = p.parseOptionalAlias()
+	if sel.Alias == "" {
+		sel.Alias = sel.Table
+	}
 
 	if p.isKeyword("WHERE") {
 		p.next()
@@ -313,13 +317,21 @@ var aggregateFuncs = map[string]struct{}{
 	"COUNT": {}, "SUM": {}, "AVG": {}, "MIN": {}, "MAX": {},
 }
 
-// parseColumnRef parses a column reference. Qualified references (alias.col)
-// are added by the join feature; for now only a bare identifier is accepted.
+// parseColumnRef parses a column reference, optionally qualified by a table
+// name or alias: "col" or "alias.col".
 func (p *parser) parseColumnRef() (*ColumnRef, error) {
 	if p.peek().Type != TokenIdent {
 		return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
 	}
-	return &ColumnRef{Name: p.next().Literal}, nil
+	first := p.next().Literal
+	if p.peek().Type != TokenDot {
+		return &ColumnRef{Name: first}, nil
+	}
+	p.next() // consume "."
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected column name after %q., got %q", ErrParse, first, p.peek().Literal)
+	}
+	return &ColumnRef{Qualifier: first, Name: p.next().Literal}, nil
 }
 
 func (p *parser) parseSelectItems() ([]SelectItem, error) {
@@ -434,10 +446,11 @@ func (p *parser) parseGroupBy() ([]string, error) {
 	}
 	var cols []string
 	for {
-		if p.peek().Type != TokenIdent {
-			return nil, fmt.Errorf("%w: expected column in GROUP BY, got %q", ErrParse, p.peek().Literal)
+		col, err := p.parseColumnRef()
+		if err != nil {
+			return nil, err
 		}
-		cols = append(cols, p.next().Literal)
+		cols = append(cols, col.String())
 		if p.peek().Type != TokenComma {
 			break
 		}
@@ -453,10 +466,11 @@ func (p *parser) parseOrderBy() (*OrderBy, error) {
 	if err := p.expectKeyword("BY"); err != nil {
 		return nil, err
 	}
-	if p.peek().Type != TokenIdent {
-		return nil, fmt.Errorf("%w: expected column in ORDER BY, got %q", ErrParse, p.peek().Literal)
+	col, err := p.parseColumnRef()
+	if err != nil {
+		return nil, err
 	}
-	ob := &OrderBy{Column: p.next().Literal}
+	ob := &OrderBy{Column: col.String()}
 	switch {
 	case p.isKeyword("DESC"):
 		p.next()
@@ -710,8 +724,7 @@ func (p *parser) parseOperand() (Expr, error) {
 				return &AggregateExpr{Call: agg}, nil
 			}
 		}
-		p.next()
-		return &ColumnRef{Name: t.Literal}, nil
+		return p.parseColumnRef()
 	case TokenInt:
 		p.next()
 		n, err := strconv.ParseInt(t.Literal, 10, 64)

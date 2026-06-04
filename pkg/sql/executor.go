@@ -56,7 +56,7 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 		return nil, err
 	}
 
-	rows, err := e.scanRows(ctx, schema, plan)
+	rows, err := e.scanRows(ctx, schema, sel.Alias, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 
 // scanRows opens the planned index scan, decodes each visible row, and keeps
 // the rows whose residual predicate evaluates to true.
-func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, plan *QueryPlan) ([]Row, error) {
+func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias string, plan *QueryPlan) ([]Row, error) {
 	// Reverse scans are not supported by the engine, so descending order is
 	// always handled by the in-memory sort (plan.NeedsSort).
 	it, err := e.engine.NewIterator(ctx, plan.TableName, plan.IndexName, storage.IterOptions{
@@ -89,7 +89,7 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, plan *Quer
 
 	var rows []Row
 	for it.Next() {
-		row, err := decodeRow(e.codec, schema, it.Value())
+		row, err := decodeRow(e.codec, schema, alias, it.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -112,8 +112,9 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, plan *Quer
 
 // decodeRow decodes raw heap bytes into a Row keyed by every schema column,
 // normalizing each value to the column's declared type. Absent fields become
-// NULL.
-func decodeRow(c codec.Codec, schema *TableSchema, raw []byte) (Row, error) {
+// NULL. When alias is non-empty, each column is also stored under its
+// qualified name "alias.col" so qualified references resolve.
+func decodeRow(c codec.Codec, schema *TableSchema, alias string, raw []byte) (Row, error) {
 	doc, err := c.Open(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode row: %v", ErrExec, err)
@@ -121,14 +122,17 @@ func decodeRow(c codec.Codec, schema *TableSchema, raw []byte) (Row, error) {
 	row := make(Row, len(schema.Columns))
 	for _, col := range schema.Columns {
 		val, present, err := doc.Key(col.Name)
+		v := types.Comparable(types.NullKey{})
 		if err != nil {
 			return nil, fmt.Errorf("%w: read column %q: %v", ErrExec, col.Name, err)
 		}
-		if !present || val == nil {
-			row[col.Name] = types.NullKey{}
-			continue
+		if present && val != nil {
+			v = NormalizeValue(val, col.Type)
 		}
-		row[col.Name] = NormalizeValue(val, col.Type)
+		row[col.Name] = v
+		if alias != "" {
+			row[alias+"."+col.Name] = v
+		}
 	}
 	return row, nil
 }

@@ -62,7 +62,7 @@ func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
 		return nil, err
 	}
 
-	rows, err := t.scanRows(ctx, schema, sel.Where)
+	rows, err := t.scanRows(ctx, schema, sel.Alias, sel.Where)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func sortDecision(sel *SelectStmt, schema *TableSchema) (bool, *OrderBy) {
 	return true, sel.OrderBy
 }
 
-func (t *Tx) scanRows(ctx context.Context, schema *TableSchema, residual Expr) ([]Row, error) {
+func (t *Tx) scanRows(ctx context.Context, schema *TableSchema, alias string, residual Expr) ([]Row, error) {
 	pk, ok := schema.PrimaryIndex()
 	if !ok {
 		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
@@ -109,7 +109,7 @@ func (t *Tx) scanRows(ctx context.Context, schema *TableSchema, residual Expr) (
 
 	var rows []Row
 	for it.Next() {
-		row, err := decodeRow(t.codec, schema, it.Value())
+		row, err := decodeRow(t.codec, schema, alias, it.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +192,7 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 	if err := validateAssignments(stmt, schema, pk); err != nil {
 		return 0, err
 	}
-	if err := validateExprColumns(stmt.Where, schema); err != nil {
+	if err := validateExprColumns(stmt.Where, schema, ""); err != nil {
 		return 0, err
 	}
 
@@ -234,7 +234,7 @@ func (t *Tx) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: table %q has no primary index", ErrExec, stmt.Table)
 	}
-	if err := validateExprColumns(stmt.Where, schema); err != nil {
+	if err := validateExprColumns(stmt.Where, schema, ""); err != nil {
 		return 0, err
 	}
 
@@ -266,7 +266,7 @@ func (t *Tx) matchingRaw(ctx context.Context, schema *TableSchema, where Expr) (
 		raw := append([]byte(nil), it.Value()...)
 		keep := true
 		if where != nil {
-			row, err := decodeRow(t.codec, schema, raw)
+			row, err := decodeRow(t.codec, schema, "", raw)
 			if err != nil {
 				return nil, err
 			}
@@ -294,7 +294,7 @@ func (t *Tx) matchingPrimaryKeys(ctx context.Context, schema *TableSchema, where
 
 	var keys []types.Comparable
 	for it.Next() {
-		row, err := decodeRow(t.codec, schema, it.Value())
+		row, err := decodeRow(t.codec, schema, "", it.Value())
 		if err != nil {
 			return nil, err
 		}

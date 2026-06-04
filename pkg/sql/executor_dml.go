@@ -103,7 +103,7 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 	if err := validateAssignments(stmt, schema, pk); err != nil {
 		return 0, err
 	}
-	if err := validateExprColumns(stmt.Where, schema); err != nil {
+	if err := validateExprColumns(stmt.Where, schema, ""); err != nil {
 		return 0, err
 	}
 
@@ -166,7 +166,7 @@ func (e *Executor) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, err
 	if !ok {
 		return 0, fmt.Errorf("%w: table %q has no primary index", ErrExec, stmt.Table)
 	}
-	if err := validateExprColumns(stmt.Where, schema); err != nil {
+	if err := validateExprColumns(stmt.Where, schema, ""); err != nil {
 		return 0, err
 	}
 
@@ -229,7 +229,7 @@ func (e *Executor) matchingPrimaryKeys(ctx context.Context, schema *TableSchema,
 	var keys []types.Comparable
 	for it.Next() {
 		raw := it.Value()
-		row, err := decodeRow(e.codec, schema, raw)
+		row, err := decodeRow(e.codec, schema, "", raw)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +254,7 @@ func (e *Executor) rowMatches(schema *TableSchema, raw []byte, where Expr) (bool
 	if where == nil {
 		return true, nil
 	}
-	row, err := decodeRow(e.codec, schema, raw)
+	row, err := decodeRow(e.codec, schema, "", raw)
 	if err != nil {
 		return false, err
 	}

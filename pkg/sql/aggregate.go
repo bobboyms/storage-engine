@@ -34,7 +34,7 @@ func expandProjection(items []SelectItem, schema *TableSchema) []projSpec {
 				specs = append(specs, projSpec{name: c.Name, source: c.Name})
 			}
 		case it.Column != nil:
-			specs = append(specs, projSpec{name: it.OutputName(), source: it.Column.Name})
+			specs = append(specs, projSpec{name: it.OutputName(), source: it.Column.String()})
 		}
 	}
 	return specs
@@ -81,8 +81,8 @@ func groupedResultSet(sel *SelectStmt, rows []Row) (*ResultSet, error) {
 		case it.Star:
 			return nil, fmt.Errorf("%w: SELECT * is not allowed with GROUP BY or aggregates", ErrExec)
 		case it.Column != nil:
-			if _, ok := groupSet[it.Column.Name]; !ok {
-				return nil, fmt.Errorf("%w: column %q must appear in GROUP BY or an aggregate", ErrExec, it.Column.Name)
+			if _, ok := groupSet[it.Column.String()]; !ok {
+				return nil, fmt.Errorf("%w: column %q must appear in GROUP BY or an aggregate", ErrExec, it.Column.String())
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func groupedResultSet(sel *SelectStmt, rows []Row) (*ResultSet, error) {
 func itemValue(it SelectItem, gRow Row) types.Comparable {
 	switch {
 	case it.Column != nil:
-		return gRow[it.Column.Name]
+		return gRow[it.Column.String()]
 	case it.Agg != nil:
 		return gRow[it.Agg.canonicalName()]
 	default:
@@ -213,7 +213,7 @@ func computeAggregate(call *AggregateCall, rows []Row) (types.Comparable, error)
 		return types.IntKey(len(rows)), nil
 	}
 
-	vals := collectNonNull(rows, call.Column.Name)
+	vals := collectNonNull(rows, call.Column.String())
 	if call.Distinct {
 		vals = distinctValues(vals)
 	}

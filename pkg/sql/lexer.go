@@ -39,6 +39,8 @@ const (
 	TokenStar
 	// TokenSemicolon is ";".
 	TokenSemicolon
+	// TokenDot is "." used to qualify a column (table.column).
+	TokenDot
 )
 
 // Token is a single lexical unit. Pos is the byte offset where it begins.
@@ -81,6 +83,9 @@ func Lex(input string) ([]Token, error) {
 			i++
 		case c == ';':
 			toks = append(toks, Token{Type: TokenSemicolon, Literal: ";", Pos: i})
+			i++
+		case c == '.':
+			toks = append(toks, Token{Type: TokenDot, Literal: ".", Pos: i})
 			i++
 		case c == '=' || c == '<' || c == '>' || c == '!':
 			tok, next, err := lexOperator(input, i)

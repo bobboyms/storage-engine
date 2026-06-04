@@ -3,6 +3,7 @@ package sql
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
@@ -217,57 +218,76 @@ func isRangeOp(op string) bool {
 // validateColumns ensures every column referenced by the statement exists in
 // the schema.
 func validateColumns(stmt *SelectStmt, schema *TableSchema) error {
+	alias := stmt.Alias
 	for _, item := range stmt.Items {
 		switch {
 		case item.Column != nil:
-			if _, ok := schema.Column(item.Column.Name); !ok {
-				return fmt.Errorf("%w: unknown column %q in projection", ErrPlan, item.Column.Name)
+			if err := validateRef(item.Column, schema, alias); err != nil {
+				return err
 			}
 		case item.Agg != nil && !item.Agg.Star:
-			if _, ok := schema.Column(item.Agg.Column.Name); !ok {
-				return fmt.Errorf("%w: unknown column %q in aggregate", ErrPlan, item.Agg.Column.Name)
+			if err := validateRef(item.Agg.Column, schema, alias); err != nil {
+				return err
 			}
 		}
 	}
 	for _, g := range stmt.GroupBy {
-		if _, ok := schema.Column(g); !ok {
-			return fmt.Errorf("%w: unknown column %q in GROUP BY", ErrPlan, g)
+		if err := validateQualifiedName(g, schema, alias); err != nil {
+			return err
 		}
 	}
 	// In a grouped query ORDER BY may reference an aggregate or alias rather
 	// than a base column, so only validate ORDER BY for non-grouped queries.
 	if stmt.OrderBy != nil && !isGrouped(stmt) {
-		if _, ok := schema.Column(stmt.OrderBy.Column); !ok {
-			return fmt.Errorf("%w: unknown column %q in ORDER BY", ErrPlan, stmt.OrderBy.Column)
+		if err := validateQualifiedName(stmt.OrderBy.Column, schema, alias); err != nil {
+			return err
 		}
 	}
-	if err := validateExprColumns(stmt.Having, schema); err != nil {
+	if err := validateExprColumns(stmt.Having, schema, alias); err != nil {
 		return err
 	}
-	return validateExprColumns(stmt.Where, schema)
+	return validateExprColumns(stmt.Where, schema, alias)
 }
 
-func validateExprColumns(expr Expr, schema *TableSchema) error {
+// validateRef checks a column reference: its qualifier (if any) must match the
+// table alias, and its column must exist in the schema.
+func validateRef(ref *ColumnRef, schema *TableSchema, alias string) error {
+	if ref.Qualifier != "" && ref.Qualifier != alias {
+		return fmt.Errorf("%w: unknown table qualifier %q", ErrPlan, ref.Qualifier)
+	}
+	if _, ok := schema.Column(ref.Name); !ok {
+		return fmt.Errorf("%w: unknown column %q", ErrPlan, ref.Name)
+	}
+	return nil
+}
+
+// validateQualifiedName validates a column reference stored in textual form
+// ("col" or "alias.col"), as used by GROUP BY and ORDER BY.
+func validateQualifiedName(s string, schema *TableSchema, alias string) error {
+	qualifier, name := "", s
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		qualifier, name = s[:i], s[i+1:]
+	}
+	return validateRef(&ColumnRef{Qualifier: qualifier, Name: name}, schema, alias)
+}
+
+func validateExprColumns(expr Expr, schema *TableSchema, alias string) error {
 	switch e := expr.(type) {
 	case nil:
 		return nil
 	case *ColumnRef:
-		if _, ok := schema.Column(e.Name); !ok {
-			return fmt.Errorf("%w: unknown column %q in expression", ErrPlan, e.Name)
-		}
+		return validateRef(e, schema, alias)
 	case *AggregateExpr:
 		if !e.Call.Star {
-			if _, ok := schema.Column(e.Call.Column.Name); !ok {
-				return fmt.Errorf("%w: unknown column %q in aggregate", ErrPlan, e.Call.Column.Name)
-			}
+			return validateRef(e.Call.Column, schema, alias)
 		}
 	case *IsNullExpr:
-		return validateExprColumns(e.Operand, schema)
+		return validateExprColumns(e.Operand, schema, alias)
 	case *BinaryExpr:
-		if err := validateExprColumns(e.Left, schema); err != nil {
+		if err := validateExprColumns(e.Left, schema, alias); err != nil {
 			return err
 		}
-		return validateExprColumns(e.Right, schema)
+		return validateExprColumns(e.Right, schema, alias)
 	}
 	return nil
 }

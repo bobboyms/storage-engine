@@ -15,6 +15,7 @@ type Statement interface {
 type SelectStmt struct {
 	Items   []SelectItem // projection list
 	Table   string
+	Alias   string   // table alias (defaults to Table when omitted)
 	Where   Expr     // nil when no WHERE clause
 	GroupBy []string // grouping columns, empty when no GROUP BY
 	Having  Expr     // nil when no HAVING clause
@@ -52,7 +53,7 @@ func (it SelectItem) OutputName() string {
 	}
 	switch {
 	case it.Column != nil:
-		return it.Column.String()
+		return it.Column.Name
 	case it.Agg != nil:
 		return it.Agg.canonicalName()
 	default:

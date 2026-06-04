@@ -105,7 +105,7 @@ func TestParseSelectErrors(t *testing.T) {
 		"SELECT id",                     // missing FROM
 		"SELECT id FROM",                // missing table
 		"SELECT * FROM users WHERE",     // missing predicate
-		"SELECT * FROM users garbage",   // trailing junk
+		"SELECT * FROM users 123",       // trailing junk (not a valid alias)
 		"SELECT * FROM users LIMIT abc", // non-numeric limit
 		"FROM users",                    // unsupported leading keyword
 	}

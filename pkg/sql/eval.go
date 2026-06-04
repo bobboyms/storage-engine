@@ -137,9 +137,9 @@ func evalComparison(be *BinaryExpr, row Row) (bool, error) {
 func resolveColumn(expr Expr, row Row) (types.Comparable, bool, error) {
 	switch e := expr.(type) {
 	case *ColumnRef:
-		v, ok := row[e.Name]
+		v, ok := row[e.String()]
 		if !ok {
-			return nil, true, fmt.Errorf("%w: unknown column %q", ErrEval, e.Name)
+			return nil, true, fmt.Errorf("%w: unknown column %q", ErrEval, e.String())
 		}
 		return v, true, nil
 	case *AggregateExpr:
