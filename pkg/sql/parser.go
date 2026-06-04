@@ -75,8 +75,80 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseUpdate()
 	case "DELETE":
 		return p.parseDelete()
+	case "CREATE":
+		return p.parseCreateTable()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
+	}
+}
+
+func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
+	if err := p.expectKeyword("CREATE"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TABLE"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt := &CreateTableStmt{Table: p.next().Literal}
+
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( before column definitions, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+
+	for {
+		col, err := p.parseColumnDef()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Columns = append(stmt.Columns, col)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) after column definitions, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return stmt, nil
+}
+
+func (p *parser) parseColumnDef() (ColumnDef, error) {
+	if p.peek().Type != TokenIdent {
+		return ColumnDef{}, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+	}
+	col := ColumnDef{Name: p.next().Literal}
+
+	if p.peek().Type != TokenIdent {
+		return ColumnDef{}, fmt.Errorf("%w: expected a type for column %q, got %q", ErrParse, col.Name, p.peek().Literal)
+	}
+	typeName := p.next().Literal
+	dt, ok := dataTypeForName(typeName)
+	if !ok {
+		return ColumnDef{}, fmt.Errorf("%w: unknown type %q for column %q", ErrParse, typeName, col.Name)
+	}
+	col.Type = dt
+
+	// Optional column constraints: PRIMARY KEY and/or INDEX.
+	for {
+		switch {
+		case p.isKeyword("PRIMARY"):
+			p.next()
+			if err := p.expectKeyword("KEY"); err != nil {
+				return ColumnDef{}, err
+			}
+			col.Primary = true
+		case p.isKeyword("INDEX"):
+			p.next()
+			col.Index = true
+		default:
+			return col, nil
+		}
 	}
 }
 

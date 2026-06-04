@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/bobboyms/storage-engine/pkg/storage"
 )
 
 // Statement is the root AST node produced by Parse.
@@ -123,6 +125,23 @@ type DeleteStmt struct {
 }
 
 func (*DeleteStmt) stmtNode() {}
+
+// ColumnDef is a column definition in CREATE TABLE: its name, engine data type,
+// and whether it is the primary key or a secondary index.
+type ColumnDef struct {
+	Name    string
+	Type    storage.DataType
+	Primary bool
+	Index   bool
+}
+
+// CreateTableStmt represents CREATE TABLE name (column defs...).
+type CreateTableStmt struct {
+	Table   string
+	Columns []ColumnDef
+}
+
+func (*CreateTableStmt) stmtNode() {}
 
 // Expr is a WHERE-clause expression node.
 type Expr interface {
