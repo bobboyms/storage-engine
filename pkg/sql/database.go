@@ -247,6 +247,9 @@ func (e *Executor) execCreateTable(stmt *CreateTableStmt) (int64, error) {
 		return 0, err
 	}
 	if _, exists := e.catalog.Table(schema.Name); exists {
+		if stmt.IfNotExists {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("%w: %q", ErrDuplicateTable, schema.Name)
 	}
 

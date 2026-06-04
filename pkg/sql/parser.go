@@ -91,10 +91,21 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	if err := p.expectKeyword("TABLE"); err != nil {
 		return nil, err
 	}
+	ifNotExists := false
+	if p.isKeyword("IF") {
+		p.next()
+		if err := p.expectKeyword("NOT"); err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("EXISTS"); err != nil {
+			return nil, err
+		}
+		ifNotExists = true
+	}
 	if p.peek().Type != TokenIdent {
 		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
 	}
-	stmt := &CreateTableStmt{Table: p.next().Literal}
+	stmt := &CreateTableStmt{Table: p.next().Literal, IfNotExists: ifNotExists}
 
 	if p.peek().Type != TokenLParen {
 		return nil, fmt.Errorf("%w: expected ( before column definitions, got %q", ErrParse, p.peek().Literal)

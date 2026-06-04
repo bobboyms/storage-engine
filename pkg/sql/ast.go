@@ -135,10 +135,13 @@ type ColumnDef struct {
 	Index   bool
 }
 
-// CreateTableStmt represents CREATE TABLE name (column defs...).
+// CreateTableStmt represents CREATE TABLE [IF NOT EXISTS] name (column defs...).
 type CreateTableStmt struct {
 	Table   string
 	Columns []ColumnDef
+	// IfNotExists makes execution a silent no-op when a table with the same
+	// name already exists, instead of returning ErrDuplicateTable.
+	IfNotExists bool
 }
 
 func (*CreateTableStmt) stmtNode() {}
