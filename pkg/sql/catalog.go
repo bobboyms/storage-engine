@@ -21,6 +21,10 @@ var ErrInvalidSchema = errors.New("sql: invalid table schema")
 // twice in a Catalog.
 var ErrDuplicateTable = errors.New("sql: duplicate table")
 
+// ErrDuplicateColumn is returned by ALTER TABLE ADD COLUMN when the target
+// column name already exists in the table schema.
+var ErrDuplicateColumn = errors.New("sql: duplicate column")
+
 // Column describes a single column of a table together with the engine data
 // type used to encode its values.
 type Column struct {

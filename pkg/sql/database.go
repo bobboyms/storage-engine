@@ -310,7 +310,7 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 // existing row; an index on it is empty until subsequent writes populate it.
 func (e *Executor) alterAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
 	if _, exists := schema.Column(col.Name); exists {
-		return TableSchema{}, fmt.Errorf("%w: column %q already exists in table %q", ErrExec, col.Name, schema.Name)
+		return TableSchema{}, fmt.Errorf("%w: column %q already exists in table %q", ErrDuplicateColumn, col.Name, schema.Name)
 	}
 	if col.Primary {
 		return TableSchema{}, fmt.Errorf("%w: cannot add a primary key column to table %q", ErrExec, schema.Name)

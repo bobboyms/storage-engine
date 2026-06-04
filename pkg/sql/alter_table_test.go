@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,6 +198,27 @@ func TestAlterTableErrors(t *testing.T) {
 				t.Fatalf("expected error for %q", sql)
 			}
 		})
+	}
+}
+
+func TestAlterAddColumnDuplicateIsTyped(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(ctx, "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR)"); err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+
+	_, err = db.Exec(ctx, "ALTER TABLE t ADD COLUMN name VARCHAR")
+	if err == nil {
+		t.Fatal("expected error adding a duplicate column")
+	}
+	if !errors.Is(err, ErrDuplicateColumn) {
+		t.Fatalf("expected ErrDuplicateColumn, got %v", err)
 	}
 }
 
