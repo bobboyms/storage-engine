@@ -231,6 +231,17 @@ func (l *Literal) String() string {
 
 func (*Literal) exprNode() {}
 
+// Placeholder is an unbound positional bind parameter ("?"). Ordinal is its
+// zero-based position in the statement, assigned left to right at parse time.
+// Binding replaces every Placeholder with a Literal before execution, so the
+// executor never sees a Placeholder.
+type Placeholder struct {
+	Ordinal int
+}
+
+func (*Placeholder) String() string { return "?" }
+func (*Placeholder) exprNode()      {}
+
 // IsNullExpr is an "operand IS [NOT] NULL" predicate. Negate is true for the
 // IS NOT NULL form.
 type IsNullExpr struct {

@@ -13,28 +13,36 @@ var ErrParse = errors.New("sql: parse error")
 // Parse lexes and parses a single SQL statement. The trailing semicolon is
 // optional. Errors wrap ErrParse (and may wrap ErrLex for lexical failures).
 func Parse(input string) (Statement, error) {
+	stmt, _, err := parseCounting(input)
+	return stmt, err
+}
+
+// parseCounting parses a statement and also reports how many "?" placeholders
+// it contains, so callers binding arguments can validate the count.
+func parseCounting(input string) (Statement, int, error) {
 	toks, err := Lex(input)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	p := &parser{toks: toks}
 	stmt, err := p.parseStatement()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Allow a single trailing semicolon.
 	if p.peek().Type == TokenSemicolon {
 		p.next()
 	}
 	if p.peek().Type != TokenEOF {
-		return nil, fmt.Errorf("%w: unexpected token %q after statement", ErrParse, p.peek().Literal)
+		return nil, 0, fmt.Errorf("%w: unexpected token %q after statement", ErrParse, p.peek().Literal)
 	}
-	return stmt, nil
+	return stmt, p.params, nil
 }
 
 type parser struct {
-	toks []Token
-	pos  int
+	toks   []Token
+	pos    int
+	params int // number of "?" placeholders seen so far, used to assign ordinals
 }
 
 func (p *parser) peek() Token { return p.toks[p.pos] }
@@ -355,10 +363,12 @@ func (p *parser) parseLiteralOperand() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := operand.(*Literal); !ok {
+	switch operand.(type) {
+	case *Literal, *Placeholder:
+		return operand, nil
+	default:
 		return nil, fmt.Errorf("%w: expected a literal value, got %s", ErrParse, operand.String())
 	}
-	return operand, nil
 }
 
 func (p *parser) parseSelect() (*SelectStmt, error) {
@@ -1012,6 +1022,11 @@ func (p *parser) parseOperand() (Expr, error) {
 	case TokenBool:
 		p.next()
 		return &Literal{Kind: LitBool, Bool: t.Literal == "true"}, nil
+	case TokenPlaceholder:
+		p.next()
+		ord := p.params
+		p.params++
+		return &Placeholder{Ordinal: ord}, nil
 	case TokenKeyword:
 		if t.Literal == "NULL" {
 			p.next()

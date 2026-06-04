@@ -50,9 +50,12 @@ type ResultSet struct {
 	Rows    [][]types.Comparable
 }
 
-// Query parses and executes a SELECT statement, returning the matching rows.
-func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) {
-	stmt, err := Parse(query)
+// Query parses and executes a SELECT (or DESCRIBE) statement, returning the
+// matching rows. Positional "?" placeholders in query are bound, in order, to
+// args; passing a different number of args than placeholders is an error
+// wrapping ErrBind.
+func (e *Executor) Query(ctx context.Context, query string, args ...any) (*ResultSet, error) {
+	stmt, err := parseBound(query, args)
 	if err != nil {
 		return nil, err
 	}

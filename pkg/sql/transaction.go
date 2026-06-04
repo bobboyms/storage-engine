@@ -57,8 +57,8 @@ func (t *Tx) RollbackToSavepoint(name string) error { return t.wtx.RollbackToSav
 
 // Query parses and executes a SELECT against the transaction's snapshot
 // (with read-your-writes). A trailing FOR UPDATE locks the matched rows.
-func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
-	stmt, err := Parse(query)
+func (t *Tx) Query(ctx context.Context, query string, args ...any) (*ResultSet, error) {
+	stmt, err := parseBound(query, args)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +161,8 @@ func (t *Tx) lockRows(ctx context.Context, schema *TableSchema, rows []Row) erro
 
 // Exec parses and executes an INSERT, UPDATE, or DELETE within the
 // transaction, returning the number of affected rows.
-func (t *Tx) Exec(ctx context.Context, query string) (int64, error) {
-	stmt, err := Parse(query)
+func (t *Tx) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+	stmt, err := parseBound(query, args)
 	if err != nil {
 		return 0, err
 	}

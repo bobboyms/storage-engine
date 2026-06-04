@@ -11,9 +11,11 @@ import (
 )
 
 // Exec parses and executes a data-modifying statement (INSERT, UPDATE, or
-// DELETE) and returns the number of affected rows.
-func (e *Executor) Exec(ctx context.Context, query string) (int64, error) {
-	stmt, err := Parse(query)
+// DELETE) and returns the number of affected rows. Positional "?" placeholders
+// in query are bound, in order, to args; passing a different number of args
+// than placeholders is an error wrapping ErrBind.
+func (e *Executor) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+	stmt, err := parseBound(query, args)
 	if err != nil {
 		return 0, err
 	}
