@@ -34,3 +34,30 @@ func dataTypeForName(name string) (storage.DataType, bool) {
 	dt, ok := sqlTypeNames[strings.ToUpper(name)]
 	return dt, ok
 }
+
+// typeNameForData returns a canonical SQL type name for an engine data type,
+// used when persisting and printing schemas.
+func typeNameForData(dt storage.DataType) string {
+	switch dt {
+	case storage.TypeInt:
+		return "INT"
+	case storage.TypeVarchar:
+		return "VARCHAR"
+	case storage.TypeBoolean:
+		return "BOOL"
+	case storage.TypeFloat:
+		return "FLOAT"
+	case storage.TypeDate:
+		return "DATE"
+	case storage.TypeDateOnly:
+		return "DATEONLY"
+	case storage.TypeBytes:
+		return "BYTES"
+	case storage.TypeUUID:
+		return "UUID"
+	case storage.TypeDecimal:
+		return "DECIMAL"
+	default:
+		return "VARCHAR"
+	}
+}

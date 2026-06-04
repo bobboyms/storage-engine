@@ -20,6 +20,7 @@ type Executor struct {
 	engine  *storage.StorageEngine
 	catalog *Catalog
 	codec   codec.Codec
+	ddl     *ddlManager // non-nil only when opened via OpenDatabase
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses
