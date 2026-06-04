@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
+	"github.com/bobboyms/storage-engine/pkg/crypto"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -23,6 +24,10 @@ type ddlManager struct {
 	dir     string
 	tm      *storage.TableMetaData
 	schemas []TableSchema
+	// keystore is non-nil when the database was opened with TDE. It mints a
+	// per-table heap data-encryption key when tables are created at runtime so
+	// CREATE TABLE-created heaps are encrypted like the ones built at open time.
+	keystore *crypto.KeyStore
 }
 
 // defaultMaintenanceInterval is how often a database started with default
@@ -31,7 +36,8 @@ type ddlManager struct {
 const defaultMaintenanceInterval = 5 * time.Minute
 
 // OpenOptions tunes OpenDatabaseWithOptions. The zero value enables background
-// maintenance at the default interval.
+// maintenance at the default interval and leaves Transparent Data Encryption
+// off.
 type OpenOptions struct {
 	// MaintenanceInterval sets the background maintenance period; values <= 0
 	// use the default interval.
@@ -39,6 +45,48 @@ type OpenOptions struct {
 	// DisableMaintenance turns off automatic background maintenance entirely;
 	// the caller can still invoke RunMaintenance on demand.
 	DisableMaintenance bool
+	// Encryption, when non-nil, enables Transparent Data Encryption (TDE): the
+	// heap files, automatic B+ tree indexes, and the write-ahead log are
+	// encrypted at rest. The same configuration must be supplied to reopen the
+	// database.
+	Encryption *EncryptionOptions
+}
+
+// defaultKeyStoreFile is the keystore filename created inside the database
+// directory when EncryptionOptions.KeyStorePath is empty.
+const defaultKeyStoreFile = "keys.json"
+
+// EncryptionOptions configures Transparent Data Encryption for a database
+// opened with OpenDatabaseWithOptions.
+type EncryptionOptions struct {
+	// MasterKey is the 32-byte key-encryption key (KEK). It must come from
+	// outside the process (env var, KMS, HSM, secret manager) and is never
+	// written to disk. Reopening the database requires the same key.
+	MasterKey []byte
+	// KeyStorePath is where the wrapped data-encryption keys (DEKs) are
+	// persisted. When empty it defaults to "keys.json" inside the database
+	// directory.
+	KeyStorePath string
+}
+
+// newKeyStore opens (or creates) the keystore backing a database's TDE,
+// validating the master key. Returns nil when encryption is disabled.
+func newKeyStore(dir string, enc *EncryptionOptions) (*crypto.KeyStore, error) {
+	if enc == nil {
+		return nil, nil
+	}
+	if len(enc.MasterKey) != crypto.KeySize {
+		return nil, fmt.Errorf("sql: encryption master key must be %d bytes, got %d", crypto.KeySize, len(enc.MasterKey))
+	}
+	path := enc.KeyStorePath
+	if path == "" {
+		path = filepath.Join(dir, defaultKeyStoreFile)
+	}
+	ks, err := crypto.NewKeyStore(path, enc.MasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("sql: open keystore: %w", err)
+	}
+	return ks, nil
 }
 
 // OpenDatabase opens (or creates) a SQL database rooted at dir with default
@@ -70,10 +118,23 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		return nil, err
 	}
 
+	keystore, err := newKeyStore(dir, opts.Encryption)
+	if err != nil {
+		return nil, err
+	}
+
 	tm := storage.NewTableMenager()
+	if keystore != nil {
+		// Auto-created B+ tree indexes inherit a shared index DEK.
+		indexCipher, err := keystore.GetOrCreateDEK("index")
+		if err != nil {
+			return nil, fmt.Errorf("sql: derive index key: %w", err)
+		}
+		tm.SetDefaultIndexCipher(indexCipher)
+	}
 	catalog := NewCatalog()
 	for _, s := range schemas {
-		if err := registerTable(tm, dir, s); err != nil {
+		if err := registerTable(tm, dir, s, keystore); err != nil {
 			return nil, err
 		}
 		if err := catalog.AddTable(s); err != nil {
@@ -82,7 +143,15 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 	}
 
 	walPath := filepath.Join(dir, "data.wal")
-	ww, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	walOpts := wal.DefaultOptions()
+	if keystore != nil {
+		walCipher, err := keystore.GetOrCreateDEK("wal")
+		if err != nil {
+			return nil, fmt.Errorf("sql: derive wal key: %w", err)
+		}
+		walOpts.Cipher = walCipher
+	}
+	ww, err := wal.NewWALWriter(walPath, walOpts)
 	if err != nil {
 		return nil, fmt.Errorf("sql: open wal: %w", err)
 	}
@@ -100,7 +169,7 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		engine:  engine,
 		catalog: catalog,
 		codec:   bsoncodec.New(),
-		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas},
+		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore},
 	}
 	// Arm activity gating from the recovered state so an idle database does no
 	// periodic checkpoint work until the first write.
@@ -130,9 +199,18 @@ func (e *Executor) Close() error {
 }
 
 // registerTable creates the table's heap file and registers it (with its
-// indexes) in the engine's metadata.
-func registerTable(tm *storage.TableMetaData, dir string, s TableSchema) error {
-	heap, err := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(dir, s.Name+".heap"))
+// indexes) in the engine's metadata. When keystore is non-nil, the heap is
+// encrypted with a per-table data-encryption key.
+func registerTable(tm *storage.TableMetaData, dir string, s TableSchema, keystore *crypto.KeyStore) error {
+	var heapCipher []crypto.Cipher
+	if keystore != nil {
+		c, err := keystore.GetOrCreateDEK("heap:" + s.Name)
+		if err != nil {
+			return fmt.Errorf("sql: derive heap key for %q: %w", s.Name, err)
+		}
+		heapCipher = []crypto.Cipher{c}
+	}
+	heap, err := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(dir, s.Name+".heap"), heapCipher...)
 	if err != nil {
 		return fmt.Errorf("sql: create heap for %q: %w", s.Name, err)
 	}
@@ -172,7 +250,7 @@ func (e *Executor) execCreateTable(stmt *CreateTableStmt) (int64, error) {
 		return 0, fmt.Errorf("%w: %q", ErrDuplicateTable, schema.Name)
 	}
 
-	if err := registerTable(e.ddl.tm, e.ddl.dir, schema); err != nil {
+	if err := registerTable(e.ddl.tm, e.ddl.dir, schema, e.ddl.keystore); err != nil {
 		return 0, err
 	}
 	if err := e.catalog.AddTable(schema); err != nil {
