@@ -227,7 +227,7 @@ func indicesForSchema(s TableSchema) []storage.Index {
 	indices := make([]storage.Index, 0, len(s.Indexes))
 	for _, idx := range s.Indexes {
 		if idx.composite() {
-			indices = append(indices, storage.Index{Name: idx.Name, Type: storage.TypeVarchar})
+			indices = append(indices, storage.Index{Name: idx.Name, Type: storage.TypeVarchar, Unique: idx.Unique})
 			continue
 		}
 		col, _ := s.Column(idx.Column)
@@ -235,6 +235,7 @@ func indicesForSchema(s TableSchema) []storage.Index {
 			Name:    idx.Name,
 			Primary: idx.Primary,
 			Type:    col.Type,
+			Unique:  idx.Unique,
 		})
 	}
 	return indices

@@ -125,6 +125,11 @@ type Index struct {
 	Name    string
 	Primary bool
 	Type    DataType
+	// Unique, when set on a secondary index, makes writes reject a row whose
+	// logical key already belongs to a different (visible) row. Enforcement is
+	// MVCC-aware and happens under the table write lock; the physical storage is
+	// unchanged (still composite (logical, primary) entries).
+	Unique bool
 	// Secondary indexes store physical composite keys:
 	// (logical_secondary_key, primary_key) -> record pointer. This keeps each
 	// B+ tree entry unique while allowing duplicate logical secondary keys.
@@ -288,6 +293,7 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 			Name:    value.Name,
 			Primary: value.Primary,
 			Type:    value.Type,
+			Unique:  value.Unique,
 			Tree:    tree,
 		}
 
@@ -342,6 +348,7 @@ func (tb *TableMetaData) AddIndex(tableName string, idx Index) error {
 		Name:    idx.Name,
 		Primary: false,
 		Type:    idx.Type,
+		Unique:  idx.Unique,
 		Tree:    tree,
 	}
 	return nil

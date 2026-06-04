@@ -3,12 +3,25 @@ package sql
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 
 	"github.com/bobboyms/storage-engine/pkg/codec"
+	storageerrors "github.com/bobboyms/storage-engine/pkg/errors"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
+
+// asUniqueViolation maps the storage engine's duplicate-key error (raised by a
+// UNIQUE constraint) to the typed ErrUniqueViolation, or returns nil if err is
+// not a unique violation.
+func asUniqueViolation(err error) error {
+	var dup *storageerrors.DuplicateKeyError
+	if stderrors.As(err, &dup) {
+		return fmt.Errorf("%w: %v", ErrUniqueViolation, err)
+	}
+	return nil
+}
 
 // Exec parses and executes a data-modifying statement (INSERT, UPDATE, or
 // DELETE) and returns the number of affected rows. Positional "?" placeholders
@@ -74,6 +87,9 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 		return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 	}
 	if err := e.engine.InsertRow(ctx, stmt.Table, string(jsonDoc), keys); err != nil {
+		if ue := asUniqueViolation(err); ue != nil {
+			return 0, ue
+		}
 		return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 	}
 	return 1, nil
@@ -146,6 +162,9 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
 		if err := e.engine.UpsertRow(ctx, stmt.Table, string(jsonDoc), keys); err != nil {
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
 			return 0, fmt.Errorf("%w: upsert row: %v", ErrExec, err)
 		}
 		affected++

@@ -65,6 +65,13 @@ func (se *StorageEngine) writeRowLocked(ctx context.Context, tableName string, d
 			return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
 		}
 
+		// Enforce UNIQUE constraints under the table write lock, so the check and
+		// the write are atomic with respect to other writers (the race a
+		// service-layer read-before-write cannot close).
+		if err := se.checkUniqueConstraints(ctx, table, keys, primaryKey); err != nil {
+			return err
+		}
+
 		currentLSN := se.lsnTracker.Next()
 		if se.WAL != nil {
 			if err := se.writeMultiIndexWAL(tableName, keys, bsonData, currentLSN); err != nil {
@@ -97,6 +104,64 @@ func (se *StorageEngine) writeRowLocked(ctx context.Context, tableName string, d
 		}
 		return nil
 	})
+}
+
+// checkUniqueConstraints rejects the write if any UNIQUE secondary index
+// already has the row's logical key on a different, currently-visible row. It
+// must be called while the table write lock is held so the check and the
+// ensuing write are atomic with respect to other writers.
+func (se *StorageEngine) checkUniqueConstraints(ctx context.Context, table *Table, keys map[string]types.Comparable, primaryKey types.Comparable) error {
+	for name, key := range keys {
+		idx, ok := table.Indices[name]
+		if !ok || !idx.Unique || idx.Primary || key == nil {
+			continue
+		}
+		conflict, err := se.uniqueConflictExists(ctx, table, idx, key, primaryKey)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			return &errors.DuplicateKeyError{Key: fmt.Sprintf("%v", key)}
+		}
+	}
+	return nil
+}
+
+// uniqueConflictExists reports whether a visible row other than the one keyed by
+// excludePrimary already carries logicalKey on the given unique index. It scans
+// the index's logical-key range and resolves each candidate's MVCC visibility
+// against a snapshot of the latest committed state.
+func (se *StorageEngine) uniqueConflictExists(ctx context.Context, table *Table, idx *Index, logicalKey, excludePrimary types.Comparable) (bool, error) {
+	treeV2, ok := idx.Tree.(*btreev2.BTreeV2)
+	if !ok {
+		return false, fmt.Errorf("storage: unique check: index %s uses unsupported tree type %T", idx.Name, idx.Tree)
+	}
+	// A snapshot of the current committed state. The table write lock is held,
+	// so no concurrent writer can change visibility during the scan; reading the
+	// LSN directly avoids re-entering the engine's op lock.
+	snap := &Transaction{SnapshotLSN: se.lsnTracker.Current(), Level: RepeatableRead, engine: se}
+
+	cur, err := treeV2.NewCursor(secondaryLowerBound(logicalKey), secondaryUpperBound(logicalKey))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = cur.Close() }()
+
+	for cur.Next() {
+		if composite, ok := cur.Key().(types.CompositeKey); ok && composite.Primary != nil && excludePrimary != nil {
+			if cmp, err := composite.Primary.Compare(excludePrimary); err == nil && cmp == 0 {
+				continue // an entry for the same row being written; not a conflict
+			}
+		}
+		rec, err := se.readVisibleRecordRaw(ctx, snap, table, logicalKey, cur.Value())
+		if err != nil {
+			return false, err
+		}
+		if rec.Found {
+			return true, nil
+		}
+	}
+	return false, cur.Err()
 }
 
 func (se *StorageEngine) writeMultiIndexWAL(tableName string, keys map[string]types.Comparable, bsonData []byte, lsn uint64) error {
