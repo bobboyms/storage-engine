@@ -192,6 +192,9 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 		return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 	}
 	if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, true); err != nil {
+		if ue := asUniqueViolation(err); ue != nil {
+			return 0, ue
+		}
 		return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 	}
 	return 1, nil

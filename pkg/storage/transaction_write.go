@@ -260,6 +260,10 @@ func (tx *WriteTransaction) WriteRow(ctx context.Context, tableName string, docu
 		}
 	}
 
+	if err := tx.checkUniqueConstraintsLocked(table, primary.Name, keys, primaryKey); err != nil {
+		return err
+	}
+
 	opIdx := len(tx.writeSet)
 	tx.writeSet = append(tx.writeSet, writeOp{
 		opType:    wal.EntryMultiInsert,
@@ -730,6 +734,68 @@ func (tx *WriteTransaction) readCommittedRecordRawLocked(tableName string, index
 // the row (at the engine's current LSN) rather than the transaction's
 // fixed snapshot. Used by GetForUpdate so a locking read observes the
 // freshest committed state.
+// checkUniqueConstraintsLocked rejects the staged write if it would violate a
+// UNIQUE constraint, considering both committed rows from other transactions
+// and rows already staged in this transaction. The per-key row locks are held,
+// so a competing transaction with the same unique value is blocked until this
+// one commits or rolls back.
+func (tx *WriteTransaction) checkUniqueConstraintsLocked(table *Table, primaryName string, keys map[string]types.Comparable, primaryKey types.Comparable) error {
+	for name, key := range keys {
+		idx, ok := table.Indices[name]
+		if !ok || !idx.Unique || idx.Primary || key == nil {
+			continue
+		}
+		conflict, err := tx.committedUniqueConflictLocked(table, idx, key, primaryKey)
+		if err != nil {
+			return err
+		}
+		if !conflict {
+			conflict = tx.stagedUniqueConflictLocked(table.Name, name, primaryName, key, primaryKey)
+		}
+		if conflict {
+			return &storageerrors.DuplicateKeyError{Key: fmt.Sprintf("%v", key)}
+		}
+	}
+	return nil
+}
+
+// committedUniqueConflictLocked reports whether a committed row other than the
+// one keyed by excludePrimary already carries key on the unique index.
+func (tx *WriteTransaction) committedUniqueConflictLocked(table *Table, idx *Index, key, excludePrimary types.Comparable) (bool, error) {
+	se := tx.engine
+	se.opMu.RLock()
+	defer se.opMu.RUnlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return false, err
+	}
+	return se.uniqueConflictExists(context.Background(), table, idx, key, excludePrimary)
+}
+
+// stagedUniqueConflictLocked reports whether this transaction has already staged
+// an insert that carries key on the same unique index for a different row.
+func (tx *WriteTransaction) stagedUniqueConflictLocked(tableName, indexName, primaryName string, key, excludePrimary types.Comparable) bool {
+	for i := range tx.writeSet {
+		op := &tx.writeSet[i]
+		if op.tableName != tableName || op.opType != wal.EntryMultiInsert {
+			continue
+		}
+		staged, ok := op.keys[indexName]
+		if !ok || staged == nil {
+			continue
+		}
+		if cmp, err := staged.Compare(key); err != nil || cmp != 0 {
+			continue
+		}
+		if stagedPK := op.keys[primaryName]; stagedPK != nil && excludePrimary != nil {
+			if cmp, err := stagedPK.Compare(excludePrimary); err == nil && cmp == 0 {
+				continue // the same row staged again, not a conflict
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (tx *WriteTransaction) currentCommittedRecordRawLocked(tableName string, indexName string, key types.Comparable) (visibleRecordRaw, error) {
 	se := tx.engine
 	se.opMu.RLock()
