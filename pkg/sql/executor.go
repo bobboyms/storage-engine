@@ -46,6 +46,10 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
 
+	if len(sel.Joins) > 0 {
+		return e.queryJoin(ctx, sel)
+	}
+
 	schema, ok := e.catalog.Table(sel.Table)
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown table %q", ErrExec, sel.Table)

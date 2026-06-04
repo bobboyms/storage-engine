@@ -52,6 +52,9 @@ func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
+	if len(sel.Joins) > 0 {
+		return nil, fmt.Errorf("%w: JOIN is not yet supported inside a transaction", ErrExec)
+	}
 	schema, ok := t.catalog.Table(sel.Table)
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown table %q", ErrExec, sel.Table)

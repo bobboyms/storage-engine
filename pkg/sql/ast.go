@@ -15,13 +15,14 @@ type Statement interface {
 type SelectStmt struct {
 	Items   []SelectItem // projection list
 	Table   string
-	Alias   string   // table alias (defaults to Table when omitted)
-	Where   Expr     // nil when no WHERE clause
-	GroupBy []string // grouping columns, empty when no GROUP BY
-	Having  Expr     // nil when no HAVING clause
-	OrderBy *OrderBy // nil when no ORDER BY clause
-	Limit   *int64   // nil when no LIMIT clause
-	Offset  *int64   // nil when no OFFSET clause
+	Alias   string       // table alias (defaults to Table when omitted)
+	Joins   []JoinClause // JOINed tables, in order
+	Where   Expr         // nil when no WHERE clause
+	GroupBy []string     // grouping columns, empty when no GROUP BY
+	Having  Expr         // nil when no HAVING clause
+	OrderBy *OrderBy     // nil when no ORDER BY clause
+	Limit   *int64       // nil when no LIMIT clause
+	Offset  *int64       // nil when no OFFSET clause
 	// ForUpdate is set by a trailing FOR UPDATE clause; it requests row
 	// locks on the matched rows and is only meaningful inside a transaction.
 	ForUpdate bool
@@ -77,6 +78,15 @@ func (a AggregateCall) canonicalName() string {
 type OrderBy struct {
 	Column string
 	Desc   bool
+}
+
+// JoinClause is a single JOIN: the joined table, its alias, the ON predicate,
+// and whether it is a LEFT (outer) join (false means INNER).
+type JoinClause struct {
+	Table string
+	Alias string
+	On    Expr
+	Left  bool
 }
 
 // InsertStmt represents INSERT INTO table (cols...) VALUES (vals...).

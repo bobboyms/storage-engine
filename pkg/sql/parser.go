@@ -250,6 +250,12 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		sel.Alias = sel.Table
 	}
 
+	joins, err := p.parseJoins()
+	if err != nil {
+		return nil, err
+	}
+	sel.Joins = joins
+
 	if p.isKeyword("WHERE") {
 		p.next()
 		where, err := p.parseExpr()
@@ -435,6 +441,49 @@ func (p *parser) parseColumnList() ([]string, error) {
 		p.next()
 	}
 	return cols, nil
+}
+
+// parseJoins parses zero or more JOIN clauses: [INNER | LEFT [OUTER]] JOIN
+// table [AS] alias ON <predicate>.
+func (p *parser) parseJoins() ([]JoinClause, error) {
+	var joins []JoinClause
+	for {
+		left := false
+		switch {
+		case p.isKeyword("INNER"):
+			p.next()
+		case p.isKeyword("LEFT"):
+			p.next()
+			if p.isKeyword("OUTER") {
+				p.next()
+			}
+			left = true
+		case p.isKeyword("JOIN"):
+			// bare JOIN == INNER
+		default:
+			return joins, nil
+		}
+		if err := p.expectKeyword("JOIN"); err != nil {
+			return nil, err
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected joined table name, got %q", ErrParse, p.peek().Literal)
+		}
+		jc := JoinClause{Table: p.next().Literal, Left: left}
+		jc.Alias = p.parseOptionalAlias()
+		if jc.Alias == "" {
+			jc.Alias = jc.Table
+		}
+		if err := p.expectKeyword("ON"); err != nil {
+			return nil, err
+		}
+		on, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		jc.On = on
+		joins = append(joins, jc)
+	}
 }
 
 func (p *parser) parseGroupBy() ([]string, error) {
