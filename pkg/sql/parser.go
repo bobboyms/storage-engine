@@ -424,6 +424,9 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if p.isKeyword("BETWEEN") {
 		return p.parseBetween(left, false)
 	}
+	if p.isKeyword("IN") {
+		return p.parseIn(left, false)
+	}
 
 	if p.peek().Type != TokenOperator {
 		return nil, fmt.Errorf("%w: expected comparison operator, got %q", ErrParse, p.peek().Literal)
@@ -442,7 +445,52 @@ func (p *parser) parseNegatedPredicate(left Expr) (Expr, error) {
 	if p.isKeyword("BETWEEN") {
 		return p.parseBetween(left, true)
 	}
+	if p.isKeyword("IN") {
+		return p.parseIn(left, true)
+	}
 	return nil, fmt.Errorf("%w: expected BETWEEN, IN, or LIKE after NOT, got %q", ErrParse, p.peek().Literal)
+}
+
+// parseIn desugars "left [NOT] IN (v1, v2, ...)" into a chain of equality
+// comparisons joined by OR (or inequalities joined by AND for NOT IN), so
+// evaluation needs no special case. The value list must be non-empty.
+func (p *parser) parseIn(left Expr, negate bool) (Expr, error) {
+	p.next() // consume IN
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( after IN, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+
+	var items []Expr
+	for {
+		item, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) after IN list, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+
+	cmpOp, joinOp := "=", "OR"
+	if negate {
+		cmpOp, joinOp = "<>", "AND"
+	}
+	expr := Expr(&BinaryExpr{Op: cmpOp, Left: left, Right: items[0]})
+	for _, item := range items[1:] {
+		expr = &BinaryExpr{
+			Op:    joinOp,
+			Left:  expr,
+			Right: &BinaryExpr{Op: cmpOp, Left: left, Right: item},
+		}
+	}
+	return expr, nil
 }
 
 // parseBetween desugars "left [NOT] BETWEEN low AND high" into comparisons so
