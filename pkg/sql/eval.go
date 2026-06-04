@@ -19,6 +19,9 @@ type Row = map[string]types.Comparable
 // for unknown columns, incompatible operand types, or a non-boolean
 // expression.
 func Evaluate(expr Expr, row Row) (bool, error) {
+	if isNullExpr, ok := expr.(*IsNullExpr); ok {
+		return evalIsNull(isNullExpr, row)
+	}
 	be, ok := expr.(*BinaryExpr)
 	if !ok {
 		return false, fmt.Errorf("%w: expression %s is not a boolean predicate", ErrEval, expr.String())
@@ -40,6 +43,23 @@ func Evaluate(expr Expr, row Row) (bool, error) {
 	default:
 		return evalComparison(be, row)
 	}
+}
+
+func evalIsNull(e *IsNullExpr, row Row) (bool, error) {
+	val, isCol, err := resolveColumn(e.Operand, row)
+	if err != nil {
+		return false, err
+	}
+	if !isCol {
+		if val, err = resolveLiteral(e.Operand, nil); err != nil {
+			return false, err
+		}
+	}
+	null := isNull(val)
+	if e.Negate {
+		return !null, nil
+	}
+	return null, nil
 }
 
 func evalComparison(be *BinaryExpr, row Row) (bool, error) {

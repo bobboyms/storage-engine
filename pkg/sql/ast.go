@@ -123,6 +123,22 @@ func (l *Literal) String() string {
 
 func (*Literal) exprNode() {}
 
+// IsNullExpr is an "operand IS [NOT] NULL" predicate. Negate is true for the
+// IS NOT NULL form.
+type IsNullExpr struct {
+	Operand Expr
+	Negate  bool
+}
+
+func (e *IsNullExpr) String() string {
+	if e.Negate {
+		return "(" + e.Operand.String() + " IS NOT NULL)"
+	}
+	return "(" + e.Operand.String() + " IS NULL)"
+}
+
+func (*IsNullExpr) exprNode() {}
+
 // BinaryExpr is a comparison (= <> != < <= > >=) or a logical connective
 // (AND, OR) joining two sub-expressions.
 type BinaryExpr struct {

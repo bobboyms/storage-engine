@@ -240,6 +240,8 @@ func validateExprColumns(expr Expr, schema *TableSchema) error {
 		if _, ok := schema.Column(e.Name); !ok {
 			return fmt.Errorf("%w: unknown column %q in WHERE", ErrPlan, e.Name)
 		}
+	case *IsNullExpr:
+		return validateExprColumns(e.Operand, schema)
 	case *BinaryExpr:
 		if err := validateExprColumns(e.Left, schema); err != nil {
 			return err

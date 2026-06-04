@@ -402,13 +402,19 @@ func (p *parser) parseFactor() (Expr, error) {
 		p.next()
 		return inner, nil
 	}
-	return p.parseComparison()
+	return p.parsePredicate()
 }
 
-func (p *parser) parseComparison() (Expr, error) {
+// parsePredicate parses a single predicate over a left operand: a comparison
+// (operand OP operand) or an IS [NOT] NULL test.
+func (p *parser) parsePredicate() (Expr, error) {
 	left, err := p.parseOperand()
 	if err != nil {
 		return nil, err
+	}
+
+	if p.isKeyword("IS") {
+		return p.parseIsNull(left)
 	}
 	if p.peek().Type != TokenOperator {
 		return nil, fmt.Errorf("%w: expected comparison operator, got %q", ErrParse, p.peek().Literal)
@@ -419,6 +425,19 @@ func (p *parser) parseComparison() (Expr, error) {
 		return nil, err
 	}
 	return &BinaryExpr{Op: op, Left: left, Right: right}, nil
+}
+
+func (p *parser) parseIsNull(left Expr) (Expr, error) {
+	p.next() // consume IS
+	negate := false
+	if p.isKeyword("NOT") {
+		p.next()
+		negate = true
+	}
+	if err := p.expectKeyword("NULL"); err != nil {
+		return nil, err
+	}
+	return &IsNullExpr{Operand: left, Negate: negate}, nil
 }
 
 func (p *parser) parseOperand() (Expr, error) {
