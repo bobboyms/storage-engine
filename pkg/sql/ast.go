@@ -153,9 +153,27 @@ type AlterTableStmt struct {
 	Table  string
 	Drop   bool
 	Column ColumnDef
+	// IfExists guards the column operation so it can run idempotently: ADD
+	// COLUMN IF NOT EXISTS is a silent no-op when the column already exists, and
+	// DROP COLUMN IF EXISTS is a silent no-op when the column is absent.
+	IfExists bool
 }
 
 func (*AlterTableStmt) stmtNode() {}
+
+// noop reports whether the guarded ALTER should be skipped for schema: an ADD
+// whose column already exists, or a DROP whose column is missing. It is false
+// for an unguarded statement, which must surface the conflict as an error.
+func (s *AlterTableStmt) noop(schema TableSchema) bool {
+	if !s.IfExists {
+		return false
+	}
+	_, exists := schema.Column(s.Column.Name)
+	if s.Drop {
+		return !exists
+	}
+	return exists
+}
 
 // DescribeStmt represents DESCRIBE name (or its DESC alias): a read-only
 // introspection statement that returns the columns of a table.

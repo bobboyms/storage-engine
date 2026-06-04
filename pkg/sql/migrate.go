@@ -114,6 +114,9 @@ func validateDDL(shadow []TableSchema, stmt Statement) ([]TableSchema, error) {
 		if pos < 0 {
 			return nil, fmt.Errorf("%w: unknown table %q", ErrExec, s.Table)
 		}
+		if s.noop(shadow[pos]) {
+			return shadow, nil // guarded no-op: schema unchanged.
+		}
 		var (
 			ns  TableSchema
 			err error
@@ -141,7 +144,8 @@ func (e *Executor) applyDDL(stmt Statement) error {
 		_, err := e.applyCreate(s)
 		return err
 	case *AlterTableStmt:
-		return e.applyAlter(s)
+		_, err := e.applyAlter(s)
+		return err
 	default:
 		return fmt.Errorf("%w: Migrate only accepts CREATE TABLE and ALTER TABLE", ErrExec)
 	}

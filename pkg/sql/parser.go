@@ -64,6 +64,15 @@ func (p *parser) expectKeyword(kw string) error {
 	return nil
 }
 
+func (p *parser) expectKeywords(kws ...string) error {
+	for _, kw := range kws {
+		if err := p.expectKeyword(kw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *parser) isKeyword(kw string) bool {
 	t := p.peek()
 	return t.Type == TokenKeyword && t.Literal == kw
@@ -159,6 +168,12 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 		if p.isKeyword("COLUMN") {
 			p.next()
 		}
+		if p.isKeyword("IF") {
+			if err := p.expectKeywords("IF", "NOT", "EXISTS"); err != nil {
+				return nil, err
+			}
+			stmt.IfExists = true
+		}
 		col, err := p.parseColumnDef()
 		if err != nil {
 			return nil, err
@@ -168,6 +183,12 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 		p.next()
 		if p.isKeyword("COLUMN") {
 			p.next()
+		}
+		if p.isKeyword("IF") {
+			if err := p.expectKeywords("IF", "EXISTS"); err != nil {
+				return nil, err
+			}
+			stmt.IfExists = true
 		}
 		if p.peek().Type != TokenIdent {
 			return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)

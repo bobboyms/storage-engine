@@ -289,8 +289,12 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 	if e.ddl == nil {
 		return 0, fmt.Errorf("%w: ALTER TABLE requires a database opened with OpenDatabase", ErrExec)
 	}
-	if err := e.applyAlter(stmt); err != nil {
+	changed, err := e.applyAlter(stmt)
+	if err != nil {
 		return 0, err
+	}
+	if !changed {
+		return 0, nil // guarded no-op (IF [NOT] EXISTS): nothing to persist.
 	}
 	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
 		return 0, err
@@ -300,14 +304,19 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 
 // applyAlter performs the physical and in-memory effects of an ALTER TABLE
 // (creating/dropping the sidecar index, refreshing the catalog and schema list)
-// without persisting the schema file. See applyCreate for why persistence is
-// the caller's responsibility.
-func (e *Executor) applyAlter(stmt *AlterTableStmt) error {
+// without persisting the schema file. It returns whether the schema changed; a
+// guarded statement (IF [NOT] EXISTS) whose precondition is already satisfied
+// is a no-op that returns false. See applyCreate for why persistence is the
+// caller's responsibility.
+func (e *Executor) applyAlter(stmt *AlterTableStmt) (bool, error) {
 	pos, ok := e.ddl.schemaIndex(stmt.Table)
 	if !ok {
-		return fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
+		return false, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
 	schema := e.ddl.schemas[pos]
+	if stmt.noop(schema) {
+		return false, nil
+	}
 
 	var (
 		newSchema TableSchema
@@ -319,13 +328,13 @@ func (e *Executor) applyAlter(stmt *AlterTableStmt) error {
 		newSchema, err = e.alterAddColumn(schema, stmt.Column)
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := e.catalog.ReplaceTable(newSchema); err != nil {
-		return err
+		return false, err
 	}
 	e.ddl.schemas[pos] = newSchema
-	return nil
+	return true, nil
 }
 
 // evolveAddColumn computes the schema that results from ADD COLUMN, validating
