@@ -241,14 +241,11 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	if err := p.expectKeyword("FROM"); err != nil {
 		return nil, err
 	}
-	if p.peek().Type != TokenIdent {
-		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	table, sub, alias, err := p.parseFromSource()
+	if err != nil {
+		return nil, err
 	}
-	sel.Table = p.next().Literal
-	sel.Alias = p.parseOptionalAlias()
-	if sel.Alias == "" {
-		sel.Alias = sel.Table
-	}
+	sel.Table, sel.Subquery, sel.Alias = table, sub, alias
 
 	joins, err := p.parseJoins()
 	if err != nil {
@@ -443,8 +440,39 @@ func (p *parser) parseColumnList() ([]string, error) {
 	return cols, nil
 }
 
+// parseFromSource parses a FROM/JOIN source: a table name (with optional alias)
+// or a parenthesized subquery (which requires an alias). It returns the table
+// name, the derived subquery (nil for a table), and the alias.
+func (p *parser) parseFromSource() (string, *SelectStmt, string, error) {
+	if p.peek().Type == TokenLParen {
+		p.next()
+		sub, err := p.parseSelect()
+		if err != nil {
+			return "", nil, "", err
+		}
+		if p.peek().Type != TokenRParen {
+			return "", nil, "", fmt.Errorf("%w: expected ) to close subquery, got %q", ErrParse, p.peek().Literal)
+		}
+		p.next()
+		alias := p.parseOptionalAlias()
+		if alias == "" {
+			return "", nil, "", fmt.Errorf("%w: derived table in FROM requires an alias", ErrParse)
+		}
+		return "", sub, alias, nil
+	}
+	if p.peek().Type != TokenIdent {
+		return "", nil, "", fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	table := p.next().Literal
+	alias := p.parseOptionalAlias()
+	if alias == "" {
+		alias = table
+	}
+	return table, nil, alias, nil
+}
+
 // parseJoins parses zero or more JOIN clauses: [INNER | LEFT [OUTER]] JOIN
-// table [AS] alias ON <predicate>.
+// source [AS] alias ON <predicate>.
 func (p *parser) parseJoins() ([]JoinClause, error) {
 	var joins []JoinClause
 	for {
@@ -466,14 +494,11 @@ func (p *parser) parseJoins() ([]JoinClause, error) {
 		if err := p.expectKeyword("JOIN"); err != nil {
 			return nil, err
 		}
-		if p.peek().Type != TokenIdent {
-			return nil, fmt.Errorf("%w: expected joined table name, got %q", ErrParse, p.peek().Literal)
+		table, sub, alias, err := p.parseFromSource()
+		if err != nil {
+			return nil, err
 		}
-		jc := JoinClause{Table: p.next().Literal, Left: left}
-		jc.Alias = p.parseOptionalAlias()
-		if jc.Alias == "" {
-			jc.Alias = jc.Table
-		}
+		jc := JoinClause{Table: table, Subquery: sub, Alias: alias, Left: left}
 		if err := p.expectKeyword("ON"); err != nil {
 			return nil, err
 		}

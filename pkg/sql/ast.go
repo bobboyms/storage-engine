@@ -13,16 +13,17 @@ type Statement interface {
 
 // SelectStmt represents a single-table SELECT query.
 type SelectStmt struct {
-	Items   []SelectItem // projection list
-	Table   string
-	Alias   string       // table alias (defaults to Table when omitted)
-	Joins   []JoinClause // JOINed tables, in order
-	Where   Expr         // nil when no WHERE clause
-	GroupBy []string     // grouping columns, empty when no GROUP BY
-	Having  Expr         // nil when no HAVING clause
-	OrderBy *OrderBy     // nil when no ORDER BY clause
-	Limit   *int64       // nil when no LIMIT clause
-	Offset  *int64       // nil when no OFFSET clause
+	Items    []SelectItem // projection list
+	Table    string       // base table name (empty when Subquery is set)
+	Subquery *SelectStmt  // derived table in FROM (nil for a plain table)
+	Alias    string       // table/derived-table alias (defaults to Table)
+	Joins    []JoinClause // JOINed sources, in order
+	Where    Expr         // nil when no WHERE clause
+	GroupBy  []string     // grouping columns, empty when no GROUP BY
+	Having   Expr         // nil when no HAVING clause
+	OrderBy  *OrderBy     // nil when no ORDER BY clause
+	Limit    *int64       // nil when no LIMIT clause
+	Offset   *int64       // nil when no OFFSET clause
 	// ForUpdate is set by a trailing FOR UPDATE clause; it requests row
 	// locks on the matched rows and is only meaningful inside a transaction.
 	ForUpdate bool
@@ -80,13 +81,15 @@ type OrderBy struct {
 	Desc   bool
 }
 
-// JoinClause is a single JOIN: the joined table, its alias, the ON predicate,
-// and whether it is a LEFT (outer) join (false means INNER).
+// JoinClause is a single JOIN: the joined source (a table or a derived
+// subquery), its alias, the ON predicate, and whether it is a LEFT (outer)
+// join (false means INNER).
 type JoinClause struct {
-	Table string
-	Alias string
-	On    Expr
-	Left  bool
+	Table    string
+	Subquery *SelectStmt // derived table (nil for a plain table)
+	Alias    string
+	On       Expr
+	Left     bool
 }
 
 // InsertStmt represents INSERT INTO table (cols...) VALUES (vals...).

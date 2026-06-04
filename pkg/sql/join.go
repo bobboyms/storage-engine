@@ -8,38 +8,36 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
-// binding associates a table alias with its schema for the duration of a query.
-type binding struct {
-	alias  string
-	schema *TableSchema
+// source is a materialized FROM/JOIN input: an alias, the column names it
+// exposes, and its rows keyed by the qualified name "alias.col".
+type source struct {
+	alias   string
+	columns []string
+	rows    []Row
 }
 
-// queryJoin executes a SELECT whose FROM has one or more JOINs. Every table is
-// fully scanned and combined with a nested-loop join honoring each ON
-// predicate; the WHERE clause, grouping, ordering, and projection then run over
-// the joined rows. Rows carry qualified keys ("alias.col") plus bare keys for
-// column names unique across all joined tables.
-func (e *Executor) queryJoin(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
-	bindings, err := e.joinBindings(sel)
+// queryFrom executes a SELECT whose FROM contains joins and/or derived
+// subqueries. Each source (base table, derived table, or joined source) is
+// materialized into rows, combined with nested-loop joins honoring each ON
+// predicate, then filtered, grouped, ordered, and projected.
+func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
+	sources, err := e.buildSources(ctx, sel)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateJoinColumns(sel, bindings); err != nil {
+	if err := validateFromColumns(sel, sources); err != nil {
 		return nil, err
 	}
 
-	unique := uniqueColumns(bindings)
-
-	rows, err := e.scanAll(ctx, bindings[0], unique)
-	if err != nil {
-		return nil, err
+	unique := uniqueSourceColumns(sources)
+	for i := range sources {
+		addBareKeys(sources[i], unique)
 	}
+
+	rows := sources[0].rows
 	for i, jc := range sel.Joins {
-		right, err := e.scanAll(ctx, bindings[i+1], unique)
-		if err != nil {
-			return nil, err
-		}
-		rows, err = nestedLoopJoin(rows, right, jc.On, jc.Left, nullRow(bindings[i+1], unique))
+		right := sources[i+1]
+		rows, err = nestedLoopJoin(rows, right.rows, jc.On, jc.Left, nullSourceRow(right, unique))
 		if err != nil {
 			return nil, err
 		}
@@ -57,38 +55,111 @@ func (e *Executor) queryJoin(ctx context.Context, sel *SelectStmt) (*ResultSet, 
 		sortRows(rows, sel.OrderBy)
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
-	return projectRows(rows, expandProjectionBindings(sel.Items, bindings)), nil
+	return projectRows(rows, expandProjectionSources(sel.Items, sources)), nil
 }
 
-func (e *Executor) joinBindings(sel *SelectStmt) ([]binding, error) {
-	bindings := make([]binding, 0, len(sel.Joins)+1)
-	base, ok := e.catalog.Table(sel.Table)
-	if !ok {
-		return nil, fmt.Errorf("%w: unknown table %q", ErrExec, sel.Table)
+func (e *Executor) buildSources(ctx context.Context, sel *SelectStmt) ([]source, error) {
+	sources := make([]source, 0, len(sel.Joins)+1)
+	seen := map[string]struct{}{}
+
+	add := func(table string, sub *SelectStmt, alias string) error {
+		if _, dup := seen[alias]; dup {
+			return fmt.Errorf("%w: duplicate table alias %q", ErrExec, alias)
+		}
+		seen[alias] = struct{}{}
+		s, err := e.sourceFor(ctx, table, sub, alias)
+		if err != nil {
+			return err
+		}
+		sources = append(sources, s)
+		return nil
 	}
-	bindings = append(bindings, binding{alias: sel.Alias, schema: base})
-	seen := map[string]struct{}{sel.Alias: {}}
+
+	if err := add(sel.Table, sel.Subquery, sel.Alias); err != nil {
+		return nil, err
+	}
 	for _, jc := range sel.Joins {
-		schema, ok := e.catalog.Table(jc.Table)
-		if !ok {
-			return nil, fmt.Errorf("%w: unknown table %q", ErrExec, jc.Table)
+		if err := add(jc.Table, jc.Subquery, jc.Alias); err != nil {
+			return nil, err
 		}
-		if _, dup := seen[jc.Alias]; dup {
-			return nil, fmt.Errorf("%w: duplicate table alias %q", ErrExec, jc.Alias)
-		}
-		seen[jc.Alias] = struct{}{}
-		bindings = append(bindings, binding{alias: jc.Alias, schema: schema})
 	}
-	return bindings, nil
+	return sources, nil
 }
 
-// uniqueColumns returns the set of column names that appear in exactly one
-// binding, so they can be referenced without a qualifier.
-func uniqueColumns(bindings []binding) map[string]bool {
+// sourceFor materializes a single FROM/JOIN source: a derived subquery is
+// executed and its result rows are re-keyed by the alias; a table is fully
+// scanned with qualified keys.
+func (e *Executor) sourceFor(ctx context.Context, table string, sub *SelectStmt, alias string) (source, error) {
+	if sub != nil {
+		rs, err := e.execSelect(ctx, sub)
+		if err != nil {
+			return source{}, err
+		}
+		rows := make([]Row, len(rs.Rows))
+		for i, vals := range rs.Rows {
+			row := make(Row, len(rs.Columns))
+			for j, c := range rs.Columns {
+				row[alias+"."+c] = vals[j]
+			}
+			rows[i] = row
+		}
+		return source{alias: alias, columns: rs.Columns, rows: rows}, nil
+	}
+
+	schema, ok := e.catalog.Table(table)
+	if !ok {
+		return source{}, fmt.Errorf("%w: unknown table %q", ErrExec, table)
+	}
+	rows, err := e.scanQualified(ctx, schema, alias)
+	if err != nil {
+		return source{}, err
+	}
+	cols := make([]string, len(schema.Columns))
+	for i, c := range schema.Columns {
+		cols[i] = c.Name
+	}
+	return source{alias: alias, columns: cols, rows: rows}, nil
+}
+
+// scanQualified fully scans a table's primary index, decoding each row keyed
+// only by the qualified name "alias.col".
+func (e *Executor) scanQualified(ctx context.Context, schema *TableSchema, alias string) ([]Row, error) {
+	pk, ok := schema.PrimaryIndex()
+	if !ok {
+		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
+	}
+	it, err := e.engine.NewIterator(ctx, schema.Name, pk.Name, storage.IterOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
+	}
+	defer func() { _ = it.Close() }()
+
+	var rows []Row
+	for it.Next() {
+		decoded, err := decodeRow(e.codec, schema, alias, it.Value())
+		if err != nil {
+			return nil, err
+		}
+		row := make(Row, len(schema.Columns))
+		for _, col := range schema.Columns {
+			qualified := alias + "." + col.Name
+			row[qualified] = decoded[qualified]
+		}
+		rows = append(rows, row)
+	}
+	if err := it.Err(); err != nil {
+		return nil, fmt.Errorf("%w: scan: %v", ErrExec, err)
+	}
+	return rows, nil
+}
+
+// uniqueSourceColumns returns the set of column names that appear in exactly one
+// source, so they can be referenced without a qualifier.
+func uniqueSourceColumns(sources []source) map[string]bool {
 	counts := make(map[string]int)
-	for _, b := range bindings {
-		for _, c := range b.schema.Columns {
-			counts[c.Name]++
+	for _, s := range sources {
+		for _, c := range s.columns {
+			counts[c]++
 		}
 	}
 	unique := make(map[string]bool, len(counts))
@@ -100,39 +171,16 @@ func uniqueColumns(bindings []binding) map[string]bool {
 	return unique
 }
 
-// scanAll fully scans a table's primary index, decoding each row with qualified
-// keys ("alias.col") and bare keys for columns unique across the join.
-func (e *Executor) scanAll(ctx context.Context, b binding, unique map[string]bool) ([]Row, error) {
-	pk, ok := b.schema.PrimaryIndex()
-	if !ok {
-		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, b.schema.Name)
-	}
-	it, err := e.engine.NewIterator(ctx, b.schema.Name, pk.Name, storage.IterOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
-	}
-	defer func() { _ = it.Close() }()
-
-	var rows []Row
-	for it.Next() {
-		decoded, err := decodeRow(e.codec, b.schema, b.alias, it.Value())
-		if err != nil {
-			return nil, err
-		}
-		row := make(Row, len(b.schema.Columns)*2)
-		for _, col := range b.schema.Columns {
-			qualified := b.alias + "." + col.Name
-			row[qualified] = decoded[qualified]
-			if unique[col.Name] {
-				row[col.Name] = decoded[qualified]
+// addBareKeys adds an unqualified key for each of the source's columns that is
+// unique across all sources.
+func addBareKeys(s source, unique map[string]bool) {
+	for _, row := range s.rows {
+		for _, c := range s.columns {
+			if unique[c] {
+				row[c] = row[s.alias+"."+c]
 			}
 		}
-		rows = append(rows, row)
 	}
-	if err := it.Err(); err != nil {
-		return nil, fmt.Errorf("%w: scan: %v", ErrExec, err)
-	}
-	return rows, nil
 }
 
 // nestedLoopJoin combines left and right rows whose ON predicate holds. For a
@@ -161,19 +209,6 @@ func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool, rightNull Row) ([
 	return out, nil
 }
 
-// nullRow builds a row that sets every column of a binding to NULL, used for the
-// unmatched side of a LEFT join.
-func nullRow(b binding, unique map[string]bool) Row {
-	row := make(Row, len(b.schema.Columns)*2)
-	for _, col := range b.schema.Columns {
-		row[b.alias+"."+col.Name] = types.NullKey{}
-		if unique[col.Name] {
-			row[col.Name] = types.NullKey{}
-		}
-	}
-	return row
-}
-
 func mergeRows(a, b Row) Row {
 	merged := make(Row, len(a)+len(b))
 	for k, v := range a {
@@ -183,6 +218,19 @@ func mergeRows(a, b Row) Row {
 		merged[k] = v
 	}
 	return merged
+}
+
+// nullSourceRow builds a row setting every column of a source to NULL, used for
+// the unmatched side of a LEFT join.
+func nullSourceRow(s source, unique map[string]bool) Row {
+	row := make(Row, len(s.columns)*2)
+	for _, c := range s.columns {
+		row[s.alias+"."+c] = types.NullKey{}
+		if unique[c] {
+			row[c] = types.NullKey{}
+		}
+	}
+	return row
 }
 
 func filterRows(rows []Row, where Expr) ([]Row, error) {
@@ -202,17 +250,16 @@ func filterRows(rows []Row, where Expr) ([]Row, error) {
 	return out, nil
 }
 
-// expandProjectionBindings expands a projection list over multiple table
-// bindings. "*" expands to every column of every binding, sourced by its
-// qualified key.
-func expandProjectionBindings(items []SelectItem, bindings []binding) []projSpec {
+// expandProjectionSources expands a projection list over the query's sources.
+// "*" expands to every column of every source, sourced by its qualified key.
+func expandProjectionSources(items []SelectItem, sources []source) []projSpec {
 	var specs []projSpec
 	for _, it := range items {
 		switch {
 		case it.Star:
-			for _, b := range bindings {
-				for _, c := range b.schema.Columns {
-					specs = append(specs, projSpec{name: c.Name, source: b.alias + "." + c.Name})
+			for _, s := range sources {
+				for _, c := range s.columns {
+					specs = append(specs, projSpec{name: c, source: s.alias + "." + c})
 				}
 			}
 		case it.Column != nil:
@@ -222,82 +269,79 @@ func expandProjectionBindings(items []SelectItem, bindings []binding) []projSpec
 	return specs
 }
 
-// validateJoinColumns resolves every column reference in the statement against
-// the join bindings: a qualified reference must name a known alias and an
-// existing column; an unqualified reference must be unambiguous.
-func validateJoinColumns(sel *SelectStmt, bindings []binding) error {
-	check := func(ref *ColumnRef) error { return resolveBinding(ref, bindings) }
-
+// validateFromColumns resolves every column reference in the statement against
+// the query's sources.
+func validateFromColumns(sel *SelectStmt, sources []source) error {
 	for _, it := range sel.Items {
 		switch {
 		case it.Column != nil:
-			if err := check(it.Column); err != nil {
+			if err := resolveSource(it.Column, sources); err != nil {
 				return err
 			}
 		case it.Agg != nil && !it.Agg.Star:
-			if err := check(it.Agg.Column); err != nil {
+			if err := resolveSource(it.Agg.Column, sources); err != nil {
 				return err
 			}
 		}
 	}
 	for _, jc := range sel.Joins {
-		if err := validateExprBindings(jc.On, bindings); err != nil {
+		if err := validateExprSources(jc.On, sources); err != nil {
 			return err
 		}
 	}
 	for _, g := range sel.GroupBy {
-		if err := check(refFromString(g)); err != nil {
+		if err := resolveSource(refFromString(g), sources); err != nil {
 			return err
 		}
 	}
 	if sel.OrderBy != nil && !isGrouped(sel) {
-		if err := check(refFromString(sel.OrderBy.Column)); err != nil {
+		if err := resolveSource(refFromString(sel.OrderBy.Column), sources); err != nil {
 			return err
 		}
 	}
-	if err := validateExprBindings(sel.Having, bindings); err != nil {
+	if err := validateExprSources(sel.Having, sources); err != nil {
 		return err
 	}
-	return validateExprBindings(sel.Where, bindings)
+	return validateExprSources(sel.Where, sources)
 }
 
-func validateExprBindings(expr Expr, bindings []binding) error {
+func validateExprSources(expr Expr, sources []source) error {
 	switch e := expr.(type) {
 	case nil:
 		return nil
 	case *ColumnRef:
-		return resolveBinding(e, bindings)
+		return resolveSource(e, sources)
 	case *AggregateExpr:
 		if !e.Call.Star {
-			return resolveBinding(e.Call.Column, bindings)
+			return resolveSource(e.Call.Column, sources)
 		}
 	case *IsNullExpr:
-		return validateExprBindings(e.Operand, bindings)
+		return validateExprSources(e.Operand, sources)
 	case *BinaryExpr:
-		if err := validateExprBindings(e.Left, bindings); err != nil {
+		if err := validateExprSources(e.Left, sources); err != nil {
 			return err
 		}
-		return validateExprBindings(e.Right, bindings)
+		return validateExprSources(e.Right, sources)
 	}
 	return nil
 }
 
-func resolveBinding(ref *ColumnRef, bindings []binding) error {
+func resolveSource(ref *ColumnRef, sources []source) error {
 	if ref.Qualifier != "" {
-		for _, b := range bindings {
-			if b.alias != ref.Qualifier {
+		for _, s := range sources {
+			if s.alias != ref.Qualifier {
 				continue
 			}
-			if _, ok := b.schema.Column(ref.Name); !ok {
-				return fmt.Errorf("%w: unknown column %q in table %q", ErrPlan, ref.Name, ref.Qualifier)
+			if !containsString(s.columns, ref.Name) {
+				return fmt.Errorf("%w: unknown column %q in %q", ErrPlan, ref.Name, ref.Qualifier)
 			}
 			return nil
 		}
 		return fmt.Errorf("%w: unknown table qualifier %q", ErrPlan, ref.Qualifier)
 	}
 	matches := 0
-	for _, b := range bindings {
-		if _, ok := b.schema.Column(ref.Name); ok {
+	for _, s := range sources {
+		if containsString(s.columns, ref.Name) {
 			matches++
 		}
 	}
@@ -309,6 +353,15 @@ func resolveBinding(ref *ColumnRef, bindings []binding) error {
 	default:
 		return fmt.Errorf("%w: ambiguous column %q; qualify it with a table alias", ErrPlan, ref.Name)
 	}
+}
+
+func containsString(ss []string, target string) bool {
+	for _, s := range ss {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 func refFromString(s string) *ColumnRef {

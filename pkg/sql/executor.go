@@ -45,9 +45,15 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 	if !ok {
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
+	return e.execSelect(ctx, sel)
+}
 
-	if len(sel.Joins) > 0 {
-		return e.queryJoin(ctx, sel)
+// execSelect executes a parsed SELECT. Queries with joins or a derived FROM
+// subquery go through the generalized source pipeline; a plain single-table
+// query uses the index-aware fast path.
+func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
+	if len(sel.Joins) > 0 || sel.Subquery != nil {
+		return e.queryFrom(ctx, sel)
 	}
 
 	schema, ok := e.catalog.Table(sel.Table)
