@@ -35,6 +35,12 @@ func OpenDatabase(ctx context.Context, dir string) (*Executor, error) {
 		return nil, fmt.Errorf("sql: create database dir: %w", err)
 	}
 
+	// Clear orphan temp files left by an interrupted atomic write before any
+	// new writing starts (minAge 0 is safe here: nothing is writing yet).
+	if _, err := sweepTempFiles(dir, 0); err != nil {
+		return nil, err
+	}
+
 	schemas, err := loadSchemas(dir)
 	if err != nil {
 		return nil, err
@@ -74,9 +80,10 @@ func OpenDatabase(ctx context.Context, dir string) (*Executor, error) {
 	}, nil
 }
 
-// Close releases the underlying storage engine. It is only meaningful for an
-// executor created by OpenDatabase.
+// Close stops any scheduled maintenance and releases the underlying storage
+// engine. It is only meaningful for an executor created by OpenDatabase.
 func (e *Executor) Close() error {
+	e.stopMaintenance()
 	if e.engine == nil {
 		return nil
 	}

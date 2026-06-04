@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -21,6 +22,9 @@ type Executor struct {
 	catalog *Catalog
 	codec   codec.Codec
 	ddl     *ddlManager // non-nil only when opened via OpenDatabase
+
+	maintMu sync.Mutex
+	maint   *maintenanceRunner // non-nil while scheduled maintenance is running
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses
