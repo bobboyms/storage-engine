@@ -18,19 +18,33 @@ import (
 // WHERE predicate per row, which keeps read-your-writes exact (see
 // storage.WriteTransaction.NewIterator). Writes are staged until Commit.
 type Tx struct {
+	exec    *Executor
 	wtx     *storage.WriteTransaction
 	catalog *Catalog
 	codec   codec.Codec
+	// garbage collects tables whose committed changes will leave dead heap
+	// space (from UPDATE/DELETE); they are marked for vacuum on Commit.
+	garbage map[string]struct{}
 }
 
 // Begin starts an explicit transaction with the engine's default isolation
 // level (RepeatableRead).
 func (e *Executor) Begin() *Tx {
-	return &Tx{wtx: e.engine.BeginWriteTransaction(), catalog: e.catalog, codec: e.codec}
+	return &Tx{exec: e, wtx: e.engine.BeginWriteTransaction(), catalog: e.catalog, codec: e.codec}
 }
 
 // Commit makes all staged changes durable and visible.
-func (t *Tx) Commit(ctx context.Context) error { return t.wtx.Commit(ctx) }
+func (t *Tx) Commit(ctx context.Context) error {
+	if err := t.wtx.Commit(ctx); err != nil {
+		return err
+	}
+	// The committed UPDATE/DELETEs left dead versions; schedule a vacuum.
+	for table := range t.garbage {
+		t.exec.markGarbage(table)
+	}
+	t.garbage = nil
+	return nil
+}
 
 // Rollback discards all staged changes.
 func (t *Tx) Rollback(ctx context.Context) error { return t.wtx.Rollback(ctx) }
@@ -225,6 +239,9 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 		}
 		affected++
 	}
+	if affected > 0 {
+		t.markGarbage(stmt.Table)
+	}
 	return affected, nil
 }
 
@@ -253,7 +270,19 @@ func (t *Tx) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, error) {
 		}
 		affected++
 	}
+	if affected > 0 {
+		t.markGarbage(stmt.Table)
+	}
 	return affected, nil
+}
+
+// markGarbage records a table whose committed UPDATE/DELETE will leave dead
+// heap space, to be vacuumed after Commit.
+func (t *Tx) markGarbage(table string) {
+	if t.garbage == nil {
+		t.garbage = make(map[string]struct{})
+	}
+	t.garbage[table] = struct{}{}
 }
 
 func (t *Tx) matchingRaw(ctx context.Context, schema *TableSchema, where Expr) ([][]byte, error) {

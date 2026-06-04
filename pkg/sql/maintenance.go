@@ -31,6 +31,11 @@ type maintenanceRunner struct {
 // removed.
 func (e *Executor) RunMaintenance(ctx context.Context) (int, error) {
 	if e.engine != nil {
+		// Reclaim dead heap space from tables that had DELETE/UPDATE, then
+		// checkpoint so the compaction is flushed in the same pass.
+		if err := e.vacuumDirty(ctx); err != nil {
+			return 0, err
+		}
 		// Activity gating: only checkpoint when the LSN advanced since the last
 		// checkpoint, so an idle database does no periodic I/O.
 		if e.engine.Stats().CurrentLSN != e.lastCheckpointLSN.Load() {
@@ -44,6 +49,48 @@ func (e *Executor) RunMaintenance(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	return sweepTempFiles(e.ddl.dir, maintenanceMinAge)
+}
+
+// markGarbage records that a table accumulated dead heap space (from a
+// DELETE/UPDATE) and should be vacuumed by the next maintenance pass.
+func (e *Executor) markGarbage(table string) {
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dirtyTables == nil {
+		e.dirtyTables = make(map[string]struct{})
+	}
+	e.dirtyTables[table] = struct{}{}
+}
+
+// takeDirtyTables returns and clears the set of tables pending a vacuum.
+func (e *Executor) takeDirtyTables() []string {
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if len(e.dirtyTables) == 0 {
+		return nil
+	}
+	tables := make([]string, 0, len(e.dirtyTables))
+	for t := range e.dirtyTables {
+		tables = append(tables, t)
+	}
+	e.dirtyTables = nil
+	return tables
+}
+
+// vacuumDirty vacuums every table that accumulated dead space since the last
+// pass. On failure the unprocessed tables are re-marked so a later pass retries
+// them.
+func (e *Executor) vacuumDirty(ctx context.Context) error {
+	tables := e.takeDirtyTables()
+	for i, table := range tables {
+		if err := e.engine.Vacuum(ctx, table); err != nil {
+			for _, rest := range tables[i:] {
+				e.markGarbage(rest)
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // StartMaintenance launches a background goroutine that runs RunMaintenance

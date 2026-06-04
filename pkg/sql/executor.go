@@ -29,6 +29,12 @@ type Executor struct {
 	// lastCheckpointLSN gates maintenance: a pass only checkpoints when the
 	// engine's current LSN has advanced past it (i.e. there were writes).
 	lastCheckpointLSN atomic.Uint64
+
+	// gcMu guards dirtyTables, the set of tables that have accumulated dead
+	// heap space (from DELETE/UPDATE) since the last vacuum. Maintenance
+	// vacuums only these tables, so insert-only/read workloads never vacuum.
+	gcMu        sync.Mutex
+	dirtyTables map[string]struct{}
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses

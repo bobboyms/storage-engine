@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -183,4 +184,73 @@ func mustExec(t *testing.T, db *Executor, query string) {
 	if _, err := db.Exec(context.Background(), query); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
 	}
+}
+
+func TestMaintenanceVacuumsAfterDelete(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	defer db.Close()
+
+	mustExec(t, db, "CREATE TABLE t (id INT PRIMARY KEY, v INT)")
+	for i := 1; i <= 5; i++ {
+		mustExec(t, db, "INSERT INTO t (id, v) VALUES ("+itoa(i)+", "+itoa(i*10)+")")
+	}
+	mustExec(t, db, "DELETE FROM t WHERE id <= 3")
+
+	before := db.engine.Stats().VacuumRuns
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance: %v", err)
+	}
+	st := db.engine.Stats()
+	if st.VacuumRuns <= before {
+		t.Fatalf("VacuumRuns = %d, want > %d (delete created dead space)", st.VacuumRuns, before)
+	}
+	if st.VacuumReclaimed == 0 {
+		t.Fatal("VacuumReclaimed = 0, want > 0 after deleting rows")
+	}
+
+	// Surviving rows are intact.
+	rs, _ := db.Query(ctx, "SELECT id FROM t ORDER BY id")
+	ids := intColumn(t, rs, "id")
+	if len(ids) != 2 || ids[0] != 4 || ids[1] != 5 {
+		t.Fatalf("ids after delete+vacuum = %v, want [4 5]", ids)
+	}
+
+	// A second pass with no new garbage does not vacuum again.
+	runs := db.engine.Stats().VacuumRuns
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance 2: %v", err)
+	}
+	if db.engine.Stats().VacuumRuns != runs {
+		t.Fatalf("vacuum ran with no new garbage: %d -> %d", runs, db.engine.Stats().VacuumRuns)
+	}
+}
+
+func TestMaintenanceSkipsVacuumWhenInsertOnly(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	defer db.Close()
+
+	mustExec(t, db, "CREATE TABLE t (id INT PRIMARY KEY)")
+	mustExec(t, db, "INSERT INTO t (id) VALUES (1)")
+	mustExec(t, db, "INSERT INTO t (id) VALUES (2)")
+
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance: %v", err)
+	}
+	if runs := db.engine.Stats().VacuumRuns; runs != 0 {
+		t.Fatalf("VacuumRuns = %d, want 0 (insert-only has no dead space)", runs)
+	}
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }

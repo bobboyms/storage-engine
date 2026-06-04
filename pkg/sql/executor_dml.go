@@ -136,6 +136,9 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		}
 		affected++
 	}
+	if affected > 0 {
+		e.markGarbage(stmt.Table) // UPDATE tombstones the old version
+	}
 	return affected, nil
 }
 
@@ -187,6 +190,9 @@ func (e *Executor) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, err
 		if removed {
 			affected++
 		}
+	}
+	if affected > 0 {
+		e.markGarbage(stmt.Table) // DELETE tombstones the row's heap version
 	}
 	return affected, nil
 }
