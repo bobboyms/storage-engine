@@ -133,13 +133,16 @@ type ColumnDef struct {
 	Type    storage.DataType
 	Primary bool
 	Index   bool
+	Unique  bool
 }
 
 // IndexClause is a table-level index definition in CREATE TABLE, e.g.
-// INDEX (a, b). A single column produces a regular single-column index; two or
-// more produce a composite index.
+// INDEX (a, b) or UNIQUE (a, b). A single column produces a regular
+// single-column index; two or more produce a composite index. Unique marks a
+// UNIQUE constraint.
 type IndexClause struct {
 	Columns []string
+	Unique  bool
 }
 
 // CreateTableStmt represents CREATE TABLE [IF NOT EXISTS] name (column defs...,

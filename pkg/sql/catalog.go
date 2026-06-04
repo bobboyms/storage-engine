@@ -25,6 +25,11 @@ var ErrDuplicateTable = errors.New("sql: duplicate table")
 // column name already exists in the table schema.
 var ErrDuplicateColumn = errors.New("sql: duplicate column")
 
+// ErrUniqueViolation is returned when a write would violate a UNIQUE
+// constraint. The constraint surface (parsing, schema, persistence) exists now;
+// enforcement that returns this error is added in a later increment.
+var ErrUniqueViolation = errors.New("sql: unique constraint violation")
+
 // Column describes a single column of a table together with the engine data
 // type used to encode its values.
 type Column struct {
@@ -41,6 +46,9 @@ type IndexDef struct {
 	Column  string
 	Primary bool
 	Columns []string
+	// Unique marks a UNIQUE constraint. The constraint is recorded and persisted
+	// here; enforcement is added in a later increment.
+	Unique bool
 }
 
 // composite reports whether idx spans more than one column.

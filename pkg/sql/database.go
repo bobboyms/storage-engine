@@ -445,6 +445,8 @@ func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 		switch {
 		case c.Primary:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name, Primary: true})
+		case c.Unique:
+			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name, Unique: true})
 		case c.Index:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name})
 		}
@@ -452,12 +454,13 @@ func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 	for _, ix := range stmt.Indexes {
 		if len(ix.Columns) == 1 {
 			// A single-column table-level index is an ordinary secondary index.
-			schema.Indexes = append(schema.Indexes, IndexDef{Name: ix.Columns[0], Column: ix.Columns[0]})
+			schema.Indexes = append(schema.Indexes, IndexDef{Name: ix.Columns[0], Column: ix.Columns[0], Unique: ix.Unique})
 			continue
 		}
 		schema.Indexes = append(schema.Indexes, IndexDef{
 			Name:    compositeIndexName(ix.Columns),
 			Columns: ix.Columns,
+			Unique:  ix.Unique,
 		})
 	}
 	return schema

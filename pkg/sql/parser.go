@@ -132,7 +132,7 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	p.next()
 
 	for {
-		if p.isKeyword("INDEX") {
+		if p.isKeyword("INDEX") || p.isKeyword("UNIQUE") {
 			idx, err := p.parseTableIndex()
 			if err != nil {
 				return nil, err
@@ -158,19 +158,27 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	return stmt, nil
 }
 
-// parseTableIndex parses a table-level "INDEX (col, col, ...)" clause.
+// parseTableIndex parses a table-level "INDEX (cols...)" or "UNIQUE (cols...)"
+// clause.
 func (p *parser) parseTableIndex() (IndexClause, error) {
-	if err := p.expectKeyword("INDEX"); err != nil {
-		return IndexClause{}, err
+	unique := false
+	switch {
+	case p.isKeyword("UNIQUE"):
+		p.next()
+		unique = true
+	default:
+		if err := p.expectKeyword("INDEX"); err != nil {
+			return IndexClause{}, err
+		}
 	}
 	cols, err := p.parseParenColumnList()
 	if err != nil {
 		return IndexClause{}, err
 	}
 	if len(cols) == 0 {
-		return IndexClause{}, fmt.Errorf("%w: INDEX requires at least one column", ErrParse)
+		return IndexClause{}, fmt.Errorf("%w: index requires at least one column", ErrParse)
 	}
-	return IndexClause{Columns: cols}, nil
+	return IndexClause{Columns: cols, Unique: unique}, nil
 }
 
 func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
@@ -261,6 +269,9 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		case p.isKeyword("INDEX"):
 			p.next()
 			col.Index = true
+		case p.isKeyword("UNIQUE"):
+			p.next()
+			col.Unique = true
 		default:
 			return col, nil
 		}

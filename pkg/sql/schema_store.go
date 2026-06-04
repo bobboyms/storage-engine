@@ -23,6 +23,7 @@ type persistedIndex struct {
 	Column  string   `json:"column"`
 	Primary bool     `json:"primary"`
 	Columns []string `json:"columns,omitempty"`
+	Unique  bool     `json:"unique,omitempty"`
 }
 
 type persistedTable struct {
