@@ -238,6 +238,9 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
 		if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, false); err != nil {
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
 			return 0, fmt.Errorf("%w: upsert row: %v", ErrExec, err)
 		}
 		affected++

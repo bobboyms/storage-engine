@@ -3,8 +3,65 @@ package sql
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
+
+func TestUniqueConcurrentInsertsSurviveRecovery(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	if _, err := db.Exec(ctx, "CREATE TABLE users (id INT PRIMARY KEY, email VARCHAR UNIQUE)"); err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+
+	// Many writers race to insert the same unique value with distinct PKs.
+	const goroutines = 16
+	var wg sync.WaitGroup
+	var winner int64 = -1
+	var success int64
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			_, err := db.Exec(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", id+1, "race@x.com")
+			if err == nil {
+				atomic.AddInt64(&success, 1)
+				atomic.StoreInt64(&winner, int64(id+1))
+			} else if !errors.Is(err, ErrUniqueViolation) {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if success != 1 {
+		t.Fatalf("successes = %d, want exactly 1", success)
+	}
+	_ = db.Close()
+
+	// After recovery, exactly the one winning row must survive and the unique
+	// value must still be claimed.
+	db2, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("reopen (recovery): %v", err)
+	}
+	defer db2.Close()
+
+	rs, err := db2.Query(ctx, "SELECT id FROM users WHERE email = ?", "race@x.com")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got := intColumn(t, rs, "id"); len(got) != 1 || got[0] != winner {
+		t.Fatalf("survivors = %v, want [%d]", got, winner)
+	}
+	if _, err := db2.Exec(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 999, "race@x.com"); !errors.Is(err, ErrUniqueViolation) {
+		t.Fatalf("expected ErrUniqueViolation after recovery, got %v", err)
+	}
+}
 
 func TestUniqueSurvivesReopenAndStillEnforces(t *testing.T) {
 	dir := t.TempDir()
