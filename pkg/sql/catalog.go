@@ -174,3 +174,19 @@ func (c *Catalog) Table(name string) (*TableSchema, bool) {
 	ts, ok := c.tables[name]
 	return ts, ok
 }
+
+// snapshot returns a deep copy of the registered schemas, used to restore the
+// catalog if a multi-statement migration fails partway through.
+func (c *Catalog) snapshot() map[string]*TableSchema {
+	m := make(map[string]*TableSchema, len(c.tables))
+	for name, ts := range c.tables {
+		cp := cloneSchema(*ts)
+		m[name] = &cp
+	}
+	return m
+}
+
+// restore replaces the catalog's schemas with a previously taken snapshot.
+func (c *Catalog) restore(snapshot map[string]*TableSchema) {
+	c.tables = snapshot
+}

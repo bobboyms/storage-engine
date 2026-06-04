@@ -241,30 +241,44 @@ func (e *Executor) execCreateTable(stmt *CreateTableStmt) (int64, error) {
 	if e.ddl == nil {
 		return 0, fmt.Errorf("%w: CREATE TABLE requires a database opened with OpenDatabase", ErrExec)
 	}
-
-	schema := schemaFromCreate(stmt)
-	if err := schema.validate(); err != nil {
+	created, err := e.applyCreate(stmt)
+	if err != nil {
 		return 0, err
 	}
-	if _, exists := e.catalog.Table(schema.Name); exists {
-		if stmt.IfNotExists {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("%w: %q", ErrDuplicateTable, schema.Name)
+	if !created {
+		return 0, nil // IF NOT EXISTS on an existing table: nothing changed.
 	}
-
-	if err := registerTable(e.ddl.tm, e.ddl.dir, schema, e.ddl.keystore); err != nil {
-		return 0, err
-	}
-	if err := e.catalog.AddTable(schema); err != nil {
-		return 0, err
-	}
-
-	e.ddl.schemas = append(e.ddl.schemas, schema)
 	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
 		return 0, err
 	}
 	return 0, nil
+}
+
+// applyCreate performs the physical and in-memory effects of CREATE TABLE
+// (registering the heap and index, adding the schema to the catalog and schema
+// list) without persisting the schema file. It returns whether a table was
+// actually created (false for an IF NOT EXISTS no-op). Callers persist the
+// schema set themselves, which lets a migration apply several statements and
+// persist once.
+func (e *Executor) applyCreate(stmt *CreateTableStmt) (bool, error) {
+	schema := schemaFromCreate(stmt)
+	if err := schema.validate(); err != nil {
+		return false, err
+	}
+	if _, exists := e.catalog.Table(schema.Name); exists {
+		if stmt.IfNotExists {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: %q", ErrDuplicateTable, schema.Name)
+	}
+	if err := registerTable(e.ddl.tm, e.ddl.dir, schema, e.ddl.keystore); err != nil {
+		return false, err
+	}
+	if err := e.catalog.AddTable(schema); err != nil {
+		return false, err
+	}
+	e.ddl.schemas = append(e.ddl.schemas, schema)
+	return true, nil
 }
 
 // execAlterTable applies an ADD/DROP COLUMN to a table opened via OpenDatabase.
@@ -275,10 +289,23 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 	if e.ddl == nil {
 		return 0, fmt.Errorf("%w: ALTER TABLE requires a database opened with OpenDatabase", ErrExec)
 	}
+	if err := e.applyAlter(stmt); err != nil {
+		return 0, err
+	}
+	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
 
+// applyAlter performs the physical and in-memory effects of an ALTER TABLE
+// (creating/dropping the sidecar index, refreshing the catalog and schema list)
+// without persisting the schema file. See applyCreate for why persistence is
+// the caller's responsibility.
+func (e *Executor) applyAlter(stmt *AlterTableStmt) error {
 	pos, ok := e.ddl.schemaIndex(stmt.Table)
 	if !ok {
-		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
+		return fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
 	schema := e.ddl.schemas[pos]
 
@@ -292,23 +319,20 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 		newSchema, err = e.alterAddColumn(schema, stmt.Column)
 	}
 	if err != nil {
-		return 0, err
+		return err
 	}
-
 	if err := e.catalog.ReplaceTable(newSchema); err != nil {
-		return 0, err
+		return err
 	}
 	e.ddl.schemas[pos] = newSchema
-	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
-		return 0, err
-	}
-	return 0, nil
+	return nil
 }
 
-// alterAddColumn validates and appends a new column (optionally creating a
-// secondary index) to a copy of the schema. The new column starts NULL on every
-// existing row; an index on it is empty until subsequent writes populate it.
-func (e *Executor) alterAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
+// evolveAddColumn computes the schema that results from ADD COLUMN, validating
+// the change without touching any physical or engine state. The new column
+// starts NULL on every existing row; if an index is requested its definition is
+// recorded here and the physical index is created separately.
+func evolveAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
 	if _, exists := schema.Column(col.Name); exists {
 		return TableSchema{}, fmt.Errorf("%w: column %q already exists in table %q", ErrDuplicateColumn, col.Name, schema.Name)
 	}
@@ -319,29 +343,20 @@ func (e *Executor) alterAddColumn(schema TableSchema, col ColumnDef) (TableSchem
 	ns := cloneSchema(schema)
 	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type})
 	if col.Index {
-		if err := e.ddl.tm.AddIndex(schema.Name, storage.Index{Name: col.Name, Type: col.Type}); err != nil {
-			return TableSchema{}, fmt.Errorf("%w: add index for %q: %v", ErrExec, col.Name, err)
-		}
 		ns.Indexes = append(ns.Indexes, IndexDef{Name: col.Name, Column: col.Name})
 	}
 	return ns, nil
 }
 
-// alterDropColumn validates and removes a column (and any secondary index on it)
-// from a copy of the schema. The primary key column cannot be dropped. Existing
-// heap documents keep the orphaned field bytes until they are rewritten.
-func (e *Executor) alterDropColumn(schema TableSchema, name string) (TableSchema, error) {
+// evolveDropColumn computes the schema that results from DROP COLUMN, validating
+// the change without touching any physical or engine state. The primary key
+// column cannot be dropped.
+func evolveDropColumn(schema TableSchema, name string) (TableSchema, error) {
 	if _, exists := schema.Column(name); !exists {
 		return TableSchema{}, fmt.Errorf("%w: unknown column %q in table %q", ErrExec, name, schema.Name)
 	}
 	if pk, ok := schema.PrimaryIndex(); ok && pk.Column == name {
 		return TableSchema{}, fmt.Errorf("%w: cannot drop primary key column %q", ErrExec, name)
-	}
-
-	if idx, ok := schema.IndexForColumn(name); ok {
-		if err := e.ddl.tm.DropIndex(schema.Name, idx.Name); err != nil {
-			return TableSchema{}, fmt.Errorf("%w: drop index %q: %v", ErrExec, idx.Name, err)
-		}
 	}
 
 	ns := TableSchema{Name: schema.Name}
@@ -353,6 +368,37 @@ func (e *Executor) alterDropColumn(schema TableSchema, name string) (TableSchema
 	for _, ix := range schema.Indexes {
 		if ix.Column != name {
 			ns.Indexes = append(ns.Indexes, ix)
+		}
+	}
+	return ns, nil
+}
+
+// alterAddColumn evolves the schema and creates the sidecar index, if any.
+// Existing heap documents keep their bytes; the index on the new column is empty
+// until subsequent writes populate it.
+func (e *Executor) alterAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
+	ns, err := evolveAddColumn(schema, col)
+	if err != nil {
+		return TableSchema{}, err
+	}
+	if col.Index {
+		if err := e.ddl.tm.AddIndex(schema.Name, storage.Index{Name: col.Name, Type: col.Type}); err != nil {
+			return TableSchema{}, fmt.Errorf("%w: add index for %q: %v", ErrExec, col.Name, err)
+		}
+	}
+	return ns, nil
+}
+
+// alterDropColumn evolves the schema and drops any secondary index on the
+// column. Existing heap documents keep the orphaned field bytes until rewritten.
+func (e *Executor) alterDropColumn(schema TableSchema, name string) (TableSchema, error) {
+	ns, err := evolveDropColumn(schema, name)
+	if err != nil {
+		return TableSchema{}, err
+	}
+	if idx, ok := schema.IndexForColumn(name); ok {
+		if err := e.ddl.tm.DropIndex(schema.Name, idx.Name); err != nil {
+			return TableSchema{}, fmt.Errorf("%w: drop index %q: %v", ErrExec, idx.Name, err)
 		}
 	}
 	return ns, nil
