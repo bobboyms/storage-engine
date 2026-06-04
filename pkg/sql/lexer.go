@@ -59,6 +59,7 @@ var keywords = map[string]struct{}{
 	"JOIN": {}, "ON": {}, "INNER": {}, "LEFT": {}, "OUTER": {}, "EXISTS": {},
 	"CREATE": {}, "TABLE": {}, "PRIMARY": {}, "KEY": {}, "INDEX": {},
 	"ALTER": {}, "ADD": {}, "DROP": {}, "COLUMN": {}, "IF": {},
+	"DESCRIBE": {},
 }
 
 // Lex tokenizes input into a slice of tokens terminated by a TokenEOF token.

@@ -56,11 +56,14 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 	if err != nil {
 		return nil, err
 	}
-	sel, ok := stmt.(*SelectStmt)
-	if !ok {
-		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
+	switch s := stmt.(type) {
+	case *SelectStmt:
+		return e.execSelect(ctx, s, nil)
+	case *DescribeStmt:
+		return e.execDescribe(s)
+	default:
+		return nil, fmt.Errorf("%w: Query expects a SELECT or DESCRIBE statement", ErrExec)
 	}
-	return e.execSelect(ctx, sel, nil)
 }
 
 // execSelect executes a parsed SELECT. Queries with joins or a derived FROM

@@ -157,6 +157,14 @@ type AlterTableStmt struct {
 
 func (*AlterTableStmt) stmtNode() {}
 
+// DescribeStmt represents DESCRIBE name (or its DESC alias): a read-only
+// introspection statement that returns the columns of a table.
+type DescribeStmt struct {
+	Table string
+}
+
+func (*DescribeStmt) stmtNode() {}
+
 // Expr is a WHERE-clause expression node.
 type Expr interface {
 	// String returns a canonical, fully parenthesized representation.

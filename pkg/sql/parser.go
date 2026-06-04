@@ -79,6 +79,8 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseCreateTable()
 	case "ALTER":
 		return p.parseAlterTable()
+	case "DESCRIBE", "DESC":
+		return p.parseDescribe()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
 	}
@@ -168,6 +170,15 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
 	}
 	return stmt, nil
+}
+
+func (p *parser) parseDescribe() (*DescribeStmt, error) {
+	// The dispatching keyword is DESCRIBE or its DESC alias.
+	p.next()
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	return &DescribeStmt{Table: p.next().Literal}, nil
 }
 
 func (p *parser) parseColumnDef() (ColumnDef, error) {
