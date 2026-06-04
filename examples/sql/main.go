@@ -1,7 +1,8 @@
 // Command sql demonstrates the SQL layer (pkg/sql) built on top of the storage
-// engine: schema catalog, SELECT with the supported operators, aggregates and
-// GROUP BY/HAVING, INNER/LEFT JOINs, FROM and predicate subqueries, DML, and an
-// explicit transaction with read-your-writes.
+// engine: a database opened on a directory, schema defined with CREATE TABLE,
+// SELECT with the supported operators, aggregates and GROUP BY/HAVING,
+// INNER/LEFT JOINs, FROM and predicate subqueries, DML, and an explicit
+// transaction with read-your-writes.
 package main
 
 import (
@@ -9,13 +10,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/sql"
-	"github.com/bobboyms/storage-engine/pkg/storage"
-	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
 func main() {
@@ -25,12 +22,12 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	engine := setupEngine(dir)
-	defer engine.Close()
-
-	catalog := setupCatalog()
-	exec := sql.NewExecutor(engine, catalog, bsoncodec.New())
 	ctx := context.Background()
+	exec, err := sql.OpenDatabase(ctx, dir)
+	if err != nil {
+		log.Fatalf("open database: %v", err)
+	}
+	defer exec.Close()
 
 	seed(ctx, exec)
 
@@ -85,84 +82,20 @@ func transactionDemo(ctx context.Context, exec *sql.Executor) {
 	fmt.Printf("after commit, id=5 visible: %d row(s)\n", len(committed.Rows))
 }
 
-func setupEngine(dir string) *storage.StorageEngine {
-	usersHeap, err := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(dir, "users.heap"))
-	if err != nil {
-		log.Fatalf("users heap: %v", err)
-	}
-	ordersHeap, err := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(dir, "orders.heap"))
-	if err != nil {
-		log.Fatalf("orders heap: %v", err)
-	}
-
-	tm := storage.NewTableMenager()
-	if err := tm.NewTable("users", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-		{Name: "age", Type: storage.TypeInt},
-	}, 3, usersHeap); err != nil {
-		log.Fatalf("create users: %v", err)
-	}
-	if err := tm.NewTable("orders", []storage.Index{
-		{Name: "id", Primary: true, Type: storage.TypeInt},
-		{Name: "user_id", Type: storage.TypeInt},
-	}, 3, ordersHeap); err != nil {
-		log.Fatalf("create orders: %v", err)
-	}
-
-	walWriter, err := wal.NewWALWriter(filepath.Join(dir, "data.wal"), wal.DefaultOptions())
-	if err != nil {
-		log.Fatalf("wal: %v", err)
-	}
-	engine, err := storage.NewStorageEngine(tm, walWriter)
-	if err != nil {
-		log.Fatalf("engine: %v", err)
-	}
-	return engine
-}
-
-// setupCatalog describes the tables to the SQL layer so column names and types
-// resolve to engine indexes and key types.
-func setupCatalog() *sql.Catalog {
-	c := sql.NewCatalog()
-	must(c.AddTable(sql.TableSchema{
-		Name: "users",
-		Columns: []sql.Column{
-			{Name: "id", Type: storage.TypeInt},
-			{Name: "name", Type: storage.TypeVarchar},
-			{Name: "age", Type: storage.TypeInt},
-		},
-		Indexes: []sql.IndexDef{
-			{Name: "id", Column: "id", Primary: true},
-			{Name: "age", Column: "age"},
-		},
-	}))
-	must(c.AddTable(sql.TableSchema{
-		Name: "orders",
-		Columns: []sql.Column{
-			{Name: "id", Type: storage.TypeInt},
-			{Name: "user_id", Type: storage.TypeInt},
-			{Name: "amount", Type: storage.TypeInt},
-		},
-		Indexes: []sql.IndexDef{
-			{Name: "id", Column: "id", Primary: true},
-			{Name: "user_id", Column: "user_id"},
-		},
-	}))
-	return c
-}
-
+// seed defines the schema with CREATE TABLE and inserts the sample rows, all
+// through SQL — no Go table setup is needed.
 func seed(ctx context.Context, exec *sql.Executor) {
-	users := []string{
+	stmts := []string{
+		"CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR, age INT INDEX)",
+		"CREATE TABLE orders (id INT PRIMARY KEY, user_id INT INDEX, amount INT)",
 		"INSERT INTO users (id, name, age) VALUES (1, 'alice', 30)",
 		"INSERT INTO users (id, name, age) VALUES (2, 'bob', 25)",
 		"INSERT INTO users (id, name, age) VALUES (3, 'carol', 40)",
-	}
-	orders := []string{
 		"INSERT INTO orders (id, user_id, amount) VALUES (1, 1, 100)",
 		"INSERT INTO orders (id, user_id, amount) VALUES (2, 1, 50)",
 		"INSERT INTO orders (id, user_id, amount) VALUES (3, 2, 200)",
 	}
-	for _, q := range append(users, orders...) {
+	for _, q := range stmts {
 		if _, err := exec.Exec(ctx, q); err != nil {
 			log.Fatalf("seed %q: %v", q, err)
 		}
@@ -188,11 +121,5 @@ func run(ctx context.Context, exec *sql.Executor, query string) {
 			cells[i] = fmt.Sprintf("%v", v)
 		}
 		fmt.Printf("  %s\n", strings.Join(cells, " | "))
-	}
-}
-
-func must(err error) {
-	if err != nil {
-		log.Fatalf("setup: %v", err)
 	}
 }
