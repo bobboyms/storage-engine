@@ -77,6 +77,8 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseDelete()
 	case "CREATE":
 		return p.parseCreateTable()
+	case "ALTER":
+		return p.parseAlterTable()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
 	}
@@ -115,6 +117,45 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 		return nil, fmt.Errorf("%w: expected ) after column definitions, got %q", ErrParse, p.peek().Literal)
 	}
 	p.next()
+	return stmt, nil
+}
+
+func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
+	if err := p.expectKeyword("ALTER"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TABLE"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt := &AlterTableStmt{Table: p.next().Literal}
+
+	switch {
+	case p.isKeyword("ADD"):
+		p.next()
+		if p.isKeyword("COLUMN") {
+			p.next()
+		}
+		col, err := p.parseColumnDef()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Column = col
+	case p.isKeyword("DROP"):
+		p.next()
+		if p.isKeyword("COLUMN") {
+			p.next()
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+		}
+		stmt.Drop = true
+		stmt.Column = ColumnDef{Name: p.next().Literal}
+	default:
+		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
+	}
 	return stmt, nil
 }
 

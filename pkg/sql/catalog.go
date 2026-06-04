@@ -150,6 +150,21 @@ func (c *Catalog) AddTable(schema TableSchema) error {
 	return nil
 }
 
+// ReplaceTable validates and replaces an already-registered table schema. It
+// returns ErrInvalidSchema when the schema is malformed and ErrExec when no
+// table with that name exists. Used by ALTER TABLE to swap in an evolved schema.
+func (c *Catalog) ReplaceTable(schema TableSchema) error {
+	if err := schema.validate(); err != nil {
+		return err
+	}
+	if _, exists := c.tables[schema.Name]; !exists {
+		return fmt.Errorf("%w: unknown table %q", ErrExec, schema.Name)
+	}
+	stored := schema
+	c.tables[schema.Name] = &stored
+	return nil
+}
+
 // Table returns the schema registered under name and whether it exists.
 func (c *Catalog) Table(name string) (*TableSchema, bool) {
 	ts, ok := c.tables[name]

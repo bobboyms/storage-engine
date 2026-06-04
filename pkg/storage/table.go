@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -300,6 +301,86 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 		Heap:    hm,
 	}
 
+	return nil
+}
+
+// AddIndex builds and registers a new secondary index on an existing table.
+// The sidecar BTreeV2 is created exactly like NewTable does for secondary
+// indexes, inheriting the manager's default index cipher so TDE-enabled
+// databases keep encrypting their indexes. Primary indexes cannot be added to
+// a table that already has one.
+func (tb *TableMetaData) AddIndex(tableName string, idx Index) error {
+	if idx.Primary {
+		return fmt.Errorf("storage: cannot add a primary index to existing table %q", tableName)
+	}
+
+	tb.mu.RLock()
+	table, ok := tb.tables[tableName]
+	cipher := tb.defaultIndexCipher
+	tb.mu.RUnlock()
+	if !ok {
+		return &errors.TableNotFoundError{Name: tableName}
+	}
+
+	table.mu.Lock()
+	defer table.mu.Unlock()
+
+	if _, exists := table.Indices[idx.Name]; exists {
+		return fmt.Errorf("storage: index %q already exists on table %q", idx.Name, tableName)
+	}
+	if _, ok := table.Heap.(*v2.HeapV2); !ok {
+		return fmt.Errorf("storage: legacy heap is no longer supported; use NewHeapForTable(HeapFormatV2, ...)")
+	}
+
+	treePath := defaultV2IndexPath(table.Heap.Path(), tableName, idx.Name)
+	tree, err := btreev2.NewBTreeV2Varchar(treePath, 16, cipher, btreev2.CompositeKeyCodec{})
+	if err != nil {
+		return err
+	}
+
+	table.Indices[idx.Name] = &Index{
+		Name:    idx.Name,
+		Primary: false,
+		Type:    idx.Type,
+		Tree:    tree,
+	}
+	return nil
+}
+
+// DropIndex detaches a secondary index from a table, closes its B+ tree, and
+// deletes the backing file. Primary indexes back the table's heap access path
+// and cannot be dropped.
+func (tb *TableMetaData) DropIndex(tableName, indexName string) error {
+	table, err := tb.GetTableByName(tableName)
+	if err != nil {
+		return err
+	}
+
+	table.mu.Lock()
+	defer table.mu.Unlock()
+
+	idx, ok := table.Indices[indexName]
+	if !ok {
+		return &errors.IndexNotFoundError{Name: indexName}
+	}
+	if idx.Primary {
+		return fmt.Errorf("storage: cannot drop primary index %q on table %q", indexName, tableName)
+	}
+
+	var path string
+	if treeV2, ok := idx.Tree.(*btreev2.BTreeV2); ok {
+		path = treeV2.Path()
+	}
+	if err := idx.Tree.Close(); err != nil {
+		return err
+	}
+	delete(table.Indices, indexName)
+
+	if path != "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 	return nil
 }
 

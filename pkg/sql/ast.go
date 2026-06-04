@@ -143,6 +143,17 @@ type CreateTableStmt struct {
 
 func (*CreateTableStmt) stmtNode() {}
 
+// AlterTableStmt represents ALTER TABLE name ADD/DROP COLUMN. Drop selects the
+// action: false adds Column (a full definition, optionally a secondary index);
+// true drops the column named by Column.Name.
+type AlterTableStmt struct {
+	Table  string
+	Drop   bool
+	Column ColumnDef
+}
+
+func (*AlterTableStmt) stmtNode() {}
+
 // Expr is a WHERE-clause expression node.
 type Expr interface {
 	// String returns a canonical, fully parenthesized representation.

@@ -26,8 +26,10 @@ func (e *Executor) Exec(ctx context.Context, query string) (int64, error) {
 		return e.execDelete(ctx, s)
 	case *CreateTableStmt:
 		return e.execCreateTable(s)
+	case *AlterTableStmt:
+		return e.execAlterTable(s)
 	default:
-		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, DELETE, or CREATE TABLE", ErrExec)
+		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, DELETE, CREATE TABLE, or ALTER TABLE", ErrExec)
 	}
 }
 

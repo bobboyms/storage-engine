@@ -264,6 +264,116 @@ func (e *Executor) execCreateTable(stmt *CreateTableStmt) (int64, error) {
 	return 0, nil
 }
 
+// execAlterTable applies an ADD/DROP COLUMN to a table opened via OpenDatabase.
+// It mutates the engine (creating or dropping a sidecar index), refreshes the
+// in-memory catalog, and persists the evolved schema so the change survives a
+// reopen.
+func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
+	if e.ddl == nil {
+		return 0, fmt.Errorf("%w: ALTER TABLE requires a database opened with OpenDatabase", ErrExec)
+	}
+
+	pos, ok := e.ddl.schemaIndex(stmt.Table)
+	if !ok {
+		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
+	}
+	schema := e.ddl.schemas[pos]
+
+	var (
+		newSchema TableSchema
+		err       error
+	)
+	if stmt.Drop {
+		newSchema, err = e.alterDropColumn(schema, stmt.Column.Name)
+	} else {
+		newSchema, err = e.alterAddColumn(schema, stmt.Column)
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	if err := e.catalog.ReplaceTable(newSchema); err != nil {
+		return 0, err
+	}
+	e.ddl.schemas[pos] = newSchema
+	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
+// alterAddColumn validates and appends a new column (optionally creating a
+// secondary index) to a copy of the schema. The new column starts NULL on every
+// existing row; an index on it is empty until subsequent writes populate it.
+func (e *Executor) alterAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
+	if _, exists := schema.Column(col.Name); exists {
+		return TableSchema{}, fmt.Errorf("%w: column %q already exists in table %q", ErrExec, col.Name, schema.Name)
+	}
+	if col.Primary {
+		return TableSchema{}, fmt.Errorf("%w: cannot add a primary key column to table %q", ErrExec, schema.Name)
+	}
+
+	ns := cloneSchema(schema)
+	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type})
+	if col.Index {
+		if err := e.ddl.tm.AddIndex(schema.Name, storage.Index{Name: col.Name, Type: col.Type}); err != nil {
+			return TableSchema{}, fmt.Errorf("%w: add index for %q: %v", ErrExec, col.Name, err)
+		}
+		ns.Indexes = append(ns.Indexes, IndexDef{Name: col.Name, Column: col.Name})
+	}
+	return ns, nil
+}
+
+// alterDropColumn validates and removes a column (and any secondary index on it)
+// from a copy of the schema. The primary key column cannot be dropped. Existing
+// heap documents keep the orphaned field bytes until they are rewritten.
+func (e *Executor) alterDropColumn(schema TableSchema, name string) (TableSchema, error) {
+	if _, exists := schema.Column(name); !exists {
+		return TableSchema{}, fmt.Errorf("%w: unknown column %q in table %q", ErrExec, name, schema.Name)
+	}
+	if pk, ok := schema.PrimaryIndex(); ok && pk.Column == name {
+		return TableSchema{}, fmt.Errorf("%w: cannot drop primary key column %q", ErrExec, name)
+	}
+
+	if idx, ok := schema.IndexForColumn(name); ok {
+		if err := e.ddl.tm.DropIndex(schema.Name, idx.Name); err != nil {
+			return TableSchema{}, fmt.Errorf("%w: drop index %q: %v", ErrExec, idx.Name, err)
+		}
+	}
+
+	ns := TableSchema{Name: schema.Name}
+	for _, c := range schema.Columns {
+		if c.Name != name {
+			ns.Columns = append(ns.Columns, c)
+		}
+	}
+	for _, ix := range schema.Indexes {
+		if ix.Column != name {
+			ns.Indexes = append(ns.Indexes, ix)
+		}
+	}
+	return ns, nil
+}
+
+// cloneSchema returns a deep copy of s so callers can mutate the column and
+// index slices without aliasing the original.
+func cloneSchema(s TableSchema) TableSchema {
+	ns := TableSchema{Name: s.Name}
+	ns.Columns = append(ns.Columns, s.Columns...)
+	ns.Indexes = append(ns.Indexes, s.Indexes...)
+	return ns
+}
+
+// schemaIndex returns the position of the named schema in d.schemas.
+func (d *ddlManager) schemaIndex(name string) (int, bool) {
+	for i := range d.schemas {
+		if d.schemas[i].Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 // schemaFromCreate converts a parsed CREATE TABLE into a catalog schema.
 func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 	schema := TableSchema{Name: stmt.Table}
