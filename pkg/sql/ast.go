@@ -216,6 +216,45 @@ type AggregateExpr struct {
 func (e *AggregateExpr) String() string { return e.Call.canonicalName() }
 func (*AggregateExpr) exprNode()        {}
 
+// ScalarSubquery is a parenthesized SELECT used as a value operand; it must
+// yield a single row and column at evaluation time.
+type ScalarSubquery struct {
+	Select *SelectStmt
+}
+
+func (e *ScalarSubquery) String() string { return "(scalar subquery)" }
+func (*ScalarSubquery) exprNode()        {}
+
+// InSubqueryExpr is "operand [NOT] IN (SELECT ...)".
+type InSubqueryExpr struct {
+	Operand Expr
+	Select  *SelectStmt
+	Negate  bool
+}
+
+func (e *InSubqueryExpr) String() string {
+	op := "IN"
+	if e.Negate {
+		op = "NOT IN"
+	}
+	return "(" + e.Operand.String() + " " + op + " (subquery))"
+}
+func (*InSubqueryExpr) exprNode() {}
+
+// ExistsExpr is "[NOT] EXISTS (SELECT ...)".
+type ExistsExpr struct {
+	Select *SelectStmt
+	Negate bool
+}
+
+func (e *ExistsExpr) String() string {
+	if e.Negate {
+		return "(NOT EXISTS (subquery))"
+	}
+	return "(EXISTS (subquery))"
+}
+func (*ExistsExpr) exprNode() {}
+
 // BinaryExpr is a comparison (= <> != < <= > >=) or a logical connective
 // (AND, OR) joining two sub-expressions.
 type BinaryExpr struct {

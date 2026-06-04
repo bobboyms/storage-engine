@@ -20,13 +20,17 @@ type source struct {
 // subqueries. Each source (base table, derived table, or joined source) is
 // materialized into rows, combined with nested-loop joins honoring each ON
 // predicate, then filtered, grouped, ordered, and projected.
-func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
+func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt, ec *evalContext) (*ResultSet, error) {
 	sources, err := e.buildSources(ctx, sel)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFromColumns(sel, sources); err != nil {
-		return nil, err
+	// Skip strict column validation when correlated: outer references are
+	// resolved at evaluation time.
+	if ec == nil || ec.outer == nil {
+		if err := validateFromColumns(sel, sources); err != nil {
+			return nil, err
+		}
 	}
 
 	unique := uniqueSourceColumns(sources)
@@ -37,19 +41,19 @@ func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt) (*ResultSet, 
 	rows := sources[0].rows
 	for i, jc := range sel.Joins {
 		right := sources[i+1]
-		rows, err = nestedLoopJoin(rows, right.rows, jc.On, jc.Left, nullSourceRow(right, unique))
+		rows, err = nestedLoopJoin(rows, right.rows, jc.On, jc.Left, nullSourceRow(right, unique), ec)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	rows, err = filterRows(rows, sel.Where)
+	rows, err = filterRows(rows, sel.Where, ec)
 	if err != nil {
 		return nil, err
 	}
 
 	if isGrouped(sel) {
-		return groupedResultSet(sel, rows)
+		return groupedResultSet(sel, rows, ec)
 	}
 	if sel.OrderBy != nil {
 		sortRows(rows, sel.OrderBy)
@@ -91,7 +95,7 @@ func (e *Executor) buildSources(ctx context.Context, sel *SelectStmt) ([]source,
 // scanned with qualified keys.
 func (e *Executor) sourceFor(ctx context.Context, table string, sub *SelectStmt, alias string) (source, error) {
 	if sub != nil {
-		rs, err := e.execSelect(ctx, sub)
+		rs, err := e.execSelect(ctx, sub, nil)
 		if err != nil {
 			return source{}, err
 		}
@@ -187,13 +191,13 @@ func addBareKeys(s source, unique map[string]bool) {
 // LEFT join, a left row with no matching right row is emitted once with the
 // right side's columns set to NULL (via rightNull) so WHERE and projection see
 // explicit NULLs rather than missing keys.
-func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool, rightNull Row) ([]Row, error) {
+func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool, rightNull Row, ec *evalContext) ([]Row, error) {
 	var out []Row
 	for _, l := range left {
 		matched := false
 		for _, r := range right {
 			merged := mergeRows(l, r)
-			ok, err := Evaluate(on, merged)
+			ok, err := evaluate(on, merged, ec)
 			if err != nil {
 				return nil, err
 			}
@@ -233,13 +237,13 @@ func nullSourceRow(s source, unique map[string]bool) Row {
 	return row
 }
 
-func filterRows(rows []Row, where Expr) ([]Row, error) {
+func filterRows(rows []Row, where Expr, ec *evalContext) ([]Row, error) {
 	if where == nil {
 		return rows, nil
 	}
 	out := rows[:0:0]
 	for _, row := range rows {
-		keep, err := Evaluate(where, row)
+		keep, err := evaluate(where, row, ec)
 		if err != nil {
 			return nil, err
 		}

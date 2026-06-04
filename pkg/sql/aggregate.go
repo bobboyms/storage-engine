@@ -71,7 +71,7 @@ func isGrouped(sel *SelectStmt) bool {
 // validates that every bare projection column is a grouping column, computes
 // the aggregates appearing in the projection and HAVING per group, filters by
 // HAVING, then orders, limits, and projects.
-func groupedResultSet(sel *SelectStmt, rows []Row) (*ResultSet, error) {
+func groupedResultSet(sel *SelectStmt, rows []Row, ec *evalContext) (*ResultSet, error) {
 	groupSet := make(map[string]struct{}, len(sel.GroupBy))
 	for _, g := range sel.GroupBy {
 		groupSet[g] = struct{}{}
@@ -105,7 +105,7 @@ func groupedResultSet(sel *SelectStmt, rows []Row) (*ResultSet, error) {
 			gRow[a.canonicalName()] = v
 		}
 		if sel.Having != nil {
-			keep, err := Evaluate(sel.Having, gRow)
+			keep, err := evaluate(sel.Having, gRow, ec)
 			if err != nil {
 				return nil, err
 			}

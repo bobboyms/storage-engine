@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -13,46 +14,61 @@ var ErrEval = errors.New("sql: eval error")
 // Row is a decoded row: a mapping from column name to its typed value.
 type Row = map[string]types.Comparable
 
-// Evaluate evaluates a boolean WHERE expression against a row. Comparisons
-// involving NULL (on either side) yield false, mirroring SQL's three-valued
-// logic where UNKNOWN is filtered out. It returns an error wrapping ErrEval
-// for unknown columns, incompatible operand types, or a non-boolean
-// expression.
+// evalContext carries what a predicate needs to evaluate subqueries and
+// correlated references: the executor and request context to run a subquery,
+// and the merged outer row whose columns an inner query may reference. It is
+// nil where subqueries are not supported (e.g. DML and transactional reads).
+type evalContext struct {
+	exec  *Executor
+	ctx   context.Context
+	outer Row
+}
+
+// Evaluate evaluates a boolean WHERE expression against a row without subquery
+// support. Comparisons involving NULL yield false (SQL three-valued logic).
 func Evaluate(expr Expr, row Row) (bool, error) {
-	if isNullExpr, ok := expr.(*IsNullExpr); ok {
-		return evalIsNull(isNullExpr, row)
-	}
-	be, ok := expr.(*BinaryExpr)
-	if !ok {
-		return false, fmt.Errorf("%w: expression %s is not a boolean predicate", ErrEval, expr.String())
-	}
-	switch be.Op {
-	case "AND", "OR":
-		left, err := Evaluate(be.Left, row)
-		if err != nil {
-			return false, err
+	return evaluate(expr, row, nil)
+}
+
+func evaluate(expr Expr, row Row, ec *evalContext) (bool, error) {
+	switch e := expr.(type) {
+	case *IsNullExpr:
+		return evalIsNull(e, row, ec)
+	case *ExistsExpr:
+		return evalExists(e, row, ec)
+	case *InSubqueryExpr:
+		return evalInSubquery(e, row, ec)
+	case *BinaryExpr:
+		switch e.Op {
+		case "AND", "OR":
+			left, err := evaluate(e.Left, row, ec)
+			if err != nil {
+				return false, err
+			}
+			right, err := evaluate(e.Right, row, ec)
+			if err != nil {
+				return false, err
+			}
+			if e.Op == "AND" {
+				return left && right, nil
+			}
+			return left || right, nil
+		case "LIKE", "NOT LIKE":
+			return evalLike(e, row, ec)
+		default:
+			return evalComparison(e, row, ec)
 		}
-		right, err := Evaluate(be.Right, row)
-		if err != nil {
-			return false, err
-		}
-		if be.Op == "AND" {
-			return left && right, nil
-		}
-		return left || right, nil
-	case "LIKE", "NOT LIKE":
-		return evalLike(be, row)
 	default:
-		return evalComparison(be, row)
+		return false, fmt.Errorf("%w: expression %s is not a boolean predicate", ErrEval, expr.String())
 	}
 }
 
-func evalIsNull(e *IsNullExpr, row Row) (bool, error) {
-	val, isCol, err := resolveColumn(e.Operand, row)
+func evalIsNull(e *IsNullExpr, row Row, ec *evalContext) (bool, error) {
+	val, isRef, err := resolveColumn(e.Operand, row, ec)
 	if err != nil {
 		return false, err
 	}
-	if !isCol {
+	if !isRef {
 		if val, err = resolveLiteral(e.Operand, nil); err != nil {
 			return false, err
 		}
@@ -65,30 +81,30 @@ func evalIsNull(e *IsNullExpr, row Row) (bool, error) {
 }
 
 // resolveOperands resolves both sides of a binary predicate to typed values,
-// coercing a literal operand to the concrete type of the column operand.
-func resolveOperands(be *BinaryExpr, row Row) (lv, rv types.Comparable, err error) {
-	var lIsCol, rIsCol bool
-	lv, lIsCol, err = resolveColumn(be.Left, row)
+// coercing a literal operand to the concrete type of the reference operand.
+func resolveOperands(be *BinaryExpr, row Row, ec *evalContext) (lv, rv types.Comparable, err error) {
+	var lIsRef, rIsRef bool
+	lv, lIsRef, err = resolveColumn(be.Left, row, ec)
 	if err != nil {
 		return nil, nil, err
 	}
-	rv, rIsCol, err = resolveColumn(be.Right, row)
+	rv, rIsRef, err = resolveColumn(be.Right, row, ec)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if !lIsCol {
+	if !lIsRef {
 		var hint types.Comparable
-		if rIsCol {
+		if rIsRef {
 			hint = rv
 		}
 		if lv, err = resolveLiteral(be.Left, hint); err != nil {
 			return nil, nil, err
 		}
 	}
-	if !rIsCol {
+	if !rIsRef {
 		var hint types.Comparable
-		if lIsCol {
+		if lIsRef {
 			hint = lv
 		}
 		if rv, err = resolveLiteral(be.Right, hint); err != nil {
@@ -98,8 +114,8 @@ func resolveOperands(be *BinaryExpr, row Row) (lv, rv types.Comparable, err erro
 	return lv, rv, nil
 }
 
-func evalComparison(be *BinaryExpr, row Row) (bool, error) {
-	lv, rv, err := resolveOperands(be, row)
+func evalComparison(be *BinaryExpr, row Row, ec *evalContext) (bool, error) {
+	lv, rv, err := resolveOperands(be, row, ec)
 	if err != nil {
 		return false, err
 	}
@@ -131,26 +147,124 @@ func evalComparison(be *BinaryExpr, row Row) (bool, error) {
 	}
 }
 
-// resolveColumn returns the row value for a column or aggregate operand. The
-// boolean reports whether expr was such a reference (vs. a literal). Aggregate
-// references resolve by their canonical name against a per-group row.
-func resolveColumn(expr Expr, row Row) (types.Comparable, bool, error) {
+// resolveColumn returns the value for a reference operand (column, aggregate, or
+// scalar subquery). The boolean reports whether expr was such a reference (vs. a
+// literal). Column and aggregate references resolve against the row, falling
+// back to the correlated outer row; a scalar subquery is executed.
+func resolveColumn(expr Expr, row Row, ec *evalContext) (types.Comparable, bool, error) {
 	switch e := expr.(type) {
 	case *ColumnRef:
-		v, ok := row[e.String()]
+		v, ok := lookupRow(row, ec, e.String())
 		if !ok {
 			return nil, true, fmt.Errorf("%w: unknown column %q", ErrEval, e.String())
 		}
 		return v, true, nil
 	case *AggregateExpr:
-		v, ok := row[e.Call.canonicalName()]
+		v, ok := lookupRow(row, ec, e.Call.canonicalName())
 		if !ok {
 			return nil, true, fmt.Errorf("%w: aggregate %q not available here", ErrEval, e.Call.canonicalName())
 		}
 		return v, true, nil
+	case *ScalarSubquery:
+		v, err := runScalarSubquery(e, row, ec)
+		return v, true, err
 	default:
 		return nil, false, nil
 	}
+}
+
+// lookupRow resolves a key in the current row, then in the correlated outer row.
+func lookupRow(row Row, ec *evalContext, key string) (types.Comparable, bool) {
+	if v, ok := row[key]; ok {
+		return v, true
+	}
+	if ec != nil && ec.outer != nil {
+		if v, ok := ec.outer[key]; ok {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// runSubquery executes a subquery correlated with the current row merged over
+// any existing outer row.
+func runSubquery(sub *SelectStmt, row Row, ec *evalContext) (*ResultSet, error) {
+	if ec == nil || ec.exec == nil {
+		return nil, fmt.Errorf("%w: subqueries are not supported in this context", ErrEval)
+	}
+	outer := mergeRows(ec.outer, row)
+	return ec.exec.execSelect(ec.ctx, sub, outer)
+}
+
+func runScalarSubquery(e *ScalarSubquery, row Row, ec *evalContext) (types.Comparable, error) {
+	rs, err := runSubquery(e.Select, row, ec)
+	if err != nil {
+		return nil, err
+	}
+	if len(rs.Columns) != 1 {
+		return nil, fmt.Errorf("%w: scalar subquery must return exactly one column", ErrEval)
+	}
+	switch len(rs.Rows) {
+	case 0:
+		return types.NullKey{}, nil
+	case 1:
+		return rs.Rows[0][0], nil
+	default:
+		return nil, fmt.Errorf("%w: scalar subquery returned %d rows, expected at most one", ErrEval, len(rs.Rows))
+	}
+}
+
+func evalExists(e *ExistsExpr, row Row, ec *evalContext) (bool, error) {
+	rs, err := runSubquery(e.Select, row, ec)
+	if err != nil {
+		return false, err
+	}
+	exists := len(rs.Rows) > 0
+	if e.Negate {
+		return !exists, nil
+	}
+	return exists, nil
+}
+
+func evalInSubquery(e *InSubqueryExpr, row Row, ec *evalContext) (bool, error) {
+	left, isRef, err := resolveColumn(e.Operand, row, ec)
+	if err != nil {
+		return false, err
+	}
+	if !isRef {
+		if left, err = resolveLiteral(e.Operand, nil); err != nil {
+			return false, err
+		}
+	}
+	rs, err := runSubquery(e.Select, row, ec)
+	if err != nil {
+		return false, err
+	}
+	if len(rs.Columns) != 1 {
+		return false, fmt.Errorf("%w: IN subquery must return exactly one column", ErrEval)
+	}
+	if isNull(left) {
+		return false, nil
+	}
+	found := false
+	for _, r := range rs.Rows {
+		v := r[0]
+		if isNull(v) {
+			continue
+		}
+		cmp, err := left.Compare(v)
+		if err != nil {
+			return false, fmt.Errorf("%w: IN comparison failed: %v", ErrEval, err)
+		}
+		if cmp == 0 {
+			found = true
+			break
+		}
+	}
+	if e.Negate {
+		return !found, nil
+	}
+	return found, nil
 }
 
 // resolveLiteral converts a literal operand to a Comparable, coercing it to the
@@ -220,8 +334,8 @@ func isNull(v types.Comparable) bool {
 // evalLike evaluates a LIKE / NOT LIKE predicate. Both operands must be text;
 // a NULL on either side yields false (UNKNOWN). The pattern uses SQL wildcards:
 // % matches any run of characters and _ matches exactly one.
-func evalLike(be *BinaryExpr, row Row) (bool, error) {
-	lv, rv, err := resolveOperands(be, row)
+func evalLike(be *BinaryExpr, row Row, ec *evalContext) (bool, error) {
+	lv, rv, err := resolveOperands(be, row, ec)
 	if err != nil {
 		return false, err
 	}

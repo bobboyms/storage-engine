@@ -45,15 +45,19 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 	if !ok {
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
-	return e.execSelect(ctx, sel)
+	return e.execSelect(ctx, sel, nil)
 }
 
 // execSelect executes a parsed SELECT. Queries with joins or a derived FROM
 // subquery go through the generalized source pipeline; a plain single-table
-// query uses the index-aware fast path.
-func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
+// query uses the index-aware fast path. outer is the correlated row from an
+// enclosing query (nil at the top level), whose columns inner predicates may
+// reference.
+func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (*ResultSet, error) {
+	ec := &evalContext{exec: e, ctx: ctx, outer: outer}
+
 	if len(sel.Joins) > 0 || sel.Subquery != nil {
-		return e.queryFrom(ctx, sel)
+		return e.queryFrom(ctx, sel, ec)
 	}
 
 	schema, ok := e.catalog.Table(sel.Table)
@@ -61,18 +65,18 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet,
 		return nil, fmt.Errorf("%w: unknown table %q", ErrExec, sel.Table)
 	}
 
-	plan, err := Plan(sel, schema)
+	plan, err := planSelect(sel, schema, outer != nil)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := e.scanRows(ctx, schema, sel.Alias, plan)
+	rows, err := e.scanRows(ctx, schema, sel.Alias, plan, ec)
 	if err != nil {
 		return nil, err
 	}
 
 	if isGrouped(sel) {
-		return groupedResultSet(sel, rows)
+		return groupedResultSet(sel, rows, ec)
 	}
 
 	if plan.NeedsSort {
@@ -83,9 +87,28 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet,
 	return projectRows(rows, expandProjection(sel.Items, schema)), nil
 }
 
+// planSelect plans a single-table SELECT. When correlated (a column may refer
+// to an outer query), column validation is skipped and a full scan is used,
+// since outer references are resolved at evaluation time.
+func planSelect(sel *SelectStmt, schema *TableSchema, correlated bool) (*QueryPlan, error) {
+	if !correlated {
+		return Plan(sel, schema)
+	}
+	pk, ok := schema.PrimaryIndex()
+	if !ok {
+		return nil, fmt.Errorf("%w: table %q has no primary index", ErrPlan, schema.Name)
+	}
+	plan := &QueryPlan{TableName: schema.Name, IndexName: pk.Name, Column: pk.Column, Residual: sel.Where}
+	if sel.OrderBy != nil && (sel.OrderBy.Column != pk.Column || sel.OrderBy.Desc) {
+		plan.NeedsSort = true
+		plan.Sort = sel.OrderBy
+	}
+	return plan, nil
+}
+
 // scanRows opens the planned index scan, decodes each visible row, and keeps
 // the rows whose residual predicate evaluates to true.
-func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias string, plan *QueryPlan) ([]Row, error) {
+func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias string, plan *QueryPlan, ec *evalContext) ([]Row, error) {
 	// Reverse scans are not supported by the engine, so descending order is
 	// always handled by the in-memory sort (plan.NeedsSort).
 	it, err := e.engine.NewIterator(ctx, plan.TableName, plan.IndexName, storage.IterOptions{
@@ -104,7 +127,7 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias stri
 			return nil, err
 		}
 		if plan.Residual != nil {
-			keep, err := Evaluate(plan.Residual, row)
+			keep, err := evaluate(plan.Residual, row, ec)
 			if err != nil {
 				return nil, err
 			}

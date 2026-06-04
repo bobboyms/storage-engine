@@ -76,7 +76,7 @@ func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
 	}
 
 	if isGrouped(sel) {
-		return groupedResultSet(sel, rows)
+		return groupedResultSet(sel, rows, nil)
 	}
 
 	if needsSort, order := sortDecision(sel, schema); needsSort {

@@ -613,7 +613,16 @@ func (p *parser) parseAnd() (Expr, error) {
 }
 
 func (p *parser) parseFactor() (Expr, error) {
-	if p.peek().Type == TokenLParen {
+	if p.isKeyword("EXISTS") {
+		return p.parseExists(false)
+	}
+	if p.isKeyword("NOT") && p.toks[p.pos+1].Type == TokenKeyword && p.toks[p.pos+1].Literal == "EXISTS" {
+		p.next() // NOT
+		return p.parseExists(true)
+	}
+	// A "(" introduces either a grouped boolean expression or, when followed
+	// by SELECT, a scalar subquery used as a comparison operand.
+	if p.peek().Type == TokenLParen && !p.lparenStartsSubquery() {
 		p.next()
 		inner, err := p.parseOr()
 		if err != nil {
@@ -626,6 +635,40 @@ func (p *parser) parseFactor() (Expr, error) {
 		return inner, nil
 	}
 	return p.parsePredicate()
+}
+
+// lparenStartsSubquery reports whether the upcoming "(" begins a SELECT.
+func (p *parser) lparenStartsSubquery() bool {
+	return p.peek().Type == TokenLParen &&
+		p.toks[p.pos+1].Type == TokenKeyword && p.toks[p.pos+1].Literal == "SELECT"
+}
+
+func (p *parser) parseExists(negate bool) (Expr, error) {
+	if err := p.expectKeyword("EXISTS"); err != nil {
+		return nil, err
+	}
+	sub, err := p.parseParenSelect()
+	if err != nil {
+		return nil, err
+	}
+	return &ExistsExpr{Select: sub, Negate: negate}, nil
+}
+
+// parseParenSelect parses "( SELECT ... )".
+func (p *parser) parseParenSelect() (*SelectStmt, error) {
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( before subquery, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	sub, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close subquery, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return sub, nil
 }
 
 // parsePredicate parses a single predicate over a left operand: a comparison
@@ -704,6 +747,14 @@ func (p *parser) parseIn(left Expr, negate bool) (Expr, error) {
 	p.next() // consume IN
 	if p.peek().Type != TokenLParen {
 		return nil, fmt.Errorf("%w: expected ( after IN, got %q", ErrParse, p.peek().Literal)
+	}
+	// IN (SELECT ...) — subquery membership.
+	if p.toks[p.pos+1].Type == TokenKeyword && p.toks[p.pos+1].Literal == "SELECT" {
+		sub, err := p.parseParenSelect()
+		if err != nil {
+			return nil, err
+		}
+		return &InSubqueryExpr{Operand: left, Select: sub, Negate: negate}, nil
 	}
 	p.next()
 
@@ -786,6 +837,13 @@ func (p *parser) parseIsNull(left Expr) (Expr, error) {
 
 func (p *parser) parseOperand() (Expr, error) {
 	t := p.peek()
+	if t.Type == TokenLParen && p.lparenStartsSubquery() {
+		sub, err := p.parseParenSelect()
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarSubquery{Select: sub}, nil
+	}
 	switch t.Type {
 	case TokenIdent:
 		// Aggregate call used as an operand (e.g. in HAVING): COUNT(*) > 1.
