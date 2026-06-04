@@ -416,6 +416,15 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if p.isKeyword("IS") {
 		return p.parseIsNull(left)
 	}
+
+	if p.isKeyword("NOT") {
+		p.next()
+		return p.parseNegatedPredicate(left)
+	}
+	if p.isKeyword("BETWEEN") {
+		return p.parseBetween(left, false)
+	}
+
 	if p.peek().Type != TokenOperator {
 		return nil, fmt.Errorf("%w: expected comparison operator, got %q", ErrParse, p.peek().Literal)
 	}
@@ -425,6 +434,47 @@ func (p *parser) parsePredicate() (Expr, error) {
 		return nil, err
 	}
 	return &BinaryExpr{Op: op, Left: left, Right: right}, nil
+}
+
+// parseNegatedPredicate parses the predicate following a NOT keyword
+// (NOT BETWEEN / NOT IN / NOT LIKE).
+func (p *parser) parseNegatedPredicate(left Expr) (Expr, error) {
+	if p.isKeyword("BETWEEN") {
+		return p.parseBetween(left, true)
+	}
+	return nil, fmt.Errorf("%w: expected BETWEEN, IN, or LIKE after NOT, got %q", ErrParse, p.peek().Literal)
+}
+
+// parseBetween desugars "left [NOT] BETWEEN low AND high" into comparisons so
+// evaluation and bound derivation need no special cases:
+//
+//	BETWEEN     -> (left >= low) AND (left <= high)
+//	NOT BETWEEN -> (left < low) OR (left > high)
+func (p *parser) parseBetween(left Expr, negate bool) (Expr, error) {
+	p.next() // consume BETWEEN
+	low, err := p.parseOperand()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("AND"); err != nil {
+		return nil, err
+	}
+	high, err := p.parseOperand()
+	if err != nil {
+		return nil, err
+	}
+	if negate {
+		return &BinaryExpr{
+			Op:    "OR",
+			Left:  &BinaryExpr{Op: "<", Left: left, Right: low},
+			Right: &BinaryExpr{Op: ">", Left: left, Right: high},
+		}, nil
+	}
+	return &BinaryExpr{
+		Op:    "AND",
+		Left:  &BinaryExpr{Op: ">=", Left: left, Right: low},
+		Right: &BinaryExpr{Op: "<=", Left: left, Right: high},
+	}, nil
 }
 
 func (p *parser) parseIsNull(left Expr) (Expr, error) {
