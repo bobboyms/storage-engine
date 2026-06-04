@@ -56,11 +56,13 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 		return nil, err
 	}
 
-	projection := projectionColumns(sel, schema)
-
 	rows, err := e.scanRows(ctx, schema, plan)
 	if err != nil {
 		return nil, err
+	}
+
+	if hasAggregates(sel.Items) {
+		return aggregateResultSet(sel.Items, rows, sel.Offset, sel.Limit)
 	}
 
 	if plan.NeedsSort {
@@ -68,18 +70,26 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 
-	return project(rows, projection), nil
+	return projectRows(rows, expandProjection(sel.Items, schema)), nil
 }
 
-func projectionColumns(sel *SelectStmt, schema *TableSchema) []string {
-	if !sel.Star {
-		return sel.Columns
+// aggregateResultSet builds the result for a whole-table aggregate query (no
+// GROUP BY): a single row with one value per aggregate item.
+func aggregateResultSet(items []SelectItem, rows []Row, offset, limit *int64) (*ResultSet, error) {
+	vals, err := aggregateRow(items, rows)
+	if err != nil {
+		return nil, err
 	}
-	cols := make([]string, len(schema.Columns))
-	for i, c := range schema.Columns {
-		cols[i] = c.Name
+	cols := make([]string, len(items))
+	for i, it := range items {
+		cols[i] = it.OutputName()
 	}
-	return cols
+	resultRows := applyOffsetLimit([]Row{nil}, offset, limit)
+	rs := &ResultSet{Columns: cols}
+	if len(resultRows) == 1 {
+		rs.Rows = [][]types.Comparable{vals}
+	}
+	return rs, nil
 }
 
 // scanRows opens the planned index scan, decodes each visible row, and keeps
@@ -176,20 +186,4 @@ func applyOffsetLimit(rows []Row, offset, limit *int64) []Row {
 		}
 	}
 	return rows
-}
-
-func project(rows []Row, columns []string) *ResultSet {
-	rs := &ResultSet{Columns: columns, Rows: make([][]types.Comparable, len(rows))}
-	for i, row := range rows {
-		vals := make([]types.Comparable, len(columns))
-		for j, c := range columns {
-			v, ok := row[c]
-			if !ok {
-				v = types.NullKey{}
-			}
-			vals[j] = v
-		}
-		rs.Rows[i] = vals
-	}
-	return rs
 }

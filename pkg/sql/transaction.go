@@ -72,11 +72,15 @@ func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
 		}
 	}
 
+	if hasAggregates(sel.Items) {
+		return aggregateResultSet(sel.Items, rows, sel.Offset, sel.Limit)
+	}
+
 	if needsSort, order := sortDecision(sel, schema); needsSort {
 		sortRows(rows, order)
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
-	return project(rows, projectionColumns(sel, schema)), nil
+	return projectRows(rows, expandProjection(sel.Items, schema)), nil
 }
 
 // sortDecision reports whether the transactional primary-index scan must be

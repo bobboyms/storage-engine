@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // ErrParse is the sentinel wrapped by all parser errors.
@@ -231,16 +232,11 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	}
 	sel := &SelectStmt{}
 
-	if p.peek().Type == TokenStar {
-		p.next()
-		sel.Star = true
-	} else {
-		cols, err := p.parseColumnList()
-		if err != nil {
-			return nil, err
-		}
-		sel.Columns = cols
+	items, err := p.parseSelectItems()
+	if err != nil {
+		return nil, err
 	}
+	sel.Items = items
 
 	if err := p.expectKeyword("FROM"); err != nil {
 		return nil, err
@@ -294,6 +290,107 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	}
 
 	return sel, nil
+}
+
+var aggregateFuncs = map[string]struct{}{
+	"COUNT": {}, "SUM": {}, "AVG": {}, "MIN": {}, "MAX": {},
+}
+
+// parseColumnRef parses a column reference. Qualified references (alias.col)
+// are added by the join feature; for now only a bare identifier is accepted.
+func (p *parser) parseColumnRef() (*ColumnRef, error) {
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+	}
+	return &ColumnRef{Name: p.next().Literal}, nil
+}
+
+func (p *parser) parseSelectItems() ([]SelectItem, error) {
+	var items []SelectItem
+	for {
+		item, err := p.parseSelectItem()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+	return items, nil
+}
+
+func (p *parser) parseSelectItem() (SelectItem, error) {
+	if p.peek().Type == TokenStar {
+		p.next()
+		return SelectItem{Star: true}, nil
+	}
+
+	// Aggregate call: an identifier immediately followed by "(".
+	if p.peek().Type == TokenIdent && p.toks[p.pos+1].Type == TokenLParen {
+		if _, ok := aggregateFuncs[strings.ToUpper(p.peek().Literal)]; ok {
+			agg, err := p.parseAggregate()
+			if err != nil {
+				return SelectItem{}, err
+			}
+			return SelectItem{Agg: agg, Alias: p.parseOptionalAlias()}, nil
+		}
+	}
+
+	if p.peek().Type != TokenIdent {
+		return SelectItem{}, fmt.Errorf("%w: expected a column or aggregate, got %q", ErrParse, p.peek().Literal)
+	}
+	col, err := p.parseColumnRef()
+	if err != nil {
+		return SelectItem{}, err
+	}
+	return SelectItem{Column: col, Alias: p.parseOptionalAlias()}, nil
+}
+
+func (p *parser) parseAggregate() (*AggregateCall, error) {
+	fn := strings.ToUpper(p.next().Literal)
+	p.next() // consume "("
+	agg := &AggregateCall{Func: fn}
+
+	if p.peek().Type == TokenStar {
+		p.next()
+		if fn != "COUNT" {
+			return nil, fmt.Errorf("%w: %s(*) is not allowed; only COUNT(*)", ErrParse, fn)
+		}
+		agg.Star = true
+	} else {
+		if p.isKeyword("DISTINCT") {
+			p.next()
+			agg.Distinct = true
+		}
+		col, err := p.parseColumnRef()
+		if err != nil {
+			return nil, err
+		}
+		agg.Column = col
+	}
+
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close %s(, got %q", ErrParse, fn, p.peek().Literal)
+	}
+	p.next()
+	return agg, nil
+}
+
+// parseOptionalAlias consumes an optional "AS name" or a bare identifier alias.
+func (p *parser) parseOptionalAlias() string {
+	if p.isKeyword("AS") {
+		p.next()
+		if p.peek().Type == TokenIdent {
+			return p.next().Literal
+		}
+		return ""
+	}
+	if p.peek().Type == TokenIdent {
+		return p.next().Literal
+	}
+	return ""
 }
 
 func (p *parser) parseColumnList() ([]string, error) {

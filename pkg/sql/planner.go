@@ -217,10 +217,15 @@ func isRangeOp(op string) bool {
 // validateColumns ensures every column referenced by the statement exists in
 // the schema.
 func validateColumns(stmt *SelectStmt, schema *TableSchema) error {
-	if !stmt.Star {
-		for _, c := range stmt.Columns {
-			if _, ok := schema.Column(c); !ok {
-				return fmt.Errorf("%w: unknown column %q in projection", ErrPlan, c)
+	for _, item := range stmt.Items {
+		switch {
+		case item.Column != nil:
+			if _, ok := schema.Column(item.Column.Name); !ok {
+				return fmt.Errorf("%w: unknown column %q in projection", ErrPlan, item.Column.Name)
+			}
+		case item.Agg != nil && !item.Agg.Star:
+			if _, ok := schema.Column(item.Agg.Column.Name); !ok {
+				return fmt.Errorf("%w: unknown column %q in aggregate", ErrPlan, item.Agg.Column.Name)
 			}
 		}
 	}

@@ -20,14 +20,17 @@ func parseSelect(t *testing.T, input string) *SelectStmt {
 
 func TestParseSelectColumns(t *testing.T) {
 	sel := parseSelect(t, "SELECT id, name FROM users")
-	if sel.Star {
-		t.Fatal("Star = true, want false")
+	if len(sel.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(sel.Items))
+	}
+	if sel.Items[0].Column == nil || sel.Items[0].Column.Name != "id" {
+		t.Fatalf("item[0] = %+v, want column id", sel.Items[0])
+	}
+	if sel.Items[1].Column == nil || sel.Items[1].Column.Name != "name" {
+		t.Fatalf("item[1] = %+v, want column name", sel.Items[1])
 	}
 	if sel.Table != "users" {
 		t.Fatalf("Table = %q, want users", sel.Table)
-	}
-	if len(sel.Columns) != 2 || sel.Columns[0] != "id" || sel.Columns[1] != "name" {
-		t.Fatalf("Columns = %v, want [id name]", sel.Columns)
 	}
 	if sel.Where != nil {
 		t.Fatalf("Where = %v, want nil", sel.Where)
@@ -36,11 +39,8 @@ func TestParseSelectColumns(t *testing.T) {
 
 func TestParseSelectStar(t *testing.T) {
 	sel := parseSelect(t, "SELECT * FROM users")
-	if !sel.Star {
-		t.Fatal("Star = false, want true")
-	}
-	if len(sel.Columns) != 0 {
-		t.Fatalf("Columns = %v, want empty", sel.Columns)
+	if len(sel.Items) != 1 || !sel.Items[0].Star {
+		t.Fatalf("items = %+v, want a single star item", sel.Items)
 	}
 }
 

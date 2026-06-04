@@ -3,6 +3,7 @@ package sql
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Statement is the root AST node produced by Parse.
@@ -12,8 +13,7 @@ type Statement interface {
 
 // SelectStmt represents a single-table SELECT query.
 type SelectStmt struct {
-	Star    bool     // true for "SELECT *"
-	Columns []string // projected column names when Star is false
+	Items   []SelectItem // projection list
 	Table   string
 	Where   Expr     // nil when no WHERE clause
 	OrderBy *OrderBy // nil when no ORDER BY clause
@@ -25,6 +25,50 @@ type SelectStmt struct {
 }
 
 func (*SelectStmt) stmtNode() {}
+
+// SelectItem is one entry in a SELECT projection list: a star, a bare column,
+// or an aggregate call, optionally renamed with AS.
+type SelectItem struct {
+	Star   bool
+	Column *ColumnRef     // bare column projection (nil otherwise)
+	Agg    *AggregateCall // aggregate projection (nil otherwise)
+	Alias  string         // output name override, empty if none
+}
+
+// AggregateCall is an aggregate function application in a projection.
+type AggregateCall struct {
+	Func     string     // COUNT, SUM, AVG, MIN, MAX
+	Star     bool       // COUNT(*)
+	Distinct bool       // COUNT(DISTINCT col) and similar
+	Column   *ColumnRef // argument column (nil for COUNT(*))
+}
+
+// OutputName returns the result-set column name for an item.
+func (it SelectItem) OutputName() string {
+	if it.Alias != "" {
+		return it.Alias
+	}
+	switch {
+	case it.Column != nil:
+		return it.Column.String()
+	case it.Agg != nil:
+		return it.Agg.canonicalName()
+	default:
+		return "*"
+	}
+}
+
+func (a AggregateCall) canonicalName() string {
+	fn := strings.ToLower(a.Func)
+	if a.Star {
+		return fn + "(*)"
+	}
+	arg := a.Column.String()
+	if a.Distinct {
+		arg = "distinct " + arg
+	}
+	return fn + "(" + arg + ")"
+}
 
 // OrderBy describes an ORDER BY clause over a single column.
 type OrderBy struct {
@@ -71,13 +115,20 @@ type Expr interface {
 	exprNode()
 }
 
-// ColumnRef references a column by name.
+// ColumnRef references a column, optionally qualified by a table name or
+// alias (e.g. "u.id"). Qualifier is empty for an unqualified reference.
 type ColumnRef struct {
-	Name string
+	Qualifier string
+	Name      string
 }
 
-func (c *ColumnRef) String() string { return c.Name }
-func (*ColumnRef) exprNode()        {}
+func (c *ColumnRef) String() string {
+	if c.Qualifier != "" {
+		return c.Qualifier + "." + c.Name
+	}
+	return c.Name
+}
+func (*ColumnRef) exprNode() {}
 
 // LiteralKind enumerates the literal value categories.
 type LiteralKind int
