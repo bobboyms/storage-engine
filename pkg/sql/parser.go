@@ -427,6 +427,10 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if p.isKeyword("IN") {
 		return p.parseIn(left, false)
 	}
+	if p.isKeyword("LIKE") {
+		p.next()
+		return p.parseLike(left, false)
+	}
 
 	if p.peek().Type != TokenOperator {
 		return nil, fmt.Errorf("%w: expected comparison operator, got %q", ErrParse, p.peek().Literal)
@@ -448,7 +452,26 @@ func (p *parser) parseNegatedPredicate(left Expr) (Expr, error) {
 	if p.isKeyword("IN") {
 		return p.parseIn(left, true)
 	}
+	if p.isKeyword("LIKE") {
+		p.next()
+		return p.parseLike(left, true)
+	}
 	return nil, fmt.Errorf("%w: expected BETWEEN, IN, or LIKE after NOT, got %q", ErrParse, p.peek().Literal)
+}
+
+// parseLike parses "left [NOT] LIKE pattern". The LIKE keyword has already been
+// consumed by the caller. It produces a BinaryExpr whose operator the evaluator
+// recognizes (LIKE / NOT LIKE).
+func (p *parser) parseLike(left Expr, negate bool) (Expr, error) {
+	pattern, err := p.parseOperand()
+	if err != nil {
+		return nil, err
+	}
+	op := "LIKE"
+	if negate {
+		op = "NOT LIKE"
+	}
+	return &BinaryExpr{Op: op, Left: left, Right: pattern}, nil
 }
 
 // parseIn desugars "left [NOT] IN (v1, v2, ...)" into a chain of equality

@@ -40,6 +40,8 @@ func Evaluate(expr Expr, row Row) (bool, error) {
 			return left && right, nil
 		}
 		return left || right, nil
+	case "LIKE", "NOT LIKE":
+		return evalLike(be, row)
 	default:
 		return evalComparison(be, row)
 	}
@@ -62,14 +64,17 @@ func evalIsNull(e *IsNullExpr, row Row) (bool, error) {
 	return null, nil
 }
 
-func evalComparison(be *BinaryExpr, row Row) (bool, error) {
-	lv, lIsCol, err := resolveColumn(be.Left, row)
+// resolveOperands resolves both sides of a binary predicate to typed values,
+// coercing a literal operand to the concrete type of the column operand.
+func resolveOperands(be *BinaryExpr, row Row) (lv, rv types.Comparable, err error) {
+	var lIsCol, rIsCol bool
+	lv, lIsCol, err = resolveColumn(be.Left, row)
 	if err != nil {
-		return false, err
+		return nil, nil, err
 	}
-	rv, rIsCol, err := resolveColumn(be.Right, row)
+	rv, rIsCol, err = resolveColumn(be.Right, row)
 	if err != nil {
-		return false, err
+		return nil, nil, err
 	}
 
 	if !lIsCol {
@@ -78,7 +83,7 @@ func evalComparison(be *BinaryExpr, row Row) (bool, error) {
 			hint = rv
 		}
 		if lv, err = resolveLiteral(be.Left, hint); err != nil {
-			return false, err
+			return nil, nil, err
 		}
 	}
 	if !rIsCol {
@@ -87,8 +92,16 @@ func evalComparison(be *BinaryExpr, row Row) (bool, error) {
 			hint = lv
 		}
 		if rv, err = resolveLiteral(be.Right, hint); err != nil {
-			return false, err
+			return nil, nil, err
 		}
+	}
+	return lv, rv, nil
+}
+
+func evalComparison(be *BinaryExpr, row Row) (bool, error) {
+	lv, rv, err := resolveOperands(be, row)
+	if err != nil {
+		return false, err
 	}
 
 	// SQL three-valued logic: any comparison with NULL is UNKNOWN -> false.
@@ -194,4 +207,62 @@ func naturalLiteral(lit *Literal) types.Comparable {
 func isNull(v types.Comparable) bool {
 	_, ok := v.(types.NullKey)
 	return ok
+}
+
+// evalLike evaluates a LIKE / NOT LIKE predicate. Both operands must be text;
+// a NULL on either side yields false (UNKNOWN). The pattern uses SQL wildcards:
+// % matches any run of characters and _ matches exactly one.
+func evalLike(be *BinaryExpr, row Row) (bool, error) {
+	lv, rv, err := resolveOperands(be, row)
+	if err != nil {
+		return false, err
+	}
+	if isNull(lv) || isNull(rv) {
+		return false, nil
+	}
+	value, ok := lv.(types.VarcharKey)
+	if !ok {
+		return false, fmt.Errorf("%w: LIKE requires a text column, got %T", ErrEval, lv)
+	}
+	pattern, ok := rv.(types.VarcharKey)
+	if !ok {
+		return false, fmt.Errorf("%w: LIKE pattern must be text, got %T", ErrEval, rv)
+	}
+	matched := likeMatch(string(pattern), string(value))
+	if be.Op == "NOT LIKE" {
+		return !matched, nil
+	}
+	return matched, nil
+}
+
+// likeMatch reports whether s matches a SQL LIKE pattern, where % matches any
+// sequence of characters (including none) and _ matches exactly one character.
+// It uses linear-time backtracking over runes.
+func likeMatch(pattern, s string) bool {
+	pr := []rune(pattern)
+	sr := []rune(s)
+	var pi, si int
+	star := -1
+	mark := 0
+	for si < len(sr) {
+		switch {
+		case pi < len(pr) && (pr[pi] == '_' || pr[pi] == sr[si]):
+			pi++
+			si++
+		case pi < len(pr) && pr[pi] == '%':
+			star = pi
+			mark = si
+			pi++
+		case star != -1:
+			pi = star + 1
+			mark++
+			si = mark
+		default:
+			return false
+		}
+	}
+	for pi < len(pr) && pr[pi] == '%' {
+		pi++
+	}
+	return pi == len(pr)
 }
