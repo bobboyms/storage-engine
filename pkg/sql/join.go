@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/bobboyms/storage-engine/pkg/storage"
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // binding associates a table alias with its schema for the duration of a query.
@@ -38,7 +39,7 @@ func (e *Executor) queryJoin(ctx context.Context, sel *SelectStmt) (*ResultSet, 
 		if err != nil {
 			return nil, err
 		}
-		rows, err = nestedLoopJoin(rows, right, jc.On, jc.Left)
+		rows, err = nestedLoopJoin(rows, right, jc.On, jc.Left, nullRow(bindings[i+1], unique))
 		if err != nil {
 			return nil, err
 		}
@@ -136,8 +137,9 @@ func (e *Executor) scanAll(ctx context.Context, b binding, unique map[string]boo
 
 // nestedLoopJoin combines left and right rows whose ON predicate holds. For a
 // LEFT join, a left row with no matching right row is emitted once with the
-// right side's columns left NULL (absent keys read as NULL during evaluation).
-func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool) ([]Row, error) {
+// right side's columns set to NULL (via rightNull) so WHERE and projection see
+// explicit NULLs rather than missing keys.
+func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool, rightNull Row) ([]Row, error) {
 	var out []Row
 	for _, l := range left {
 		matched := false
@@ -153,10 +155,23 @@ func nestedLoopJoin(left, right []Row, on Expr, leftJoin bool) ([]Row, error) {
 			}
 		}
 		if leftJoin && !matched {
-			out = append(out, mergeRows(l, nil))
+			out = append(out, mergeRows(l, rightNull))
 		}
 	}
 	return out, nil
+}
+
+// nullRow builds a row that sets every column of a binding to NULL, used for the
+// unmatched side of a LEFT join.
+func nullRow(b binding, unique map[string]bool) Row {
+	row := make(Row, len(b.schema.Columns)*2)
+	for _, col := range b.schema.Columns {
+		row[b.alias+"."+col.Name] = types.NullKey{}
+		if unique[col.Name] {
+			row[col.Name] = types.NullKey{}
+		}
+	}
+	return row
 }
 
 func mergeRows(a, b Row) Row {
