@@ -62,11 +62,17 @@ func main() {
 	show(ctx, db2, "SELECT name FROM products WHERE category = 'office' ORDER BY name")
 }
 
-// maintenanceDemo runs an on-demand maintenance pass. To make the temp-file
-// cleanup visible, it first drops a stale orphan ".tmp" file (as an interrupted
-// atomic write would leave behind) and ages it past the safety threshold.
+// maintenanceDemo runs an on-demand maintenance pass exercising all three
+// reclamation paths: vacuum (dead heap space from a DELETE), checkpoint (WAL),
+// and temp-file cleanup. To make the temp sweep visible it first drops a stale
+// orphan ".tmp" file (as an interrupted atomic write would leave behind).
 func maintenanceDemo(ctx context.Context, db *sql.Executor, dir string) {
-	fmt.Println("\n=== Maintenance (checkpoint + temp-file cleanup) ===")
+	fmt.Println("\n=== Maintenance (vacuum + checkpoint + temp-file cleanup) ===")
+
+	// Delete a row: its old heap version becomes dead space that vacuum
+	// reclaims during the next maintenance pass.
+	mustExec(ctx, db, "DELETE FROM products WHERE id = 2")
+
 	orphan := filepath.Join(dir, "products.heap.tmp")
 	if err := os.WriteFile(orphan, []byte("leftover"), 0o600); err != nil {
 		log.Fatalf("write orphan: %v", err)
@@ -78,7 +84,8 @@ func maintenanceDemo(ctx context.Context, db *sql.Executor, dir string) {
 	if err != nil {
 		log.Fatalf("maintenance: %v", err)
 	}
-	fmt.Printf("RunMaintenance: checkpoint done, %d orphan temp file(s) removed\n", removed)
+	fmt.Printf("RunMaintenance: vacuumed dead rows + checkpointed; %d orphan temp file(s) removed\n", removed)
+	show(ctx, db, "SELECT id, name FROM products ORDER BY id")
 }
 
 func mustExec(ctx context.Context, db *sql.Executor, query string) {
