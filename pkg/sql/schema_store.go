@@ -19,9 +19,10 @@ type persistedColumn struct {
 }
 
 type persistedIndex struct {
-	Name    string `json:"name"`
-	Column  string `json:"column"`
-	Primary bool   `json:"primary"`
+	Name    string   `json:"name"`
+	Column  string   `json:"column"`
+	Primary bool     `json:"primary"`
+	Columns []string `json:"columns,omitempty"`
 }
 
 type persistedTable struct {

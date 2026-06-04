@@ -373,5 +373,6 @@ func buildInsertDoc(schema *TableSchema, stmt *InsertStmt) (map[string]any, map[
 	if err != nil {
 		return nil, nil, err
 	}
+	addCompositeKeyFields(doc, schema, keys)
 	return doc, keys, nil
 }

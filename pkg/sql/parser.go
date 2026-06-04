@@ -132,11 +132,19 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	p.next()
 
 	for {
-		col, err := p.parseColumnDef()
-		if err != nil {
-			return nil, err
+		if p.isKeyword("INDEX") {
+			idx, err := p.parseTableIndex()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Indexes = append(stmt.Indexes, idx)
+		} else {
+			col, err := p.parseColumnDef()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Columns = append(stmt.Columns, col)
 		}
-		stmt.Columns = append(stmt.Columns, col)
 		if p.peek().Type != TokenComma {
 			break
 		}
@@ -148,6 +156,21 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	}
 	p.next()
 	return stmt, nil
+}
+
+// parseTableIndex parses a table-level "INDEX (col, col, ...)" clause.
+func (p *parser) parseTableIndex() (IndexClause, error) {
+	if err := p.expectKeyword("INDEX"); err != nil {
+		return IndexClause{}, err
+	}
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return IndexClause{}, err
+	}
+	if len(cols) == 0 {
+		return IndexClause{}, fmt.Errorf("%w: INDEX requires at least one column", ErrParse)
+	}
+	return IndexClause{Columns: cols}, nil
 }
 
 func (p *parser) parseAlterTable() (*AlterTableStmt, error) {

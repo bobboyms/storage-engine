@@ -32,13 +32,19 @@ type Column struct {
 	Type storage.DataType
 }
 
-// IndexDef describes an index serving a column. Exactly one index per table
-// must be marked Primary; its column is the table's primary key.
+// IndexDef describes an index. A single-column index serves Column; a composite
+// index serves Columns (len >= 2) and leaves Column empty. Exactly one index per
+// table must be marked Primary; its column is the table's primary key. A
+// composite index is never primary.
 type IndexDef struct {
 	Name    string
 	Column  string
 	Primary bool
+	Columns []string
 }
+
+// composite reports whether idx spans more than one column.
+func (idx IndexDef) composite() bool { return len(idx.Columns) > 1 }
 
 // TableSchema describes the columns and indexes of a single table.
 type TableSchema struct {
@@ -116,7 +122,16 @@ func (s TableSchema) validate() error {
 			return fmt.Errorf("%w: duplicate index %q in table %q", ErrInvalidSchema, idx.Name, s.Name)
 		}
 		seenIdx[idx.Name] = struct{}{}
-		if _, ok := seenCols[idx.Column]; !ok {
+		if idx.composite() {
+			if idx.Primary {
+				return fmt.Errorf("%w: composite index %q cannot be primary", ErrInvalidSchema, idx.Name)
+			}
+			for _, col := range idx.Columns {
+				if _, ok := seenCols[col]; !ok {
+					return fmt.Errorf("%w: index %q references unknown column %q", ErrInvalidSchema, idx.Name, col)
+				}
+			}
+		} else if _, ok := seenCols[idx.Column]; !ok {
 			return fmt.Errorf("%w: index %q references unknown column %q", ErrInvalidSchema, idx.Name, idx.Column)
 		}
 		if idx.Primary {

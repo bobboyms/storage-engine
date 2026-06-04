@@ -67,6 +67,7 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 	if err != nil {
 		return 0, err
 	}
+	addCompositeKeyFields(doc, schema, keys)
 
 	jsonDoc, err := json.Marshal(doc)
 	if err != nil {
@@ -83,6 +84,14 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 func keysForInsert(schema *TableSchema, values map[string]*Literal) (map[string]types.Comparable, error) {
 	keys := make(map[string]types.Comparable, len(schema.Indexes))
 	for _, idx := range schema.Indexes {
+		if idx.composite() {
+			key, err := compositeKeyForValues(schema, idx, values)
+			if err != nil {
+				return nil, err
+			}
+			keys[idx.Name] = key
+			continue
+		}
 		lit, ok := values[idx.Column]
 		if !ok {
 			return nil, fmt.Errorf("%w: INSERT must provide indexed column %q", ErrExec, idx.Column)
@@ -131,6 +140,7 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		if err != nil {
 			return 0, err
 		}
+		addCompositeKeyFields(doc, schema, keys) // refresh synthetic key after assignments
 		jsonDoc, err := json.Marshal(doc)
 		if err != nil {
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
@@ -290,6 +300,14 @@ func rawToMap(c codec.Codec, raw []byte) (map[string]any, error) {
 func keysFromMap(schema *TableSchema, doc map[string]any) (map[string]types.Comparable, error) {
 	keys := make(map[string]types.Comparable, len(schema.Indexes))
 	for _, idx := range schema.Indexes {
+		if idx.composite() {
+			key, err := compositeKeyFromDoc(schema, idx, doc)
+			if err != nil {
+				return nil, fmt.Errorf("%w: index %q: %v", ErrExec, idx.Name, err)
+			}
+			keys[idx.Name] = key
+			continue
+		}
 		col, _ := schema.Column(idx.Column)
 		key, err := jsonValueToKey(doc[idx.Column], col.Type)
 		if err != nil {

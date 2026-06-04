@@ -47,10 +47,18 @@ func Plan(stmt *SelectStmt, schema *TableSchema) (*QueryPlan, error) {
 		chosen = pk
 	}
 	plan.IndexName = chosen.Name
-	plan.Column = chosen.Column
 
-	col, _ := schema.Column(chosen.Column)
-	plan.Lower, plan.Upper = deriveBounds(conjuncts, chosen.Column, col.Type)
+	if chosen.composite() {
+		// A composite index is an exact-match index on the encoded column tuple;
+		// the bounds are the single encoded key (Residual still re-checks rows).
+		if key, ok := compositeEqualityKey(conjuncts, chosen, schema); ok {
+			plan.Lower, plan.Upper = key, key
+		}
+	} else {
+		plan.Column = chosen.Column
+		col, _ := schema.Column(chosen.Column)
+		plan.Lower, plan.Upper = deriveBounds(conjuncts, chosen.Column, col.Type)
+	}
 
 	if stmt.OrderBy != nil {
 		orderedByScan := stmt.OrderBy.Column == chosen.Column && !stmt.OrderBy.Desc
@@ -65,6 +73,15 @@ func Plan(stmt *SelectStmt, schema *TableSchema) (*QueryPlan, error) {
 // chooseIndex selects an index by priority: an equality predicate's index, then
 // a range predicate's index, then an index that satisfies the ORDER BY column.
 func chooseIndex(conjuncts []Expr, orderBy *OrderBy, schema *TableSchema) (IndexDef, bool) {
+	// Prefer a composite index whose every column is pinned by an equality
+	// predicate: it turns "a = .. AND b = .." from a partial scan into an
+	// exact-match index lookup.
+	for _, idx := range schema.Indexes {
+		if idx.composite() && compositeFullyConstrained(conjuncts, idx) {
+			return idx, true
+		}
+	}
+
 	var rangeIdx IndexDef
 	haveRange := false
 	for _, c := range conjuncts {
@@ -92,6 +109,49 @@ func chooseIndex(conjuncts []Expr, orderBy *OrderBy, schema *TableSchema) (Index
 		}
 	}
 	return IndexDef{}, false
+}
+
+// compositeFullyConstrained reports whether every column of a composite index
+// has an equality predicate among the conjuncts (the precondition for an
+// exact-match composite lookup).
+func compositeFullyConstrained(conjuncts []Expr, idx IndexDef) bool {
+	for _, name := range idx.Columns {
+		if _, ok := equalityLiteral(conjuncts, name); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// compositeEqualityKey builds the encoded lookup key for a composite index from
+// the equality literals on its columns. It returns false if any column is not
+// pinned by an equality with a value convertible to the column's type.
+func compositeEqualityKey(conjuncts []Expr, idx IndexDef, schema *TableSchema) (types.VarcharKey, bool) {
+	parts := make([]types.Comparable, len(idx.Columns))
+	for i, name := range idx.Columns {
+		lit, ok := equalityLiteral(conjuncts, name)
+		if !ok {
+			return "", false
+		}
+		col, _ := schema.Column(name)
+		val, err := ColumnValue(lit, col.Type)
+		if err != nil {
+			return "", false
+		}
+		parts[i] = val
+	}
+	return encodeCompositeKey(parts), true
+}
+
+// equalityLiteral returns the literal of an "column = literal" conjunct on the
+// named column, if present.
+func equalityLiteral(conjuncts []Expr, column string) (*Literal, bool) {
+	for _, c := range conjuncts {
+		if col, op, lit, ok := simpleComparison(c); ok && op == "=" && col == column {
+			return lit, true
+		}
+	}
+	return nil, false
 }
 
 // deriveBounds computes inclusive scan bounds from the simple comparisons on

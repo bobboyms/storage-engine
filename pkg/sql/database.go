@@ -221,10 +221,15 @@ func registerTable(tm *storage.TableMetaData, dir string, s TableSchema, keystor
 }
 
 // indicesForSchema builds the engine index list for a schema, resolving each
-// index column's data type.
+// index column's data type. A composite index is registered as a VARCHAR index
+// because its key is the encoded column tuple (see composite_index.go).
 func indicesForSchema(s TableSchema) []storage.Index {
 	indices := make([]storage.Index, 0, len(s.Indexes))
 	for _, idx := range s.Indexes {
+		if idx.composite() {
+			indices = append(indices, storage.Index{Name: idx.Name, Type: storage.TypeVarchar})
+			continue
+		}
 		col, _ := s.Column(idx.Column)
 		indices = append(indices, storage.Index{
 			Name:    idx.Name,
@@ -443,6 +448,17 @@ func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 		case c.Index:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name})
 		}
+	}
+	for _, ix := range stmt.Indexes {
+		if len(ix.Columns) == 1 {
+			// A single-column table-level index is an ordinary secondary index.
+			schema.Indexes = append(schema.Indexes, IndexDef{Name: ix.Columns[0], Column: ix.Columns[0]})
+			continue
+		}
+		schema.Indexes = append(schema.Indexes, IndexDef{
+			Name:    compositeIndexName(ix.Columns),
+			Columns: ix.Columns,
+		})
 	}
 	return schema
 }

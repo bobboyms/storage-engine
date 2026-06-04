@@ -135,10 +135,19 @@ type ColumnDef struct {
 	Index   bool
 }
 
-// CreateTableStmt represents CREATE TABLE [IF NOT EXISTS] name (column defs...).
+// IndexClause is a table-level index definition in CREATE TABLE, e.g.
+// INDEX (a, b). A single column produces a regular single-column index; two or
+// more produce a composite index.
+type IndexClause struct {
+	Columns []string
+}
+
+// CreateTableStmt represents CREATE TABLE [IF NOT EXISTS] name (column defs...,
+// table-level index clauses...).
 type CreateTableStmt struct {
 	Table   string
 	Columns []ColumnDef
+	Indexes []IndexClause
 	// IfNotExists makes execution a silent no-op when a table with the same
 	// name already exists, instead of returning ErrDuplicateTable.
 	IfNotExists bool
