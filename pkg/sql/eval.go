@@ -131,18 +131,26 @@ func evalComparison(be *BinaryExpr, row Row) (bool, error) {
 	}
 }
 
-// resolveColumn returns the row value for a column operand. The boolean
-// reports whether expr was a column reference.
+// resolveColumn returns the row value for a column or aggregate operand. The
+// boolean reports whether expr was such a reference (vs. a literal). Aggregate
+// references resolve by their canonical name against a per-group row.
 func resolveColumn(expr Expr, row Row) (types.Comparable, bool, error) {
-	col, ok := expr.(*ColumnRef)
-	if !ok {
+	switch e := expr.(type) {
+	case *ColumnRef:
+		v, ok := row[e.Name]
+		if !ok {
+			return nil, true, fmt.Errorf("%w: unknown column %q", ErrEval, e.Name)
+		}
+		return v, true, nil
+	case *AggregateExpr:
+		v, ok := row[e.Call.canonicalName()]
+		if !ok {
+			return nil, true, fmt.Errorf("%w: aggregate %q not available here", ErrEval, e.Call.canonicalName())
+		}
+		return v, true, nil
+	default:
 		return nil, false, nil
 	}
-	v, ok := row[col.Name]
-	if !ok {
-		return nil, true, fmt.Errorf("%w: unknown column %q", ErrEval, col.Name)
-	}
-	return v, true, nil
 }
 
 // resolveLiteral converts a literal operand to a Comparable, coercing it to the

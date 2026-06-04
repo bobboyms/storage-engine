@@ -255,6 +255,23 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		sel.Where = where
 	}
 
+	if p.isKeyword("GROUP") {
+		cols, err := p.parseGroupBy()
+		if err != nil {
+			return nil, err
+		}
+		sel.GroupBy = cols
+	}
+
+	if p.isKeyword("HAVING") {
+		p.next()
+		having, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		sel.Having = having
+	}
+
 	if p.isKeyword("ORDER") {
 		ob, err := p.parseOrderBy()
 		if err != nil {
@@ -398,6 +415,27 @@ func (p *parser) parseColumnList() ([]string, error) {
 	for {
 		if p.peek().Type != TokenIdent {
 			return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+		}
+		cols = append(cols, p.next().Literal)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+	return cols, nil
+}
+
+func (p *parser) parseGroupBy() ([]string, error) {
+	if err := p.expectKeyword("GROUP"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("BY"); err != nil {
+		return nil, err
+	}
+	var cols []string
+	for {
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected column in GROUP BY, got %q", ErrParse, p.peek().Literal)
 		}
 		cols = append(cols, p.next().Literal)
 		if p.peek().Type != TokenComma {
@@ -662,6 +700,16 @@ func (p *parser) parseOperand() (Expr, error) {
 	t := p.peek()
 	switch t.Type {
 	case TokenIdent:
+		// Aggregate call used as an operand (e.g. in HAVING): COUNT(*) > 1.
+		if p.toks[p.pos+1].Type == TokenLParen {
+			if _, ok := aggregateFuncs[strings.ToUpper(t.Literal)]; ok {
+				agg, err := p.parseAggregate()
+				if err != nil {
+					return nil, err
+				}
+				return &AggregateExpr{Call: agg}, nil
+			}
+		}
 		p.next()
 		return &ColumnRef{Name: t.Literal}, nil
 	case TokenInt:

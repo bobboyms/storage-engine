@@ -72,8 +72,8 @@ func (t *Tx) Query(ctx context.Context, query string) (*ResultSet, error) {
 		}
 	}
 
-	if hasAggregates(sel.Items) {
-		return aggregateResultSet(sel.Items, rows, sel.Offset, sel.Limit)
+	if isGrouped(sel) {
+		return groupedResultSet(sel, rows)
 	}
 
 	if needsSort, order := sortDecision(sel, schema); needsSort {

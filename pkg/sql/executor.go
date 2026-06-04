@@ -61,8 +61,8 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 		return nil, err
 	}
 
-	if hasAggregates(sel.Items) {
-		return aggregateResultSet(sel.Items, rows, sel.Offset, sel.Limit)
+	if isGrouped(sel) {
+		return groupedResultSet(sel, rows)
 	}
 
 	if plan.NeedsSort {
@@ -71,25 +71,6 @@ func (e *Executor) Query(ctx context.Context, query string) (*ResultSet, error) 
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 
 	return projectRows(rows, expandProjection(sel.Items, schema)), nil
-}
-
-// aggregateResultSet builds the result for a whole-table aggregate query (no
-// GROUP BY): a single row with one value per aggregate item.
-func aggregateResultSet(items []SelectItem, rows []Row, offset, limit *int64) (*ResultSet, error) {
-	vals, err := aggregateRow(items, rows)
-	if err != nil {
-		return nil, err
-	}
-	cols := make([]string, len(items))
-	for i, it := range items {
-		cols[i] = it.OutputName()
-	}
-	resultRows := applyOffsetLimit([]Row{nil}, offset, limit)
-	rs := &ResultSet{Columns: cols}
-	if len(resultRows) == 1 {
-		rs.Rows = [][]types.Comparable{vals}
-	}
-	return rs, nil
 }
 
 // scanRows opens the planned index scan, decodes each visible row, and keeps

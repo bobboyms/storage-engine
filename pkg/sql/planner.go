@@ -229,10 +229,20 @@ func validateColumns(stmt *SelectStmt, schema *TableSchema) error {
 			}
 		}
 	}
-	if stmt.OrderBy != nil {
+	for _, g := range stmt.GroupBy {
+		if _, ok := schema.Column(g); !ok {
+			return fmt.Errorf("%w: unknown column %q in GROUP BY", ErrPlan, g)
+		}
+	}
+	// In a grouped query ORDER BY may reference an aggregate or alias rather
+	// than a base column, so only validate ORDER BY for non-grouped queries.
+	if stmt.OrderBy != nil && !isGrouped(stmt) {
 		if _, ok := schema.Column(stmt.OrderBy.Column); !ok {
 			return fmt.Errorf("%w: unknown column %q in ORDER BY", ErrPlan, stmt.OrderBy.Column)
 		}
+	}
+	if err := validateExprColumns(stmt.Having, schema); err != nil {
+		return err
 	}
 	return validateExprColumns(stmt.Where, schema)
 }
@@ -243,7 +253,13 @@ func validateExprColumns(expr Expr, schema *TableSchema) error {
 		return nil
 	case *ColumnRef:
 		if _, ok := schema.Column(e.Name); !ok {
-			return fmt.Errorf("%w: unknown column %q in WHERE", ErrPlan, e.Name)
+			return fmt.Errorf("%w: unknown column %q in expression", ErrPlan, e.Name)
+		}
+	case *AggregateExpr:
+		if !e.Call.Star {
+			if _, ok := schema.Column(e.Call.Column.Name); !ok {
+				return fmt.Errorf("%w: unknown column %q in aggregate", ErrPlan, e.Call.Column.Name)
+			}
 		}
 	case *IsNullExpr:
 		return validateExprColumns(e.Operand, schema)

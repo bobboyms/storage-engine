@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -60,20 +61,151 @@ func projectRows(rows []Row, specs []projSpec) *ResultSet {
 	return rs
 }
 
-// aggregateRow computes one aggregate value per item over the given rows.
-func aggregateRow(items []SelectItem, rows []Row) ([]types.Comparable, error) {
-	out := make([]types.Comparable, len(items))
-	for i, it := range items {
-		if it.Agg == nil {
-			return nil, fmt.Errorf("%w: column %q must appear in GROUP BY or an aggregate", ErrExec, it.OutputName())
-		}
-		v, err := computeAggregate(it.Agg, rows)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = v
+// isGrouped reports whether the query requires the grouping/aggregation path.
+func isGrouped(sel *SelectStmt) bool {
+	return len(sel.GroupBy) > 0 || hasAggregates(sel.Items)
+}
+
+// groupedResultSet executes the GROUP BY / aggregate path. With no GROUP BY it
+// produces a single group over all rows (the whole-table aggregate case). It
+// validates that every bare projection column is a grouping column, computes
+// the aggregates appearing in the projection and HAVING per group, filters by
+// HAVING, then orders, limits, and projects.
+func groupedResultSet(sel *SelectStmt, rows []Row) (*ResultSet, error) {
+	groupSet := make(map[string]struct{}, len(sel.GroupBy))
+	for _, g := range sel.GroupBy {
+		groupSet[g] = struct{}{}
 	}
-	return out, nil
+	for _, it := range sel.Items {
+		switch {
+		case it.Star:
+			return nil, fmt.Errorf("%w: SELECT * is not allowed with GROUP BY or aggregates", ErrExec)
+		case it.Column != nil:
+			if _, ok := groupSet[it.Column.Name]; !ok {
+				return nil, fmt.Errorf("%w: column %q must appear in GROUP BY or an aggregate", ErrExec, it.Column.Name)
+			}
+		}
+	}
+
+	aggs := collectAggregates(sel)
+	groups, order := groupRows(rows, sel.GroupBy)
+
+	resultRows := make([]Row, 0, len(groups))
+	for _, key := range order {
+		members := groups[key]
+		gRow := Row{}
+		for _, gc := range sel.GroupBy {
+			gRow[gc] = members[0][gc]
+		}
+		for _, a := range aggs {
+			v, err := computeAggregate(a, members)
+			if err != nil {
+				return nil, err
+			}
+			gRow[a.canonicalName()] = v
+		}
+		if sel.Having != nil {
+			keep, err := Evaluate(sel.Having, gRow)
+			if err != nil {
+				return nil, err
+			}
+			if !keep {
+				continue
+			}
+		}
+		// Expose each item's value under its output name so ORDER BY can
+		// reference a column, an aggregate's canonical name, or an alias.
+		for _, it := range sel.Items {
+			gRow[it.OutputName()] = itemValue(it, gRow)
+		}
+		resultRows = append(resultRows, gRow)
+	}
+
+	if sel.OrderBy != nil {
+		sortRows(resultRows, sel.OrderBy)
+	}
+	resultRows = applyOffsetLimit(resultRows, sel.Offset, sel.Limit)
+
+	cols := make([]string, len(sel.Items))
+	specs := make([]projSpec, len(sel.Items))
+	for i, it := range sel.Items {
+		cols[i] = it.OutputName()
+		specs[i] = projSpec{name: it.OutputName(), source: it.OutputName()}
+	}
+	return projectRows(resultRows, specs), nil
+}
+
+func itemValue(it SelectItem, gRow Row) types.Comparable {
+	switch {
+	case it.Column != nil:
+		return gRow[it.Column.Name]
+	case it.Agg != nil:
+		return gRow[it.Agg.canonicalName()]
+	default:
+		return types.NullKey{}
+	}
+}
+
+// groupRows partitions rows by their grouping-column values. With no grouping
+// columns it returns a single group containing all rows (always present, even
+// when rows is empty). The returned slice preserves first-appearance order.
+func groupRows(rows []Row, groupBy []string) (map[string][]Row, []string) {
+	groups := make(map[string][]Row)
+	var order []string
+	if len(groupBy) == 0 {
+		groups[""] = rows
+		return groups, []string{""}
+	}
+	for _, row := range rows {
+		key := groupKey(row, groupBy)
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], row)
+	}
+	return groups, order
+}
+
+func groupKey(row Row, groupBy []string) string {
+	var b strings.Builder
+	for _, c := range groupBy {
+		fmt.Fprintf(&b, "%T:%v|", row[c], row[c])
+	}
+	return b.String()
+}
+
+// collectAggregates gathers the distinct aggregate calls referenced by the
+// projection and the HAVING clause.
+func collectAggregates(sel *SelectStmt) []*AggregateCall {
+	var aggs []*AggregateCall
+	seen := make(map[string]struct{})
+	add := func(a *AggregateCall) {
+		name := a.canonicalName()
+		if _, dup := seen[name]; dup {
+			return
+		}
+		seen[name] = struct{}{}
+		aggs = append(aggs, a)
+	}
+	for _, it := range sel.Items {
+		if it.Agg != nil {
+			add(it.Agg)
+		}
+	}
+	walkAggregates(sel.Having, add)
+	return aggs
+}
+
+func walkAggregates(expr Expr, add func(*AggregateCall)) {
+	switch e := expr.(type) {
+	case *AggregateExpr:
+		add(e.Call)
+	case *IsNullExpr:
+		walkAggregates(e.Operand, add)
+	case *BinaryExpr:
+		walkAggregates(e.Left, add)
+		walkAggregates(e.Right, add)
+	}
 }
 
 func computeAggregate(call *AggregateCall, rows []Row) (types.Comparable, error) {

@@ -16,6 +16,8 @@ type SelectStmt struct {
 	Items   []SelectItem // projection list
 	Table   string
 	Where   Expr     // nil when no WHERE clause
+	GroupBy []string // grouping columns, empty when no GROUP BY
+	Having  Expr     // nil when no HAVING clause
 	OrderBy *OrderBy // nil when no ORDER BY clause
 	Limit   *int64   // nil when no LIMIT clause
 	Offset  *int64   // nil when no OFFSET clause
@@ -189,6 +191,16 @@ func (e *IsNullExpr) String() string {
 }
 
 func (*IsNullExpr) exprNode() {}
+
+// AggregateExpr wraps an aggregate call so it can appear as an operand inside a
+// HAVING predicate (e.g. COUNT(*) > 1). It resolves against the per-group
+// aggregate values during evaluation.
+type AggregateExpr struct {
+	Call *AggregateCall
+}
+
+func (e *AggregateExpr) String() string { return e.Call.canonicalName() }
+func (*AggregateExpr) exprNode()        {}
 
 // BinaryExpr is a comparison (= <> != < <= > >=) or a logical connective
 // (AND, OR) joining two sub-expressions.
