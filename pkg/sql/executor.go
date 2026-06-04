@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -25,6 +26,9 @@ type Executor struct {
 
 	maintMu sync.Mutex
 	maint   *maintenanceRunner // non-nil while scheduled maintenance is running
+	// lastCheckpointLSN gates maintenance: a pass only checkpoints when the
+	// engine's current LSN has advanced past it (i.e. there were writes).
+	lastCheckpointLSN atomic.Uint64
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses

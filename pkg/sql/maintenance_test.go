@@ -98,7 +98,7 @@ func TestRunMaintenance(t *testing.T) {
 func TestScheduledMaintenanceLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	db, err := OpenDatabase(ctx, dir)
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
 	if err != nil {
 		t.Fatalf("OpenDatabase: %v", err)
 	}
@@ -114,5 +114,73 @@ func TestScheduledMaintenanceLifecycle(t *testing.T) {
 	// Close stops the scheduler cleanly (no hang / leaked goroutine).
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestOpenDatabaseAutoMaintenanceDefault(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenDatabase(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	defer db.Close()
+	if db.maint == nil {
+		t.Fatal("expected maintenance to auto-start by default")
+	}
+
+	off, err := OpenDatabaseWithOptions(ctx, t.TempDir(), OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabaseWithOptions: %v", err)
+	}
+	defer off.Close()
+	if off.maint != nil {
+		t.Fatal("expected maintenance disabled when DisableMaintenance is set")
+	}
+}
+
+func TestMaintenanceActivityGating(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := OpenDatabaseWithOptions(ctx, dir, OpenOptions{DisableMaintenance: true})
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	defer db.Close()
+
+	mustExec(t, db, "CREATE TABLE t (id INT PRIMARY KEY, v INT)")
+	mustExec(t, db, "INSERT INTO t (id, v) VALUES (1, 10)")
+
+	// A write happened, so the next pass checkpoints.
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance 1: %v", err)
+	}
+	c1 := db.engine.Stats().Checkpoints
+	if c1 == 0 {
+		t.Fatal("expected a checkpoint after writes")
+	}
+
+	// No writes since the last checkpoint -> the pass is gated (no checkpoint).
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance 2: %v", err)
+	}
+	if c2 := db.engine.Stats().Checkpoints; c2 != c1 {
+		t.Fatalf("idle pass checkpointed: got %d, want %d", c2, c1)
+	}
+
+	// A new write re-arms the checkpoint.
+	mustExec(t, db, "INSERT INTO t (id, v) VALUES (2, 20)")
+	if _, err := db.RunMaintenance(ctx); err != nil {
+		t.Fatalf("RunMaintenance 3: %v", err)
+	}
+	if c3 := db.engine.Stats().Checkpoints; c3 != c1+1 {
+		t.Fatalf("checkpoint after new write: got %d, want %d", c3, c1+1)
+	}
+}
+
+func mustExec(t *testing.T, db *Executor, query string) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), query); err != nil {
+		t.Fatalf("exec %q: %v", query, err)
 	}
 }

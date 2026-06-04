@@ -31,8 +31,13 @@ type maintenanceRunner struct {
 // removed.
 func (e *Executor) RunMaintenance(ctx context.Context) (int, error) {
 	if e.engine != nil {
-		if err := e.engine.FuzzyCheckpoint(ctx); err != nil {
-			return 0, err
+		// Activity gating: only checkpoint when the LSN advanced since the last
+		// checkpoint, so an idle database does no periodic I/O.
+		if e.engine.Stats().CurrentLSN != e.lastCheckpointLSN.Load() {
+			if err := e.engine.FuzzyCheckpoint(ctx); err != nil {
+				return 0, err
+			}
+			e.lastCheckpointLSN.Store(e.engine.Stats().CurrentLSN)
 		}
 	}
 	if e.ddl == nil {

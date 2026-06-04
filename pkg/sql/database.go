@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bobboyms/storage-engine/pkg/codec/bsoncodec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
@@ -24,13 +25,36 @@ type ddlManager struct {
 	schemas []TableSchema
 }
 
-// OpenDatabase opens (or creates) a SQL database rooted at dir. It reconstructs
-// every table declared in the persisted schema (one heap file per table) and a
-// shared write-ahead log, recovers committed data, and returns an Executor that
-// can run queries, DML, and CREATE TABLE. Schema changes are persisted so a
-// later OpenDatabase on the same directory restores the tables without any Go
-// setup code.
+// defaultMaintenanceInterval is how often a database started with default
+// options runs background maintenance (a fuzzy checkpoint, gated on write
+// activity, plus a temp-file sweep).
+const defaultMaintenanceInterval = 5 * time.Minute
+
+// OpenOptions tunes OpenDatabaseWithOptions. The zero value enables background
+// maintenance at the default interval.
+type OpenOptions struct {
+	// MaintenanceInterval sets the background maintenance period; values <= 0
+	// use the default interval.
+	MaintenanceInterval time.Duration
+	// DisableMaintenance turns off automatic background maintenance entirely;
+	// the caller can still invoke RunMaintenance on demand.
+	DisableMaintenance bool
+}
+
+// OpenDatabase opens (or creates) a SQL database rooted at dir with default
+// options (background maintenance enabled). See OpenDatabaseWithOptions.
 func OpenDatabase(ctx context.Context, dir string) (*Executor, error) {
+	return OpenDatabaseWithOptions(ctx, dir, OpenOptions{})
+}
+
+// OpenDatabaseWithOptions opens (or creates) a SQL database rooted at dir. It
+// reconstructs every table declared in the persisted schema (one heap file per
+// table) and a shared write-ahead log, recovers committed data, and returns an
+// Executor that can run queries, DML, and CREATE TABLE. Schema changes are
+// persisted so a later open on the same directory restores the tables without
+// any Go setup code. Unless disabled, it starts background maintenance that
+// periodically checkpoints (bounding WAL growth) and clears orphan temp files.
+func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) (*Executor, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("sql: create database dir: %w", err)
 	}
@@ -72,21 +96,36 @@ func OpenDatabase(ctx context.Context, dir string) (*Executor, error) {
 		return nil, fmt.Errorf("sql: recover: %w", err)
 	}
 
-	return &Executor{
+	exec := &Executor{
 		engine:  engine,
 		catalog: catalog,
 		codec:   bsoncodec.New(),
 		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas},
-	}, nil
+	}
+	// Arm activity gating from the recovered state so an idle database does no
+	// periodic checkpoint work until the first write.
+	exec.lastCheckpointLSN.Store(engine.Stats().CurrentLSN)
+
+	if !opts.DisableMaintenance {
+		interval := opts.MaintenanceInterval
+		if interval <= 0 {
+			interval = defaultMaintenanceInterval
+		}
+		exec.StartMaintenance(interval)
+	}
+	return exec, nil
 }
 
-// Close stops any scheduled maintenance and releases the underlying storage
-// engine. It is only meaningful for an executor created by OpenDatabase.
+// Close stops any scheduled maintenance, runs a final maintenance pass (a
+// gated checkpoint that compacts the WAL plus a temp-file sweep), and releases
+// the underlying storage engine. It is only meaningful for an executor created
+// by OpenDatabase.
 func (e *Executor) Close() error {
 	e.stopMaintenance()
 	if e.engine == nil {
 		return nil
 	}
+	_, _ = e.RunMaintenance(context.Background())
 	return e.engine.Close()
 }
 
