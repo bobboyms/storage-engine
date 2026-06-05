@@ -318,6 +318,30 @@ func LiteralValue(lit *Literal, hint types.Comparable) (types.Comparable, error)
 			}
 			return k, nil
 		}
+	case types.DateOnlyKey:
+		switch lit.Kind {
+		case LitDate:
+			return lit.Date, nil
+		case LitString:
+			k, err := types.ParseDateOnly(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrEval, err)
+			}
+			return k, nil
+		}
+	case types.DecimalKey:
+		switch lit.Kind {
+		case LitDecimal:
+			return lit.Dec, nil
+		case LitString:
+			k, err := types.ParseDecimal(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrEval, err)
+			}
+			return k, nil
+		case LitInt:
+			return types.NewDecimal(lit.Int, 0), nil
+		}
 	}
 	return nil, fmt.Errorf("%w: literal %s is not compatible with %T", ErrEval, lit.String(), hint)
 }
@@ -334,6 +358,10 @@ func naturalLiteral(lit *Literal) types.Comparable {
 		return types.BoolKey(lit.Bool)
 	case LitUUID:
 		return lit.UUID
+	case LitDate:
+		return lit.Date
+	case LitDecimal:
+		return lit.Dec
 	default:
 		return types.NullKey{}
 	}

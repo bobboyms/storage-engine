@@ -34,13 +34,53 @@ type SelectStmt struct {
 
 func (*SelectStmt) stmtNode() {}
 
+// SetOpStmt is a set operation combining a left query with a right SELECT. The
+// only operation currently supported is UNION; All distinguishes UNION ALL
+// (keep duplicates) from UNION (eliminate duplicate result rows). Left is a
+// *SelectStmt or a nested *SetOpStmt, so chained unions are left-associative.
+type SetOpStmt struct {
+	Left  Statement
+	Right *SelectStmt
+	All   bool
+}
+
+func (*SetOpStmt) stmtNode() {}
+
 // SelectItem is one entry in a SELECT projection list: a star, a bare column,
 // or an aggregate call, optionally renamed with AS.
 type SelectItem struct {
 	Star   bool
 	Column *ColumnRef     // bare column projection (nil otherwise)
 	Agg    *AggregateCall // aggregate projection (nil otherwise)
+	Window *WindowCall    // window-function projection (nil otherwise)
 	Alias  string         // output name override, empty if none
+}
+
+// WindowCall is a window-function application in a projection:
+// func(arg) OVER (PARTITION BY ... ORDER BY ...). Func is one of the ranking
+// functions (ROW_NUMBER, RANK, DENSE_RANK) or an aggregate (SUM, COUNT, AVG,
+// MIN, MAX) evaluated over the window frame. Star marks COUNT(*); Arg is the
+// argument column for aggregates (nil for ranking functions and COUNT(*)).
+type WindowCall struct {
+	Func      string
+	Star      bool
+	Arg       *ColumnRef
+	Partition []string // PARTITION BY columns (canonical strings), empty if none
+	Order     *OrderBy // ORDER BY within the window, nil if none
+}
+
+// canonicalName returns the default result-set column name for a window call,
+// e.g. "row_number()", "sum(age)", or "count(*)".
+func (w *WindowCall) canonicalName() string {
+	fn := strings.ToLower(w.Func)
+	switch {
+	case w.Star:
+		return fn + "(*)"
+	case w.Arg != nil:
+		return fn + "(" + w.Arg.String() + ")"
+	default:
+		return fn + "()"
+	}
 }
 
 // AggregateCall is an aggregate function application in a projection.
@@ -61,6 +101,8 @@ func (it SelectItem) OutputName() string {
 		return it.Column.Name
 	case it.Agg != nil:
 		return it.Agg.canonicalName()
+	case it.Window != nil:
+		return it.Window.canonicalName()
 	default:
 		return "*"
 	}
@@ -234,6 +276,10 @@ const (
 	LitNull
 	// LitUUID is a 16-byte UUID literal.
 	LitUUID
+	// LitDate is a calendar-date literal (DATE 'YYYY-MM-DD').
+	LitDate
+	// LitDecimal is an exact-precision decimal literal (DECIMAL '1.50').
+	LitDecimal
 )
 
 // Literal is a constant value appearing in a WHERE clause.
@@ -244,6 +290,8 @@ type Literal struct {
 	Str   string
 	Bool  bool
 	UUID  types.UUIDKey
+	Date  types.DateOnlyKey
+	Dec   types.DecimalKey
 }
 
 func (l *Literal) String() string {
@@ -259,7 +307,11 @@ func (l *Literal) String() string {
 	case LitNull:
 		return "NULL"
 	case LitUUID:
-		return "'" + l.UUID.String() + "'"
+		return "UUID '" + l.UUID.String() + "'"
+	case LitDate:
+		return "DATE '" + l.Date.String() + "'"
+	case LitDecimal:
+		return "DECIMAL '" + l.Dec.String() + "'"
 	default:
 		return "?"
 	}
