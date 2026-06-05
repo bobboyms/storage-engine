@@ -107,6 +107,22 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		return nil, fmt.Errorf("sql: create database dir: %w", err)
 	}
 
+	// Take an exclusive directory lock before touching any files so two live
+	// handles (in this or another process) can never write to the same heap and
+	// B-tree files concurrently and corrupt the indexes. Released by Close.
+	lock, err := acquireDirLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Release the lock if anything below fails before the executor is returned;
+	// otherwise the directory would stay locked until the process exits.
+	opened := false
+	defer func() {
+		if !opened {
+			_ = lock.release()
+		}
+	}()
+
 	// Clear orphan temp files left by an interrupted atomic write before any
 	// new writing starts (minAge 0 is safe here: nothing is writing yet).
 	if _, err := sweepTempFiles(dir, 0); err != nil {
@@ -170,7 +186,9 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		catalog: catalog,
 		codec:   bsoncodec.New(),
 		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore},
+		dirLock: lock,
 	}
+	opened = true // hand the lock's lifetime to exec.Close.
 	// Arm activity gating from the recovered state so an idle database does no
 	// periodic checkpoint work until the first write.
 	exec.lastCheckpointLSN.Store(engine.Stats().CurrentLSN)
@@ -195,7 +213,13 @@ func (e *Executor) Close() error {
 		return nil
 	}
 	_, _ = e.RunMaintenance(context.Background())
-	return e.engine.Close()
+	err := e.engine.Close()
+	// Release the directory lock last so the engine has finished all file I/O
+	// before another handle is allowed to open the directory.
+	if relErr := e.dirLock.release(); relErr != nil && err == nil {
+		err = relErr
+	}
+	return err
 }
 
 // registerTable creates the table's heap file and registers it (with its

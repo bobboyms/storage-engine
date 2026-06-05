@@ -24,6 +24,9 @@ type Executor struct {
 	catalog *Catalog
 	codec   codec.Codec
 	ddl     *ddlManager // non-nil only when opened via OpenDatabase
+	// dirLock holds the exclusive directory lock taken by OpenDatabase; it is
+	// released by Close. Nil for executors built via NewExecutor.
+	dirLock *dirLock
 
 	maintMu sync.Mutex
 	maint   *maintenanceRunner // non-nil while scheduled maintenance is running
