@@ -40,6 +40,17 @@ func ColumnValue(lit *Literal, dt storage.DataType) (types.Comparable, error) {
 		case LitInt:
 			return types.FloatKey(float64(lit.Int)), nil
 		}
+	case storage.TypeUUID:
+		switch lit.Kind {
+		case LitUUID:
+			return lit.UUID, nil
+		case LitString:
+			k, err := types.ParseUUID(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrValue, err)
+			}
+			return k, nil
+		}
 	}
 	return nil, fmt.Errorf("%w: literal %s is not compatible with column type %s", ErrValue, lit.String(), dt)
 }

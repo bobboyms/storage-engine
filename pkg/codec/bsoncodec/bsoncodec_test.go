@@ -173,3 +173,47 @@ func TestKeyExtractionHandlesNativeBSONTypes(t *testing.T) {
 		t.Fatal("blob key should fall back to a non-nil Comparable")
 	}
 }
+
+// TestUUIDBinaryRoundTrip verifies that a BSON binary value with the UUID
+// subtype (0x04) decodes to a typed types.UUIDKey, both from parsed extended
+// JSON and from stored BSON bytes, so a UUID column keeps its native key type.
+func TestUUIDBinaryRoundTrip(t *testing.T) {
+	c := bsoncodec.New()
+
+	want, err := types.ParseUUID("3b241101-e2bb-4255-8caf-4136c566a962")
+	if err != nil {
+		t.Fatalf("ParseUUID: %v", err)
+	}
+
+	// Extended-JSON binary form, as produced by the SQL layer for UUID columns.
+	const extJSON = `{"id": {"$binary": {"base64": "OyQRAeK7QlWMr0E2xWapYg==", "subType": "04"}}}`
+
+	parsed, err := c.Parse(extJSON)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	k, ok, err := parsed.Key("id")
+	if err != nil || !ok {
+		t.Fatalf("Key id (parsed): ok=%v err=%v", ok, err)
+	}
+	if got, isUUID := k.(types.UUIDKey); !isUUID || got != want {
+		t.Fatalf("parsed UUID key = %v (%T), want %s", k, k, want)
+	}
+
+	// The same value must survive encode to BSON and decode back via Open.
+	raw, err := parsed.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	opened, err := c.Open(raw)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	k, ok, err = opened.Key("id")
+	if err != nil || !ok {
+		t.Fatalf("Key id (opened): ok=%v err=%v", ok, err)
+	}
+	if got, isUUID := k.(types.UUIDKey); !isUUID || got != want {
+		t.Fatalf("opened UUID key = %v (%T), want %s", k, k, want)
+	}
+}

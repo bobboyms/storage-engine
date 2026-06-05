@@ -3,6 +3,8 @@ package sql
 import (
 	"errors"
 	"fmt"
+
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // ErrBind is the sentinel wrapped when bind parameters cannot be applied: a
@@ -169,6 +171,21 @@ func literalFromArg(ordinal int, args []any) (*Literal, error) {
 		return &Literal{Kind: LitFloat, Float: float64(v)}, nil
 	case float64:
 		return &Literal{Kind: LitFloat, Float: v}, nil
+	case types.UUIDKey:
+		return &Literal{Kind: LitUUID, UUID: v}, nil
+	case *types.UUIDKey:
+		if v == nil {
+			return &Literal{Kind: LitNull}, nil
+		}
+		return &Literal{Kind: LitUUID, UUID: *v}, nil
+	case [16]byte:
+		return &Literal{Kind: LitUUID, UUID: types.UUIDKey(v)}, nil
+	case []byte:
+		k, err := types.UUIDKeyFromBytes(v)
+		if err != nil {
+			return nil, fmt.Errorf("%w: argument %d: %v", ErrBind, ordinal, err)
+		}
+		return &Literal{Kind: LitUUID, UUID: k}, nil
 	default:
 		return nil, fmt.Errorf("%w: argument %d has unsupported type %T", ErrBind, ordinal, v)
 	}

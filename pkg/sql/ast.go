@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bobboyms/storage-engine/pkg/storage"
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // Statement is the root AST node produced by Parse.
@@ -231,6 +232,8 @@ const (
 	LitBool
 	// LitNull is the NULL literal.
 	LitNull
+	// LitUUID is a 16-byte UUID literal.
+	LitUUID
 )
 
 // Literal is a constant value appearing in a WHERE clause.
@@ -240,6 +243,7 @@ type Literal struct {
 	Float float64
 	Str   string
 	Bool  bool
+	UUID  types.UUIDKey
 }
 
 func (l *Literal) String() string {
@@ -254,6 +258,8 @@ func (l *Literal) String() string {
 		return strconv.FormatBool(l.Bool)
 	case LitNull:
 		return "NULL"
+	case LitUUID:
+		return "'" + l.UUID.String() + "'"
 	default:
 		return "?"
 	}

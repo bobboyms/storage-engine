@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
@@ -72,7 +73,7 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return 0, fmt.Errorf("%w: %v", ErrExec, err)
 		}
-		doc[name] = literalToGo(lit)
+		doc[name] = literalToDocValue(lit, col.Type)
 		values[name] = lit
 	}
 
@@ -150,7 +151,8 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 			return 0, err
 		}
 		for _, a := range stmt.Assignments {
-			doc[a.Column] = literalToGo(a.Value.(*Literal))
+			col, _ := schema.Column(a.Column)
+			doc[a.Column] = literalToDocValue(a.Value.(*Literal), col.Type)
 		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
@@ -347,9 +349,73 @@ func literalToGo(lit *Literal) any {
 		return lit.Str
 	case LitBool:
 		return lit.Bool
+	case LitUUID:
+		return uuidExtJSON(lit.UUID)
 	default:
 		return nil
 	}
+}
+
+// literalToDocValue renders a literal into the JSON document representation that
+// round-trips for its column type. A UUID column is stored as extended-JSON
+// binary (subtype 0x04) so the codec decodes it back to a typed UUID key; every
+// other type uses the literal's natural Go value.
+func literalToDocValue(lit *Literal, dt storage.DataType) any {
+	if dt == storage.TypeUUID {
+		switch lit.Kind {
+		case LitUUID:
+			return uuidExtJSON(lit.UUID)
+		case LitString:
+			if k, err := types.ParseUUID(lit.Str); err == nil {
+				return uuidExtJSON(k)
+			}
+		}
+	}
+	return literalToGo(lit)
+}
+
+// uuidExtJSON renders a UUID as the canonical BSON extended-JSON binary form
+// (subtype 0x04). Once the surrounding document is marshaled to JSON and parsed
+// by the codec, this field decodes back to a types.UUIDKey rather than a string,
+// so the engine derives a UUID-typed index key that matches the column type.
+func uuidExtJSON(k types.UUIDKey) map[string]any {
+	return map[string]any{
+		"$binary": map[string]any{
+			"base64":  base64.StdEncoding.EncodeToString(k[:]),
+			"subType": "04",
+		},
+	}
+}
+
+// uuidFromDocValue extracts a UUIDKey from a decoded document value. A UUID
+// field survives the JSON round-trip as a typed UUIDKey, a canonical string, or
+// the extended-JSON binary object {"$binary":{"base64":...,"subType":"04"}}.
+func uuidFromDocValue(v any) (types.UUIDKey, bool) {
+	switch t := v.(type) {
+	case types.UUIDKey:
+		return t, true
+	case string:
+		if k, err := types.ParseUUID(t); err == nil {
+			return k, true
+		}
+	case map[string]any:
+		bin, ok := t["$binary"].(map[string]any)
+		if !ok {
+			return types.UUIDKey{}, false
+		}
+		enc, ok := bin["base64"].(string)
+		if !ok {
+			return types.UUIDKey{}, false
+		}
+		raw, err := base64.StdEncoding.DecodeString(enc)
+		if err != nil {
+			return types.UUIDKey{}, false
+		}
+		if k, err := types.UUIDKeyFromBytes(raw); err == nil {
+			return k, true
+		}
+	}
+	return types.UUIDKey{}, false
 }
 
 // jsonValueToKey converts a document value to a column's key type. Numbers may
@@ -375,6 +441,10 @@ func jsonValueToKey(v any, dt storage.DataType) (types.Comparable, error) {
 	case storage.TypeBoolean:
 		if b, ok := v.(bool); ok {
 			return types.BoolKey(b), nil
+		}
+	case storage.TypeUUID:
+		if k, ok := uuidFromDocValue(v); ok {
+			return k, nil
 		}
 	}
 	return nil, fmt.Errorf("%w: value %v is not compatible with column type %s", ErrValue, v, dt)

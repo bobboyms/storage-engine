@@ -121,6 +121,13 @@ func comparableFromValue(v any) types.Comparable {
 		return types.DateKey(val)
 	case bson.DateTime:
 		return types.DateKey(val.Time())
+	case bson.Binary:
+		if val.Subtype == bson.TypeBinaryUUID && len(val.Data) == 16 {
+			var k types.UUIDKey
+			copy(k[:], val.Data)
+			return k
+		}
+		return types.VarcharKey(fmt.Sprintf("%v", val))
 	default:
 		return types.VarcharKey(fmt.Sprintf("%v", val))
 	}

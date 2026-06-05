@@ -307,6 +307,17 @@ func LiteralValue(lit *Literal, hint types.Comparable) (types.Comparable, error)
 		if lit.Kind == LitBool {
 			return types.BoolKey(lit.Bool), nil
 		}
+	case types.UUIDKey:
+		switch lit.Kind {
+		case LitUUID:
+			return lit.UUID, nil
+		case LitString:
+			k, err := types.ParseUUID(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrEval, err)
+			}
+			return k, nil
+		}
 	}
 	return nil, fmt.Errorf("%w: literal %s is not compatible with %T", ErrEval, lit.String(), hint)
 }
@@ -321,6 +332,8 @@ func naturalLiteral(lit *Literal) types.Comparable {
 		return types.VarcharKey(lit.Str)
 	case LitBool:
 		return types.BoolKey(lit.Bool)
+	case LitUUID:
+		return lit.UUID
 	default:
 		return types.NullKey{}
 	}

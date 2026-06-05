@@ -227,7 +227,8 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 			return 0, err
 		}
 		for _, a := range stmt.Assignments {
-			doc[a.Column] = literalToGo(a.Value.(*Literal))
+			col, _ := schema.Column(a.Column)
+			doc[a.Column] = literalToDocValue(a.Value.(*Literal), col.Type)
 		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
@@ -372,7 +373,7 @@ func buildInsertDoc(schema *TableSchema, stmt *InsertStmt) (map[string]any, map[
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
-		doc[name] = literalToGo(lit)
+		doc[name] = literalToDocValue(lit, col.Type)
 		values[name] = lit
 	}
 	keys, err := keysForInsert(schema, values)
