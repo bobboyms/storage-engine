@@ -90,7 +90,14 @@ func loadSchemas(dir string) ([]TableSchema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sql: read schema file: %w", err)
 	}
-	tables, err := decodeCatalog(data)
+	tables, version, err := decodeCatalog(data)
+	if err != nil {
+		return nil, err
+	}
+	// Upgrade an older on-disk catalog to the current format before use. The
+	// migrated tables are re-stamped to the current version on the next schema
+	// write (any DDL), so a read-only open leaves the file untouched.
+	tables, err = migrateCatalog(tables, version, CatalogFormatVersion, catalogMigrations)
 	if err != nil {
 		return nil, err
 	}
@@ -105,27 +112,32 @@ func loadSchemas(dir string) ([]TableSchema, error) {
 	return schemas, nil
 }
 
-// decodeCatalog parses the catalog file, accepting either the current versioned
-// envelope ({"format_version":N,"tables":[...]}) or the legacy bare array of
-// tables (treated as format version 1) so pre-envelope databases keep opening.
-// A version newer than this build supports is refused.
-func decodeCatalog(data []byte) ([]persistedTable, error) {
+// decodeCatalog parses the catalog file, returning the tables and the on-disk
+// format version. It accepts either the current versioned envelope
+// ({"format_version":N,"tables":[...]}) or the legacy bare array of tables
+// (treated as format version 1) so pre-envelope databases keep opening. A
+// version newer than this build supports is refused.
+func decodeCatalog(data []byte) ([]persistedTable, int, error) {
 	if trimmed := bytes.TrimLeft(data, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
 		var tables []persistedTable
 		if err := json.Unmarshal(data, &tables); err != nil {
-			return nil, fmt.Errorf("sql: parse schema file: %w", err)
+			return nil, 0, fmt.Errorf("sql: parse schema file: %w", err)
 		}
-		return tables, nil
+		return tables, 1, nil
 	}
 
 	var cat persistedCatalog
 	if err := json.Unmarshal(data, &cat); err != nil {
-		return nil, fmt.Errorf("sql: parse schema file: %w", err)
+		return nil, 0, fmt.Errorf("sql: parse schema file: %w", err)
 	}
 	if cat.FormatVersion > CatalogFormatVersion {
-		return nil, fmt.Errorf("%w: file is v%d, this build supports up to v%d", ErrUnsupportedCatalogVersion, cat.FormatVersion, CatalogFormatVersion)
+		return nil, 0, fmt.Errorf("%w: file is v%d, this build supports up to v%d", ErrUnsupportedCatalogVersion, cat.FormatVersion, CatalogFormatVersion)
 	}
-	return cat.Tables, nil
+	version := cat.FormatVersion
+	if version == 0 {
+		version = 1 // an envelope without the field predates versioning.
+	}
+	return cat.Tables, version, nil
 }
 
 // saveSchemas writes the table schemas to dir atomically (temp file + rename).
