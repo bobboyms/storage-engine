@@ -103,10 +103,24 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 	se.Put(context.Background(), "users", "id", types.IntKey(1), "good")
 	se.Close()
 
-	// 2. Append garbage
-	f, _ := os.OpenFile(walPath, os.O_APPEND|os.O_WRONLY, 0644)
-	f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF}) // Invalid Magic/Header
-	f.Close()
+	// 2. Corrupt a byte INSIDE the first written data page (pageID 1 starts
+	// at offset PageSize; its body starts after the page header). This is
+	// genuine mid-file corruption — distinct from a torn trailing page — and
+	// must still be detected (CRC/auth failure), never silently tolerated.
+	raw, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pageSize = 8192
+	const pageHeaderSize = 32
+	corruptAt := pageSize + pageHeaderSize + 8 // inside page 1's body
+	if corruptAt >= len(raw) {
+		t.Fatalf("WAL too small (%d bytes) to corrupt page body", len(raw))
+	}
+	raw[corruptAt] ^= 0xFF
+	if err := os.WriteFile(walPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3. Recover
 	hm2, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
@@ -128,6 +142,53 @@ func TestRecover_CorruptedEntry(t *testing.T) {
 
 	if err := se2.Recover(context.Background(), walPath); err == nil {
 		t.Fatal("Expected error for corrupted WAL")
+	}
+}
+
+// TestRecover_TornTrailingPageTolerated proves the complement of
+// TestRecover_CorruptedEntry: a crash that left a torn (partial) trailing
+// page — extra bytes beyond the last fully written page — must NOT make the
+// log unreadable. Every entry committed before the torn tail is recovered.
+func TestRecover_TornTrailingPageTolerated(t *testing.T) {
+	tmpDir := t.TempDir()
+	walPath := filepath.Join(tmpDir, "wal.log")
+	heapPath := filepath.Join(tmpDir, "heap.data")
+
+	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
+	mgr := storage.NewTableMenager()
+	mgr.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm)
+	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	se, _ := storage.NewStorageEngine(mgr, walWriter)
+	if err := se.Put(context.Background(), "users", "id", types.IntKey(1), "good"); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	se.Close()
+
+	// Torn write of the next page: append partial bytes so the file is no
+	// longer page-aligned.
+	f, _ := os.OpenFile(walPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF})
+	f.Close()
+
+	hm2, _ := storage.NewHeapForTable(storage.HeapFormatV2, heapPath)
+	mgr2 := storage.NewTableMenager()
+	mgr2.NewTable("users", []storage.Index{{Name: "id", Primary: true, Type: storage.TypeInt}}, 3, hm2)
+	walWriter2, err := wal.NewWALWriter(walPath, wal.DefaultOptions())
+	if err != nil {
+		t.Fatalf("WAL must open despite torn trailing page: %v", err)
+	}
+	se2, err := storage.NewStorageEngine(mgr2, walWriter2)
+	if err != nil {
+		t.Fatalf("engine must open despite torn trailing page: %v", err)
+	}
+	defer se2.Close()
+
+	got, found, err := getDocStringExt(t, se2, "users", "id", types.IntKey(1))
+	if err != nil {
+		t.Fatalf("Get after torn-tail recovery: %v", err)
+	}
+	if !found || got != "good" {
+		t.Fatalf("committed record lost after torn-tail recovery: found=%v got=%q", found, got)
 	}
 }
 
