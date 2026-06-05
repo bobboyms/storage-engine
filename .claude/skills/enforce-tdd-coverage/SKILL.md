@@ -1,23 +1,7 @@
 ---
 name: enforce-tdd-coverage
-description: Enforce test-driven development (Red, Green, Refactor) and a minimum 70% total coverage gate for this Go project. Use automatically before editing any production Go code, when implementing features, fixing bugs, refactoring, changing behavior, modifying APIs or storage, or writing/updating tests.
-when_to_use: Triggers include any request to write, modify, refactor, or fix Go code (.go files), add or change tests, run the test suite, change behavior, alter APIs, or touch the Makefile test targets. Apply before producing or editing production code.
-paths:
-  - "**/*.go"
-  - "go.mod"
-  - "go.sum"
-  - "Makefile"
-allowed-tools:
-  - Bash(go test *)
-  - Bash(go tool cover *)
-  - Bash(go build *)
-  - Bash(go vet *)
-  - Bash(make test*)
-  - Read
-  - Edit
-  - Write
-  - Grep
-  - Glob
+description: Enforce test-driven development (Red, Green, Refactor) and a minimum 70% total coverage gate for this Go project. Use automatically before editing any production Go code (.go files, go.mod, go.sum, Makefile), when implementing features, fixing bugs, refactoring, changing behavior, modifying APIs or storage, running the test suite, or writing/updating tests.
+allowed-tools: Bash(go test *), Bash(go tool cover *), Bash(go build *), Bash(go vet *), Bash(make test*), Read, Edit, Write, Grep, Glob
 ---
 
 # Enforce TDD Coverage
