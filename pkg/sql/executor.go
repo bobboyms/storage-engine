@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -67,11 +68,69 @@ func (e *Executor) Query(ctx context.Context, query string, args ...any) (*Resul
 	switch s := stmt.(type) {
 	case *SelectStmt:
 		return e.execSelect(ctx, s, nil)
+	case *SetOpStmt:
+		return e.execSetOp(ctx, s)
 	case *DescribeStmt:
 		return e.execDescribe(s)
 	default:
 		return nil, fmt.Errorf("%w: Query expects a SELECT or DESCRIBE statement", ErrExec)
 	}
+}
+
+// execSetOp executes a UNION [ALL] set operation. It runs both sides, requires
+// them to project the same number of columns, concatenates the rows, and for a
+// plain UNION removes duplicate result rows. The output column names come from
+// the left query.
+func (e *Executor) execSetOp(ctx context.Context, s *SetOpStmt) (*ResultSet, error) {
+	var left *ResultSet
+	var err error
+	switch l := s.Left.(type) {
+	case *SelectStmt:
+		left, err = e.execSelect(ctx, l, nil)
+	case *SetOpStmt:
+		left, err = e.execSetOp(ctx, l)
+	default:
+		return nil, fmt.Errorf("%w: unsupported set-operation operand %T", ErrExec, s.Left)
+	}
+	if err != nil {
+		return nil, err
+	}
+	right, err := e.execSelect(ctx, s.Right, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(left.Columns) != len(right.Columns) {
+		return nil, fmt.Errorf("%w: each UNION query must return the same number of columns (%d vs %d)", ErrExec, len(left.Columns), len(right.Columns))
+	}
+
+	out := &ResultSet{Columns: left.Columns}
+	if s.All {
+		out.Rows = append(append(make([][]types.Comparable, 0, len(left.Rows)+len(right.Rows)), left.Rows...), right.Rows...)
+		return out, nil
+	}
+	seen := make(map[string]struct{}, len(left.Rows)+len(right.Rows))
+	for _, src := range [][][]types.Comparable{left.Rows, right.Rows} {
+		for _, row := range src {
+			key := rowKey(row)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out.Rows = append(out.Rows, row)
+		}
+	}
+	return out, nil
+}
+
+// rowKey builds a stable identity key for a result row, used to deduplicate
+// UNION output. Each value is rendered with its concrete type so values that
+// print alike but differ in type are not conflated.
+func rowKey(row []types.Comparable) string {
+	var b strings.Builder
+	for _, v := range row {
+		fmt.Fprintf(&b, "%T:%v|", v, v)
+	}
+	return b.String()
 }
 
 // execSelect executes a parsed SELECT. Queries with joins or a derived FROM
@@ -83,6 +142,9 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 	ec := &evalContext{exec: e, ctx: ctx, outer: outer}
 
 	if len(sel.Joins) > 0 || sel.Subquery != nil {
+		if hasWindows(sel.Items) {
+			return nil, fmt.Errorf("%w: window functions are only supported on single-table queries", ErrExec)
+		}
 		return e.queryFrom(ctx, sel, ec)
 	}
 
@@ -99,6 +161,13 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 	rows, err := e.scanRows(ctx, schema, sel.Alias, plan, ec, scanLimit(sel, plan))
 	if err != nil {
 		return nil, err
+	}
+
+	if hasWindows(sel.Items) {
+		if len(sel.GroupBy) > 0 || hasAggregates(sel.Items) {
+			return nil, fmt.Errorf("%w: window functions cannot be combined with GROUP BY or aggregates", ErrExec)
+		}
+		return windowResultSet(sel, rows, schema)
 	}
 
 	if isGrouped(sel) {
@@ -183,7 +252,9 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias stri
 // when an in-memory sort reorders them, and only when a LIMIT is present. The
 // cap includes OFFSET, which applyOffsetLimit then trims.
 func scanLimit(sel *SelectStmt, plan *QueryPlan) int {
-	if isGrouped(sel) || plan.NeedsSort || sel.Limit == nil {
+	// Window functions are computed over every matched row before LIMIT, so the
+	// scan must not stop early.
+	if isGrouped(sel) || hasWindows(sel.Items) || plan.NeedsSort || sel.Limit == nil {
 		return -1
 	}
 	lim := int(*sel.Limit)

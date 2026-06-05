@@ -51,6 +51,11 @@ func bindStatement(stmt Statement, args []any) error {
 		return bindWhere(&s.Where, args)
 	case *SelectStmt:
 		return bindSelect(s, args)
+	case *SetOpStmt:
+		if err := bindStatement(s.Left, args); err != nil {
+			return err
+		}
+		return bindSelect(s.Right, args)
 	default:
 		// CREATE TABLE, ALTER TABLE, and DESCRIBE carry no value expressions.
 		return nil

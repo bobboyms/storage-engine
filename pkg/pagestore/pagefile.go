@@ -52,6 +52,25 @@ type PageFile struct {
 // diretório pai — sem isso a criação pode ser "esquecida" pelo FS em
 // caso de crash mesmo after a função retornar.
 func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
+	return newPageFile(path, cipher, false)
+}
+
+// NewPageFileTolerant opens a page file that tolerates a torn (partial)
+// trailing page. If the file size is not a multiple of PageSize — the
+// signature of a crash that interrupted the last append — the incomplete
+// trailing bytes are discarded (the file is truncated back to the last
+// fully written page) instead of refusing to open.
+//
+// Use this ONLY for append-only logs (the WAL), where the final write can
+// legitimately be torn by a crash and the standard redo-log recovery is to
+// drop the never-acknowledged tail. For random-access stores (heap, btree)
+// a non-aligned size means real corruption, so they must keep using the
+// strict NewPageFile.
+func NewPageFileTolerant(path string, cipher crypto.Cipher) (*PageFile, error) {
+	return newPageFile(path, cipher, true)
+}
+
+func newPageFile(path string, cipher crypto.Cipher, tolerateTornTail bool) (*PageFile, error) {
 	// Detecta se vamos criar o arquivo pela primeira vez
 	_, statErr := os.Stat(path)
 	creating := os.IsNotExist(statErr)
@@ -66,9 +85,28 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	if stat.Size()%PageSize != 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("pagestore: file size %d is not a multiple of PageSize %d", stat.Size(), PageSize)
+
+	size := stat.Size()
+	if size%PageSize != 0 {
+		if !tolerateTornTail {
+			_ = f.Close()
+			return nil, fmt.Errorf("pagestore: file size %d is not a multiple of PageSize %d", size, PageSize)
+		}
+		// Torn trailing write (crash mid-append): discard the incomplete
+		// trailing page so only fully written pages are exposed. The dropped
+		// bytes were never acknowledged as durable, so this is safe and is
+		// the standard repair for a redo log. fsync the truncation so the
+		// realigned size survives a subsequent crash.
+		aligned := (size / PageSize) * PageSize
+		if err := f.Truncate(aligned); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("pagestore: truncate torn tail: %w", err)
+		}
+		if err := syncFile(f); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("pagestore: sync after torn-tail truncate: %w", err)
+		}
+		size = aligned
 	}
 
 	// fsync do diretório pai quando o arquivo foi criado agora. Garante
@@ -89,7 +127,7 @@ func NewPageFile(path string, cipher crypto.Cipher) (*PageFile, error) {
 
 	// PageID 0 é reservado (InvalidPageID). O próximo a alocar é o que
 	// corresponde ao fim do arquivo (ou 1 se estiver empty).
-	n := uint64(stat.Size() / PageSize) //nolint:gosec // file size is non-negative
+	n := uint64(size / PageSize) //nolint:gosec // file size is non-negative
 	if n == 0 {
 		n = 1 // reserva o slot 0
 	}

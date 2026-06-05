@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -135,6 +136,65 @@ func TestTDEProduction_EncryptsHeapAutoIndexAndWALAndReopens(t *testing.T) {
 	}
 	if !found || got != updated {
 		t.Fatalf("after reopen: found=%v got=%q", found, got)
+	}
+}
+
+func TestTDEProduction_RecoversAfterTornWALTail(t *testing.T) {
+	dir := t.TempDir()
+	heapPath := filepath.Join(dir, "accounts.heap")
+	walPath := filepath.Join(dir, "accounts.wal")
+	keyStorePath := filepath.Join(dir, "keys.json")
+	masterKey := tdeMasterKey(t)
+
+	se, _ := openTDEAccountsEngine(t, heapPath, walPath, keyStorePath, masterKey)
+
+	// Enough records that the encrypted WAL spans many pages, so the torn
+	// trailing page leaves plenty of fully persisted pages behind it.
+	const n = 1500
+	keyOf := func(i int) string {
+		return fmt.Sprintf("tde-crash-%05d@example.com", i)
+	}
+	for i := 0; i < n; i++ {
+		key := keyOf(i)
+		doc := fmt.Sprintf(`{"email":%q,"balance":%d}`, key, i)
+		if err := se.Put(context.Background(), "accounts", "email", types.VarcharKey(key), doc); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+	// Persist the current page (each Put is fsynced under SyncEveryWrite),
+	// then close only the WAL to mimic a crash without a clean engine flush.
+	if err := se.WAL.Close(); err != nil {
+		t.Fatalf("close WAL: %v", err)
+	}
+
+	// Simulate a crash that interrupted the next page write: append partial
+	// bytes so the encrypted WAL is no longer page-aligned. Before the fix
+	// this made the engine unable to re-open the WAL at all, losing every
+	// committed record.
+	f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(make([]byte, 137)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, _ := openTDEAccountsEngine(t, heapPath, walPath, keyStorePath, masterKey)
+	defer recovered.Close()
+
+	for i := 0; i < n; i++ {
+		key := keyOf(i)
+		want := fmt.Sprintf(`{"email":%q,"balance":%d}`, key, i)
+		got, found, err := getDocStringExt(t, recovered, "accounts", "email", types.VarcharKey(key))
+		if err != nil {
+			t.Fatalf("Get %d after torn-tail recovery: %v", i, err)
+		}
+		if !found || got != want {
+			t.Fatalf("record %d lost after torn-tail recovery: found=%v got=%q", i, found, got)
+		}
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // ErrParse is the sentinel wrapped by all parser errors.
@@ -85,7 +87,7 @@ func (p *parser) parseStatement() (Statement, error) {
 	}
 	switch t.Literal {
 	case "SELECT":
-		return p.parseSelect()
+		return p.parseSelectStatement()
 	case "INSERT":
 		return p.parseInsert()
 	case "UPDATE":
@@ -426,6 +428,31 @@ func (p *parser) parseLiteralOperand() (Expr, error) {
 	}
 }
 
+// parseSelectStatement parses a top-level SELECT and any trailing UNION [ALL]
+// SELECT clauses, building a left-associative chain of SetOpStmt nodes. A query
+// with no UNION returns the bare *SelectStmt.
+func (p *parser) parseSelectStatement() (Statement, error) {
+	left, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	var stmt Statement = left
+	for p.isKeyword("UNION") {
+		p.next()
+		all := false
+		if p.isKeyword("ALL") {
+			p.next()
+			all = true
+		}
+		right, err := p.parseSelect()
+		if err != nil {
+			return nil, err
+		}
+		stmt = &SetOpStmt{Left: stmt, Right: right, All: all}
+	}
+	return stmt, nil
+}
+
 func (p *parser) parseSelect() (*SelectStmt, error) {
 	if err := p.expectKeyword("SELECT"); err != nil {
 		return nil, err
@@ -520,6 +547,107 @@ var aggregateFuncs = map[string]struct{}{
 	"COUNT": {}, "SUM": {}, "AVG": {}, "MIN": {}, "MAX": {},
 }
 
+// rankingFuncs are window-only functions that take no arguments and must be
+// followed by an OVER clause.
+var rankingFuncs = map[string]struct{}{
+	"ROW_NUMBER": {}, "RANK": {}, "DENSE_RANK": {},
+}
+
+// parseFuncSelectItem parses a function-call projection item. isRank marks a
+// no-argument ranking function. It parses "fn(args)" then, if OVER follows,
+// produces a window item; otherwise it produces an aggregate item (and rejects
+// a ranking function used without OVER).
+func (p *parser) parseFuncSelectItem(isRank bool) (SelectItem, error) {
+	fn := strings.ToUpper(p.next().Literal)
+	p.next() // consume "("
+	call := &AggregateCall{Func: fn}
+
+	switch {
+	case isRank:
+		// Ranking functions take no arguments: expect an immediate ")".
+	case p.peek().Type == TokenStar:
+		p.next()
+		if fn != "COUNT" {
+			return SelectItem{}, fmt.Errorf("%w: %s(*) is not allowed; only COUNT(*)", ErrParse, fn)
+		}
+		call.Star = true
+	default:
+		if p.isKeyword("DISTINCT") {
+			p.next()
+			call.Distinct = true
+		}
+		col, err := p.parseColumnRef()
+		if err != nil {
+			return SelectItem{}, err
+		}
+		call.Column = col
+	}
+
+	if p.peek().Type != TokenRParen {
+		return SelectItem{}, fmt.Errorf("%w: expected ) to close %s(, got %q", ErrParse, fn, p.peek().Literal)
+	}
+	p.next()
+
+	if p.isKeyword("OVER") {
+		win, err := p.parseOver(call)
+		if err != nil {
+			return SelectItem{}, err
+		}
+		return SelectItem{Window: win, Alias: p.parseOptionalAlias()}, nil
+	}
+	if isRank {
+		return SelectItem{}, fmt.Errorf("%w: %s requires an OVER clause", ErrParse, fn)
+	}
+	return SelectItem{Agg: call, Alias: p.parseOptionalAlias()}, nil
+}
+
+// parseOver parses an OVER (PARTITION BY ... ORDER BY ...) clause, building a
+// WindowCall from the already-parsed function call. Both PARTITION BY and
+// ORDER BY are optional. DISTINCT aggregates are not supported as windows.
+func (p *parser) parseOver(call *AggregateCall) (*WindowCall, error) {
+	if call.Distinct {
+		return nil, fmt.Errorf("%w: DISTINCT is not supported in window functions", ErrParse)
+	}
+	if err := p.expectKeyword("OVER"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( after OVER, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+
+	win := &WindowCall{Func: call.Func, Star: call.Star, Arg: call.Column}
+	if p.isKeyword("PARTITION") {
+		p.next()
+		if err := p.expectKeyword("BY"); err != nil {
+			return nil, err
+		}
+		for {
+			col, err := p.parseColumnRef()
+			if err != nil {
+				return nil, err
+			}
+			win.Partition = append(win.Partition, col.String())
+			if p.peek().Type != TokenComma {
+				break
+			}
+			p.next()
+		}
+	}
+	if p.isKeyword("ORDER") {
+		ob, err := p.parseOrderBy()
+		if err != nil {
+			return nil, err
+		}
+		win.Order = ob
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close OVER(, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return win, nil
+}
+
 // parseColumnRef parses a column reference, optionally qualified by a table
 // name or alias: "col" or "alias.col".
 func (p *parser) parseColumnRef() (*ColumnRef, error) {
@@ -559,14 +687,15 @@ func (p *parser) parseSelectItem() (SelectItem, error) {
 		return SelectItem{Star: true}, nil
 	}
 
-	// Aggregate call: an identifier immediately followed by "(".
+	// Function call: an identifier immediately followed by "(". It is either an
+	// aggregate (possibly with a trailing OVER for a window) or a ranking window
+	// function (ROW_NUMBER/RANK/DENSE_RANK, which require OVER).
 	if p.peek().Type == TokenIdent && p.toks[p.pos+1].Type == TokenLParen {
-		if _, ok := aggregateFuncs[strings.ToUpper(p.peek().Literal)]; ok {
-			agg, err := p.parseAggregate()
-			if err != nil {
-				return SelectItem{}, err
-			}
-			return SelectItem{Agg: agg, Alias: p.parseOptionalAlias()}, nil
+		up := strings.ToUpper(p.peek().Literal)
+		_, isAgg := aggregateFuncs[up]
+		_, isRank := rankingFuncs[up]
+		if isAgg || isRank {
+			return p.parseFuncSelectItem(isRank)
 		}
 	}
 
@@ -1035,6 +1164,43 @@ func (p *parser) parseIsNull(left Expr) (Expr, error) {
 	return &IsNullExpr{Operand: left, Negate: negate}, nil
 }
 
+// parseTypedLiteral parses a typed string literal whose type is named by the
+// uppercased prefix keyword (DATE, DECIMAL/NUMERIC, UUID). The boolean reports
+// whether prefix is a recognized typed-literal keyword; when false the caller
+// falls back to treating the identifier as a column reference. The string token
+// is consumed only when the prefix matches.
+func (p *parser) parseTypedLiteral(prefix string) (Expr, bool, error) {
+	str := p.toks[p.pos+1].Literal
+	switch prefix {
+	case "DATE":
+		k, err := types.ParseDateOnly(str)
+		if err != nil {
+			return nil, true, fmt.Errorf("%w: invalid DATE literal %q: %v", ErrParse, str, err)
+		}
+		p.next()
+		p.next()
+		return &Literal{Kind: LitDate, Date: k}, true, nil
+	case "DECIMAL", "NUMERIC":
+		k, err := types.ParseDecimal(str)
+		if err != nil {
+			return nil, true, fmt.Errorf("%w: invalid DECIMAL literal %q: %v", ErrParse, str, err)
+		}
+		p.next()
+		p.next()
+		return &Literal{Kind: LitDecimal, Dec: k}, true, nil
+	case "UUID":
+		k, err := types.ParseUUID(str)
+		if err != nil {
+			return nil, true, fmt.Errorf("%w: invalid UUID literal %q: %v", ErrParse, str, err)
+		}
+		p.next()
+		p.next()
+		return &Literal{Kind: LitUUID, UUID: k}, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func (p *parser) parseOperand() (Expr, error) {
 	t := p.peek()
 	if t.Type == TokenLParen && p.lparenStartsSubquery() {
@@ -1046,6 +1212,13 @@ func (p *parser) parseOperand() (Expr, error) {
 	}
 	switch t.Type {
 	case TokenIdent:
+		// Typed literal prefix (DATE/DECIMAL/NUMERIC/UUID) followed by a string:
+		// DATE '2024-01-15', DECIMAL '1.50', UUID 'xxxx-...'.
+		if p.toks[p.pos+1].Type == TokenString {
+			if lit, ok, err := p.parseTypedLiteral(strings.ToUpper(t.Literal)); ok {
+				return lit, err
+			}
+		}
 		// Aggregate call used as an operand (e.g. in HAVING): COUNT(*) > 1.
 		if p.toks[p.pos+1].Type == TokenLParen {
 			if _, ok := aggregateFuncs[strings.ToUpper(t.Literal)]; ok {

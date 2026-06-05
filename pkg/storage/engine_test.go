@@ -386,7 +386,15 @@ func TestEngine_ScanInvisible(t *testing.T) {
 func TestEngine_RecoverInvalidWAL(t *testing.T) {
 	tmpDir := t.TempDir()
 	walPath := filepath.Join(tmpDir, "wal.log")
-	os.WriteFile(walPath, []byte("NOT A WAL FILE"), 0666)
+	// A page-aligned file whose data page (pageID 1) carries garbage instead
+	// of a valid page header. This is genuine corruption / a wrong file —
+	// distinct from a torn trailing page — and must be rejected. (A non
+	// page-aligned tail is now tolerated as a crash-torn write, so the file
+	// is made aligned here to exercise real invalid-WAL detection.)
+	const pageSize = 8192
+	bad := make([]byte, 2*pageSize)
+	copy(bad[pageSize:], []byte("NOT A WAL FILE"))
+	os.WriteFile(walPath, bad, 0666)
 
 	hm, _ := storage.NewHeapForTable(storage.HeapFormatV2, filepath.Join(tmpDir, "heap"))
 	tableMgr := storage.NewTableMenager()

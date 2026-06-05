@@ -51,6 +51,30 @@ func ColumnValue(lit *Literal, dt storage.DataType) (types.Comparable, error) {
 			}
 			return k, nil
 		}
+	case storage.TypeDateOnly:
+		switch lit.Kind {
+		case LitDate:
+			return lit.Date, nil
+		case LitString:
+			k, err := types.ParseDateOnly(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrValue, err)
+			}
+			return k, nil
+		}
+	case storage.TypeDecimal:
+		switch lit.Kind {
+		case LitDecimal:
+			return lit.Dec, nil
+		case LitString:
+			k, err := types.ParseDecimal(lit.Str)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrValue, err)
+			}
+			return k, nil
+		case LitInt:
+			return types.NewDecimal(lit.Int, 0), nil
+		}
 	}
 	return nil, fmt.Errorf("%w: literal %s is not compatible with column type %s", ErrValue, lit.String(), dt)
 }

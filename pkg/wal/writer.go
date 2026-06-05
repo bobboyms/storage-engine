@@ -64,7 +64,10 @@ type WALWriter struct {
 // NewWALWriter cria um novo Writer. Abre o arquivo via pagestore
 // (aplicando cipher se configurado em `opts.Cipher`).
 func NewWALWriter(path string, opts Options) (*WALWriter, error) {
-	pf, err := pagestore.NewPageFile(path, opts.Cipher)
+	// Tolerant open repairs a torn trailing page left by a crash mid-append:
+	// the incomplete tail is truncated back to the last fully written page so
+	// the writer resumes from a consistent, page-aligned boundary.
+	pf, err := pagestore.NewPageFileTolerant(path, opts.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open page file: %w", err)
 	}
@@ -278,7 +281,7 @@ func (w *WALWriter) rotateActiveLocked() error {
 		return err
 	}
 
-	pf, err := pagestore.NewPageFile(base, w.options.Cipher)
+	pf, err := pagestore.NewPageFileTolerant(base, w.options.Cipher)
 	if err != nil {
 		return fmt.Errorf("wal: abrir novo segmento ativo: %w", err)
 	}

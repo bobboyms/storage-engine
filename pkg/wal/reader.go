@@ -70,7 +70,11 @@ func newWALReaderForPaths(paths []string, cipher crypto.Cipher) (*WALReader, err
 	if len(paths) == 0 {
 		return nil, os.ErrNotExist
 	}
-	pf, err := pagestore.NewPageFile(paths[0], cipher)
+	// Tolerant open: a crash can leave the active WAL segment with a torn
+	// (partial) trailing page, making the file size not a multiple of
+	// PageSize. Recovery must still read every fully written page instead of
+	// refusing to open the whole log, so the WAL uses the tolerant variant.
+	pf, err := pagestore.NewPageFileTolerant(paths[0], cipher)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open page file: %w", err)
 	}
@@ -221,7 +225,7 @@ func (r *WALReader) openNextSegment() error {
 		}
 	}
 	r.pathIndex++
-	pf, err := pagestore.NewPageFile(r.paths[r.pathIndex], r.cipher)
+	pf, err := pagestore.NewPageFileTolerant(r.paths[r.pathIndex], r.cipher)
 	if err != nil {
 		r.exhausted = true
 		return fmt.Errorf("wal: abrir segmento %s: %w", r.paths[r.pathIndex], err)
