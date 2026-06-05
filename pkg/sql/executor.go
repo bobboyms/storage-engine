@@ -35,6 +35,11 @@ type Executor struct {
 	// vacuums only these tables, so insert-only/read workloads never vacuum.
 	gcMu        sync.Mutex
 	dirtyTables map[string]struct{}
+
+	// decodeHook, when non-nil, is called once per row decoded during a scan.
+	// It is test-only instrumentation for asserting that LIMIT push-down stops
+	// the scan early; it is nil in production.
+	decodeHook func()
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses
@@ -91,7 +96,7 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 		return nil, err
 	}
 
-	rows, err := e.scanRows(ctx, schema, sel.Alias, plan, ec)
+	rows, err := e.scanRows(ctx, schema, sel.Alias, plan, ec, scanLimit(sel, plan))
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +133,10 @@ func planSelect(sel *SelectStmt, schema *TableSchema, correlated bool) (*QueryPl
 }
 
 // scanRows opens the planned index scan, decodes each visible row, and keeps
-// the rows whose residual predicate evaluates to true.
-func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias string, plan *QueryPlan, ec *evalContext) ([]Row, error) {
+// the rows whose residual predicate evaluates to true. When limit >= 0 the scan
+// stops once that many matching rows have been collected (LIMIT push-down); a
+// negative limit collects every matching row.
+func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias string, plan *QueryPlan, ec *evalContext, limit int) ([]Row, error) {
 	// Reverse scans are not supported by the engine, so descending order is
 	// always handled by the in-memory sort (plan.NeedsSort).
 	it, err := e.engine.NewIterator(ctx, plan.TableName, plan.IndexName, storage.IterOptions{
@@ -143,6 +150,12 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias stri
 
 	var rows []Row
 	for it.Next() {
+		if limit >= 0 && len(rows) >= limit {
+			break // enough matching rows collected; stop scanning early.
+		}
+		if e.decodeHook != nil {
+			e.decodeHook()
+		}
 		row, err := decodeRow(e.codec, schema, alias, it.Value())
 		if err != nil {
 			return nil, err
@@ -162,6 +175,26 @@ func (e *Executor) scanRows(ctx context.Context, schema *TableSchema, alias stri
 		return nil, fmt.Errorf("%w: scan: %v", ErrExec, err)
 	}
 	return rows, nil
+}
+
+// scanLimit returns the number of matching rows scanRows may stop after, or -1
+// for an unbounded scan. Push-down is only valid when the rows leave the scan
+// in their final order: not for GROUP BY / aggregates (every row is needed) nor
+// when an in-memory sort reorders them, and only when a LIMIT is present. The
+// cap includes OFFSET, which applyOffsetLimit then trims.
+func scanLimit(sel *SelectStmt, plan *QueryPlan) int {
+	if isGrouped(sel) || plan.NeedsSort || sel.Limit == nil {
+		return -1
+	}
+	lim := int(*sel.Limit)
+	if lim < 0 {
+		lim = 0
+	}
+	off := 0
+	if sel.Offset != nil && *sel.Offset > 0 {
+		off = int(*sel.Offset)
+	}
+	return off + lim
 }
 
 // decodeRow decodes raw heap bytes into a Row keyed by every schema column,
