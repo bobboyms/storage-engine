@@ -1,0 +1,27 @@
+[
+  {
+    "name": "users",
+    "columns": [
+      {
+        "name": "id",
+        "type": "INT"
+      },
+      {
+        "name": "email",
+        "type": "VARCHAR"
+      }
+    ],
+    "indexes": [
+      {
+        "name": "id",
+        "column": "id",
+        "primary": true
+      },
+      {
+        "name": "email",
+        "column": "email",
+        "primary": false
+      }
+    ]
+  }
+]
