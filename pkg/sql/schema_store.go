@@ -1,7 +1,9 @@
 package sql
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,25 @@ import (
 
 // schemaFileName is the on-disk catalog persisted in a database directory.
 const schemaFileName = "schema.json"
+
+// CatalogFormatVersion is the on-disk format version of the catalog
+// (schema.json). It is independent of the library's API version and is bumped
+// only when the persisted catalog layout or semantics change in a way that
+// needs a migration. Additive changes (new optional fields) keep the same
+// version because old and new readers stay compatible.
+const CatalogFormatVersion = 1
+
+// ErrUnsupportedCatalogVersion is returned when a catalog file declares a
+// format version newer than this build supports (e.g. opening data written by
+// a future engine). Restoring or opening such data is refused rather than
+// risking a misread.
+var ErrUnsupportedCatalogVersion = errors.New("sql: unsupported catalog format version")
+
+// persistedCatalog is the versioned envelope wrapping the persisted tables.
+type persistedCatalog struct {
+	FormatVersion int              `json:"format_version"`
+	Tables        []persistedTable `json:"tables"`
+}
 
 // persistedColumn / persistedIndex / persistedTable are the JSON-serializable
 // forms of a table schema. Types are stored by name so the file stays readable
@@ -69,9 +90,9 @@ func loadSchemas(dir string) ([]TableSchema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sql: read schema file: %w", err)
 	}
-	var tables []persistedTable
-	if err := json.Unmarshal(data, &tables); err != nil {
-		return nil, fmt.Errorf("sql: parse schema file: %w", err)
+	tables, err := decodeCatalog(data)
+	if err != nil {
+		return nil, err
 	}
 	schemas := make([]TableSchema, 0, len(tables))
 	for _, pt := range tables {
@@ -84,13 +105,36 @@ func loadSchemas(dir string) ([]TableSchema, error) {
 	return schemas, nil
 }
 
+// decodeCatalog parses the catalog file, accepting either the current versioned
+// envelope ({"format_version":N,"tables":[...]}) or the legacy bare array of
+// tables (treated as format version 1) so pre-envelope databases keep opening.
+// A version newer than this build supports is refused.
+func decodeCatalog(data []byte) ([]persistedTable, error) {
+	if trimmed := bytes.TrimLeft(data, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
+		var tables []persistedTable
+		if err := json.Unmarshal(data, &tables); err != nil {
+			return nil, fmt.Errorf("sql: parse schema file: %w", err)
+		}
+		return tables, nil
+	}
+
+	var cat persistedCatalog
+	if err := json.Unmarshal(data, &cat); err != nil {
+		return nil, fmt.Errorf("sql: parse schema file: %w", err)
+	}
+	if cat.FormatVersion > CatalogFormatVersion {
+		return nil, fmt.Errorf("%w: file is v%d, this build supports up to v%d", ErrUnsupportedCatalogVersion, cat.FormatVersion, CatalogFormatVersion)
+	}
+	return cat.Tables, nil
+}
+
 // saveSchemas writes the table schemas to dir atomically (temp file + rename).
 func saveSchemas(dir string, schemas []TableSchema) error {
-	tables := make([]persistedTable, 0, len(schemas))
+	cat := persistedCatalog{FormatVersion: CatalogFormatVersion}
 	for _, s := range schemas {
-		tables = append(tables, toPersisted(s))
+		cat.Tables = append(cat.Tables, toPersisted(s))
 	}
-	data, err := json.MarshalIndent(tables, "", "  ")
+	data, err := json.MarshalIndent(cat, "", "  ")
 	if err != nil {
 		return fmt.Errorf("sql: encode schema file: %w", err)
 	}
