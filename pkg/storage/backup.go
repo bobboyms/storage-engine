@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -17,18 +18,35 @@ import (
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
 
+// ErrUnsupportedDataFormat is returned when a backup was taken with an engine
+// whose data format version is newer than the one restoring it, so the files
+// cannot be safely read.
+var ErrUnsupportedDataFormat = errors.New("backup: unsupported data format version")
+
 const (
 	backupManifestName = "manifest.json"
 	backupFilesDirName = "files"
 	backupManifestVer  = 1
 )
 
+// DataFormatVersion is the on-disk data format version of the storage engine
+// (heap, WAL, indexes). It is independent of the library's API version and of
+// the backup manifest version; it is recorded in a backup so a restore can
+// refuse data written by a newer engine than the one restoring it. Bump it only
+// when the on-disk byte layout or semantics change in a way that an older build
+// cannot read.
+const DataFormatVersion = 1
+
 type BackupManifest struct {
-	Version       int          `json:"version"`
-	CreatedAtUTC  time.Time    `json:"created_at_utc"`
-	SourceRoot    string       `json:"source_root"`
-	CheckpointLSN uint64       `json:"checkpoint_lsn"`
-	Files         []BackupFile `json:"files"`
+	Version int `json:"version"`
+	// DataFormatVersion is the engine data format the backed-up files use. A
+	// zero value denotes a legacy backup taken before the field existed and is
+	// treated as version 1.
+	DataFormatVersion int          `json:"data_format_version"`
+	CreatedAtUTC      time.Time    `json:"created_at_utc"`
+	SourceRoot        string       `json:"source_root"`
+	CheckpointLSN     uint64       `json:"checkpoint_lsn"`
+	Files             []BackupFile `json:"files"`
 }
 
 type BackupFile struct {
@@ -102,11 +120,12 @@ func (se *StorageEngine) BackupOnline(ctx context.Context, backupDir string) (*B
 	}
 
 	manifest := &BackupManifest{
-		Version:       backupManifestVer,
-		CreatedAtUTC:  time.Now().UTC(),
-		SourceRoot:    root,
-		CheckpointLSN: se.lsnTracker.Current(),
-		Files:         make([]BackupFile, 0, len(sources)),
+		Version:           backupManifestVer,
+		DataFormatVersion: DataFormatVersion,
+		CreatedAtUTC:      time.Now().UTC(),
+		SourceRoot:        root,
+		CheckpointLSN:     se.lsnTracker.Current(),
+		Files:             make([]BackupFile, 0, len(sources)),
 	}
 
 	for _, src := range sources {
@@ -167,6 +186,11 @@ func VerifyBackup(ctx context.Context, backupDir string) (*BackupManifest, error
 	}
 	if manifest.Version != backupManifestVer {
 		return nil, fmt.Errorf("backup: unsupported manifest version: %d", manifest.Version)
+	}
+	// A newer data format than this build understands cannot be restored. A zero
+	// value is a legacy backup (pre-field), treated as version 1, so it passes.
+	if manifest.DataFormatVersion > DataFormatVersion {
+		return nil, fmt.Errorf("%w: backup is v%d, this build supports up to v%d", ErrUnsupportedDataFormat, manifest.DataFormatVersion, DataFormatVersion)
 	}
 	if len(manifest.Files) == 0 {
 		return nil, fmt.Errorf("backup: manifest has no files")
