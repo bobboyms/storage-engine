@@ -28,6 +28,10 @@ type ddlManager struct {
 	// per-table heap data-encryption key when tables are created at runtime so
 	// CREATE TABLE-created heaps are encrypted like the ones built at open time.
 	keystore *crypto.KeyStore
+	// keystorePath is the resolved path of the keystore file when TDE is on,
+	// empty otherwise. Backup copies it so a restored TDE database can be
+	// reopened with the same master key.
+	keystorePath string
 }
 
 // defaultMaintenanceInterval is how often a database started with default
@@ -70,13 +74,14 @@ type EncryptionOptions struct {
 }
 
 // newKeyStore opens (or creates) the keystore backing a database's TDE,
-// validating the master key. Returns nil when encryption is disabled.
-func newKeyStore(dir string, enc *EncryptionOptions) (*crypto.KeyStore, error) {
+// validating the master key. Returns (nil, "", nil) when encryption is
+// disabled, otherwise the keystore and its resolved on-disk path.
+func newKeyStore(dir string, enc *EncryptionOptions) (*crypto.KeyStore, string, error) {
 	if enc == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	if len(enc.MasterKey) != crypto.KeySize {
-		return nil, fmt.Errorf("sql: encryption master key must be %d bytes, got %d", crypto.KeySize, len(enc.MasterKey))
+		return nil, "", fmt.Errorf("sql: encryption master key must be %d bytes, got %d", crypto.KeySize, len(enc.MasterKey))
 	}
 	path := enc.KeyStorePath
 	if path == "" {
@@ -84,9 +89,9 @@ func newKeyStore(dir string, enc *EncryptionOptions) (*crypto.KeyStore, error) {
 	}
 	ks, err := crypto.NewKeyStore(path, enc.MasterKey)
 	if err != nil {
-		return nil, fmt.Errorf("sql: open keystore: %w", err)
+		return nil, "", fmt.Errorf("sql: open keystore: %w", err)
 	}
-	return ks, nil
+	return ks, path, nil
 }
 
 // OpenDatabase opens (or creates) a SQL database rooted at dir with default
@@ -134,7 +139,7 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		return nil, err
 	}
 
-	keystore, err := newKeyStore(dir, opts.Encryption)
+	keystore, keystorePath, err := newKeyStore(dir, opts.Encryption)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +190,7 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		engine:  engine,
 		catalog: catalog,
 		codec:   bsoncodec.New(),
-		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore},
+		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore, keystorePath: keystorePath},
 		dirLock: lock,
 	}
 	opened = true // hand the lock's lifetime to exec.Close.
