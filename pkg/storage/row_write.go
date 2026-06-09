@@ -62,7 +62,20 @@ func (se *StorageEngine) writeRowLocked(ctx context.Context, tableName string, d
 			return fmt.Errorf("primary index get failed: %w", err)
 		}
 		if insertOnly && primaryExists {
-			return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
+			// A DELETE keeps the primary key's B-tree entry under MVCC (it only
+			// tombstones the heap version), so tree presence alone does not mean
+			// the key is occupied. Mirror the visibility-aware UNIQUE check: a
+			// tombstoned head version is not a live duplicate, so the key is free
+			// for reuse. Snapshot the latest committed state — the table write
+			// lock is held, so no concurrent writer can change visibility here.
+			snap := &Transaction{SnapshotLSN: se.lsnTracker.Current(), Level: RepeatableRead, engine: se}
+			rec, err := se.readVisibleRecordRaw(ctx, snap, table, primaryKey, oldPrimaryOffset)
+			if err != nil {
+				return err
+			}
+			if rec.Found {
+				return fmt.Errorf("duplicate key error: key %v already exists in index %s", primaryKey, primary.Name)
+			}
 		}
 
 		// Enforce UNIQUE constraints under the table write lock, so the check and

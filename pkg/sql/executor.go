@@ -19,6 +19,18 @@ var ErrExec = errors.New("sql: exec error")
 
 // Executor runs SQL statements against a storage engine, using a catalog to
 // resolve schemas and a codec to decode stored rows.
+//
+// Concurrency: Exec and Query may be called from multiple goroutines on the
+// same Executor; the underlying engine serializes writes per table and latches
+// index/heap pages in the buffer pool, and background maintenance is safe
+// against foreground traffic. This has been exercised under the race detector
+// (see TestExecutorConcurrentUsageRace and tests/stress with -race). One known
+// limitation: the B+ tree read descent uses lock-coupling without crabbing (it
+// releases a parent page latch before pinning the child), so a reader that runs
+// exactly while a writer splits or merges that subtree can momentarily observe a
+// restructured node. It did not surface as lost rows or a data race in testing,
+// but callers needing a strict point-in-time view across multiple reads should
+// use a single engine transaction (BeginRead) rather than separate Query calls.
 type Executor struct {
 	engine  *storage.StorageEngine
 	catalog *Catalog
