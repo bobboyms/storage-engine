@@ -66,8 +66,22 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*ResultSet, 
 	if !ok {
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
+	return t.execSelect(ctx, sel)
+}
+
+// execSelect executes a parsed SELECT inside the transaction. Queries with
+// joins or a derived FROM subquery go through the generalized source pipeline,
+// materializing every source through the write transaction so they see staged
+// writes; a plain single-table query keeps the primary-scan path.
+func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
 	if len(sel.Joins) > 0 || sel.Subquery != nil {
-		return nil, fmt.Errorf("%w: JOIN and FROM subqueries are not yet supported inside a transaction", ErrExec)
+		if sel.ForUpdate {
+			return nil, fmt.Errorf("%w: FOR UPDATE is not supported with JOIN or FROM subqueries", ErrExec)
+		}
+		if hasWindows(sel.Items) {
+			return nil, fmt.Errorf("%w: window functions are only supported on single-table queries", ErrExec)
+		}
+		return queryFrom(ctx, sel, nil, t)
 	}
 	schema, ok := t.catalog.Table(sel.Table)
 	if !ok {
@@ -98,6 +112,30 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*ResultSet, 
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 	return projectRows(rows, expandProjection(sel.Items, schema)), nil
+}
+
+// table resolves a table name against the transaction's catalog.
+func (t *Tx) table(name string) (*TableSchema, bool) { return t.catalog.Table(name) }
+
+// scanQualifiedRows fully scans a table's primary index through the write
+// transaction (read-your-writes), keyed by "alias.col".
+func (t *Tx) scanQualifiedRows(ctx context.Context, schema *TableSchema, alias string) ([]Row, error) {
+	pk, ok := schema.PrimaryIndex()
+	if !ok {
+		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
+	}
+	it, err := t.wtx.NewIterator(ctx, schema.Name, pk.Name, storage.IterOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
+	}
+	defer func() { _ = it.Close() }()
+	return scanQualifiedIterator(it, t.codec, schema, alias)
+}
+
+// derivedRows executes a FROM subquery within the transaction, so the derived
+// table also sees staged writes.
+func (t *Tx) derivedRows(ctx context.Context, sub *SelectStmt) (*ResultSet, error) {
+	return t.execSelect(ctx, sub)
 }
 
 // sortDecision reports whether the transactional primary-index scan must be

@@ -4,9 +4,33 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bobboyms/storage-engine/pkg/codec"
 	"github.com/bobboyms/storage-engine/pkg/storage"
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
+
+// table resolves a table name against the executor's catalog.
+func (e *Executor) table(name string) (*TableSchema, bool) { return e.catalog.Table(name) }
+
+// scanQualifiedRows fully scans a table's primary index from the engine's
+// committed snapshot, keyed by "alias.col".
+func (e *Executor) scanQualifiedRows(ctx context.Context, schema *TableSchema, alias string) ([]Row, error) {
+	pk, ok := schema.PrimaryIndex()
+	if !ok {
+		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
+	}
+	it, err := e.engine.NewIterator(ctx, schema.Name, pk.Name, storage.IterOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
+	}
+	defer func() { _ = it.Close() }()
+	return scanQualifiedIterator(it, e.codec, schema, alias)
+}
+
+// derivedRows executes a FROM subquery against the committed snapshot.
+func (e *Executor) derivedRows(ctx context.Context, sub *SelectStmt) (*ResultSet, error) {
+	return e.execSelect(ctx, sub, nil)
+}
 
 // source is a materialized FROM/JOIN input: an alias, the column names it
 // exposes, and its rows keyed by the qualified name "alias.col".
@@ -16,12 +40,25 @@ type source struct {
 	rows    []Row
 }
 
+// fromSource materializes FROM/JOIN inputs for the generalized select
+// pipeline. The Executor reads committed engine snapshots; a Tx reads through
+// its write transaction so joins and derived tables see read-your-writes.
+type fromSource interface {
+	// table resolves a table name in the catalog.
+	table(name string) (*TableSchema, bool)
+	// scanQualifiedRows fully scans a table, returning rows keyed by the
+	// qualified name "alias.col".
+	scanQualifiedRows(ctx context.Context, schema *TableSchema, alias string) ([]Row, error)
+	// derivedRows executes a FROM subquery and returns its result set.
+	derivedRows(ctx context.Context, sub *SelectStmt) (*ResultSet, error)
+}
+
 // queryFrom executes a SELECT whose FROM contains joins and/or derived
 // subqueries. Each source (base table, derived table, or joined source) is
 // materialized into rows, combined with nested-loop joins honoring each ON
 // predicate, then filtered, grouped, ordered, and projected.
-func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt, ec *evalContext) (*ResultSet, error) {
-	sources, err := e.buildSources(ctx, sel)
+func queryFrom(ctx context.Context, sel *SelectStmt, ec *evalContext, src fromSource) (*ResultSet, error) {
+	sources, err := buildSources(ctx, sel, src)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +99,7 @@ func (e *Executor) queryFrom(ctx context.Context, sel *SelectStmt, ec *evalConte
 	return projectRows(rows, expandProjectionSources(sel.Items, sources)), nil
 }
 
-func (e *Executor) buildSources(ctx context.Context, sel *SelectStmt) ([]source, error) {
+func buildSources(ctx context.Context, sel *SelectStmt, src fromSource) ([]source, error) {
 	sources := make([]source, 0, len(sel.Joins)+1)
 	seen := map[string]struct{}{}
 
@@ -71,7 +108,7 @@ func (e *Executor) buildSources(ctx context.Context, sel *SelectStmt) ([]source,
 			return fmt.Errorf("%w: duplicate table alias %q", ErrExec, alias)
 		}
 		seen[alias] = struct{}{}
-		s, err := e.sourceFor(ctx, table, sub, alias)
+		s, err := sourceFor(ctx, table, sub, alias, src)
 		if err != nil {
 			return err
 		}
@@ -93,9 +130,9 @@ func (e *Executor) buildSources(ctx context.Context, sel *SelectStmt) ([]source,
 // sourceFor materializes a single FROM/JOIN source: a derived subquery is
 // executed and its result rows are re-keyed by the alias; a table is fully
 // scanned with qualified keys.
-func (e *Executor) sourceFor(ctx context.Context, table string, sub *SelectStmt, alias string) (source, error) {
+func sourceFor(ctx context.Context, table string, sub *SelectStmt, alias string, src fromSource) (source, error) {
 	if sub != nil {
-		rs, err := e.execSelect(ctx, sub, nil)
+		rs, err := src.derivedRows(ctx, sub)
 		if err != nil {
 			return source{}, err
 		}
@@ -110,11 +147,11 @@ func (e *Executor) sourceFor(ctx context.Context, table string, sub *SelectStmt,
 		return source{alias: alias, columns: rs.Columns, rows: rows}, nil
 	}
 
-	schema, ok := e.catalog.Table(table)
+	schema, ok := src.table(table)
 	if !ok {
 		return source{}, fmt.Errorf("%w: unknown table %q", ErrExec, table)
 	}
-	rows, err := e.scanQualified(ctx, schema, alias)
+	rows, err := src.scanQualifiedRows(ctx, schema, alias)
 	if err != nil {
 		return source{}, err
 	}
@@ -125,22 +162,13 @@ func (e *Executor) sourceFor(ctx context.Context, table string, sub *SelectStmt,
 	return source{alias: alias, columns: cols, rows: rows}, nil
 }
 
-// scanQualified fully scans a table's primary index, decoding each row keyed
-// only by the qualified name "alias.col".
-func (e *Executor) scanQualified(ctx context.Context, schema *TableSchema, alias string) ([]Row, error) {
-	pk, ok := schema.PrimaryIndex()
-	if !ok {
-		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
-	}
-	it, err := e.engine.NewIterator(ctx, schema.Name, pk.Name, storage.IterOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
-	}
-	defer func() { _ = it.Close() }()
-
+// scanQualifiedIterator drains a primary-index iterator, decoding each row
+// keyed only by the qualified name "alias.col". Shared by the executor's
+// snapshot scan and the transaction's read-your-writes scan.
+func scanQualifiedIterator(it storage.Iterator, cdc codec.Codec, schema *TableSchema, alias string) ([]Row, error) {
 	var rows []Row
 	for it.Next() {
-		decoded, err := decodeRow(e.codec, schema, alias, it.Value())
+		decoded, err := decodeRow(cdc, schema, alias, it.Value())
 		if err != nil {
 			return nil, err
 		}

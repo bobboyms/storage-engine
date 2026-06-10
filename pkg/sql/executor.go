@@ -164,7 +164,7 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 		if hasWindows(sel.Items) {
 			return nil, fmt.Errorf("%w: window functions are only supported on single-table queries", ErrExec)
 		}
-		return e.queryFrom(ctx, sel, ec)
+		return queryFrom(ctx, sel, ec, e)
 	}
 
 	schema, ok := e.catalog.Table(sel.Table)
