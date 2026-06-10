@@ -46,8 +46,12 @@ func (e *Executor) Exec(ctx context.Context, query string, args ...any) (int64, 
 		return e.execAlterTable(s)
 	case *DropTableStmt:
 		return e.execDropTable(ctx, s)
+	case *CreateIndexStmt:
+		return e.execCreateIndex(ctx, s)
+	case *DropIndexStmt:
+		return e.execDropIndex(s)
 	default:
-		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, DELETE, CREATE TABLE, ALTER TABLE, or DROP TABLE", ErrExec)
+		return 0, fmt.Errorf("%w: Exec expects a DML or DDL statement, got %T", ErrExec, stmt)
 	}
 }
 

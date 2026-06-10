@@ -95,10 +95,17 @@ func (p *parser) parseStatement() (Statement, error) {
 	case "DELETE":
 		return p.parseDelete()
 	case "CREATE":
+		// CREATE TABLE vs CREATE [UNIQUE] INDEX, decided by lookahead.
+		if next := p.toks[p.pos+1]; next.Type == TokenKeyword && (next.Literal == "INDEX" || next.Literal == "UNIQUE") {
+			return p.parseCreateIndex()
+		}
 		return p.parseCreateTable()
 	case "ALTER":
 		return p.parseAlterTable()
 	case "DROP":
+		if next := p.toks[p.pos+1]; next.Type == TokenKeyword && next.Literal == "INDEX" {
+			return p.parseDropIndex()
+		}
 		return p.parseDropTable()
 	case "DESCRIBE", "DESC":
 		return p.parseDescribe()
@@ -233,6 +240,70 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 	default:
 		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
 	}
+	return stmt, nil
+}
+
+func (p *parser) parseCreateIndex() (*CreateIndexStmt, error) {
+	if err := p.expectKeyword("CREATE"); err != nil {
+		return nil, err
+	}
+	stmt := &CreateIndexStmt{}
+	if p.isKeyword("UNIQUE") {
+		p.next()
+		stmt.Unique = true
+	}
+	if err := p.expectKeyword("INDEX"); err != nil {
+		return nil, err
+	}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "NOT", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfNotExists = true
+	}
+	if p.peek().Type == TokenIdent {
+		stmt.Name = p.next().Literal
+	}
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("%w: index requires at least one column", ErrParse)
+	}
+	stmt.Columns = cols
+	return stmt, nil
+}
+
+func (p *parser) parseDropIndex() (*DropIndexStmt, error) {
+	if err := p.expectKeywords("DROP", "INDEX"); err != nil {
+		return nil, err
+	}
+	stmt := &DropIndexStmt{}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfExists = true
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected index name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Name = p.next().Literal
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
 	return stmt, nil
 }
 

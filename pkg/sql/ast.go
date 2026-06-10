@@ -207,6 +207,30 @@ type CreateTableStmt struct {
 
 func (*CreateTableStmt) stmtNode() {}
 
+// CreateIndexStmt represents CREATE [UNIQUE] INDEX [IF NOT EXISTS] [name] ON
+// table (cols...): it adds a secondary index to an existing table and
+// backfills it from the current rows. Name is optional; when empty the index
+// is named after its column (single) or the joined column list (composite).
+type CreateIndexStmt struct {
+	Table       string
+	Name        string
+	Columns     []string
+	Unique      bool
+	IfNotExists bool
+}
+
+func (*CreateIndexStmt) stmtNode() {}
+
+// DropIndexStmt represents DROP INDEX [IF EXISTS] name ON table: it detaches
+// and deletes a secondary index. The primary index cannot be dropped.
+type DropIndexStmt struct {
+	Table    string
+	Name     string
+	IfExists bool
+}
+
+func (*DropIndexStmt) stmtNode() {}
+
 // DropTableStmt represents DROP TABLE [IF EXISTS] name: it removes the table's
 // rows, indexes, and schema entry. IfExists makes execution a silent no-op when
 // the table does not exist, instead of returning an error.
