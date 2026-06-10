@@ -44,6 +44,7 @@ func TestPool(t *testing.T) {
 	entry := AcquireEntry()
 	if entry == nil {
 		t.Fatal("Failed to acquire entry")
+		return
 	}
 	if cap(entry.Payload) < 4096 {
 		t.Errorf("Expected payload cap >= 4096, got %d", cap(entry.Payload))
@@ -121,6 +122,7 @@ func TestBufferPool(t *testing.T) {
 	bufPtr := AcquireBuffer()
 	if bufPtr == nil {
 		t.Fatal("AcquireBuffer returned nil")
+		return
 	}
 	if cap(*bufPtr) < 8192 {
 		t.Errorf("Expected buffer capacity >= 8192, got %d", cap(*bufPtr))
