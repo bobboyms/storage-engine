@@ -62,6 +62,14 @@ func (e *Executor) markGarbage(table string) {
 	e.dirtyTables[table] = struct{}{}
 }
 
+// forgetGarbage clears any pending vacuum mark for a table, used when the
+// table is dropped and can no longer be vacuumed.
+func (e *Executor) forgetGarbage(table string) {
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	delete(e.dirtyTables, table)
+}
+
 // takeDirtyTables returns and clears the set of tables pending a vacuum.
 func (e *Executor) takeDirtyTables() []string {
 	e.gcMu.Lock()

@@ -98,6 +98,8 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseCreateTable()
 	case "ALTER":
 		return p.parseAlterTable()
+	case "DROP":
+		return p.parseDropTable()
 	case "DESCRIBE", "DESC":
 		return p.parseDescribe()
 	default:
@@ -231,6 +233,27 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 	default:
 		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
 	}
+	return stmt, nil
+}
+
+func (p *parser) parseDropTable() (*DropTableStmt, error) {
+	if err := p.expectKeyword("DROP"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TABLE"); err != nil {
+		return nil, err
+	}
+	stmt := &DropTableStmt{}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfExists = true
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
 	return stmt, nil
 }
 

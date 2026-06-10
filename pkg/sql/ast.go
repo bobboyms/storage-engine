@@ -201,6 +201,16 @@ type CreateTableStmt struct {
 
 func (*CreateTableStmt) stmtNode() {}
 
+// DropTableStmt represents DROP TABLE [IF EXISTS] name: it removes the table's
+// rows, indexes, and schema entry. IfExists makes execution a silent no-op when
+// the table does not exist, instead of returning an error.
+type DropTableStmt struct {
+	Table    string
+	IfExists bool
+}
+
+func (*DropTableStmt) stmtNode() {}
+
 // AlterTableStmt represents ALTER TABLE name ADD/DROP COLUMN. Drop selects the
 // action: false adds Column (a full definition, optionally a secondary index);
 // true drops the column named by Column.Name.

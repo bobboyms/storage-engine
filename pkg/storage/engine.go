@@ -57,7 +57,7 @@ type StorageEngine struct {
 	runtimeMu   sync.RWMutex
 	degradedErr error
 	testHooks   storageEngineTestHooks
-	opMu        sync.RWMutex // Writes use RLock; online backup uses Lock for a consistent snapshot
+	opMu        sync.RWMutex // Writes use RLock; online backup and DropTable use Lock for exclusivity
 	logger      *slog.Logger
 	listener    EventListener
 	codec       codec.Codec
@@ -384,6 +384,23 @@ func (se *StorageEngine) Close() error {
 		}
 	}
 	return err
+}
+
+// DropTable removes a table entirely: its heap, every index tree, and their
+// backing files. It takes the engine's exclusive operation lock so no read,
+// write, checkpoint, or backup can observe the table mid-removal. WAL entries
+// that still reference the dropped table are safe: recovery skips entries
+// whose table is no longer registered.
+func (se *StorageEngine) DropTable(ctx context.Context, tableName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	se.opMu.Lock()
+	defer se.opMu.Unlock()
+	if err := se.runtimeReadyError(); err != nil {
+		return err
+	}
+	return se.TableMetaData.DropTable(tableName)
 }
 
 // visibleRecordRaw is the MVCC-resolved payload as stored on the heap, with

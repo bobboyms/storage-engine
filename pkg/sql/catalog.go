@@ -192,6 +192,13 @@ func (c *Catalog) ReplaceTable(schema TableSchema) error {
 	return nil
 }
 
+// RemoveTable unregisters a table schema. Removing an unknown name is a no-op,
+// matching DROP TABLE IF EXISTS semantics; callers that need to report unknown
+// tables check existence first.
+func (c *Catalog) RemoveTable(name string) {
+	delete(c.tables, name)
+}
+
 // Table returns the schema registered under name and whether it exists.
 func (c *Catalog) Table(name string) (*TableSchema, bool) {
 	ts, ok := c.tables[name]
