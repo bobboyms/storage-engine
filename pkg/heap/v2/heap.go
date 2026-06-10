@@ -233,7 +233,7 @@ func (h *HeapV2) tryInsert(pid pagestore.PageID, rh RecordHeader, doc []byte) (i
 	}
 	defer handle.Release()
 
-	sp := OpenSlottedPage(handle.Page())
+	sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
 	slotID, err := sp.Insert(rh, doc)
 	if errors.Is(err, ErrPageFull) {
 		return 0, false, nil
@@ -263,7 +263,7 @@ func (h *HeapV2) Read(rid int64) ([]byte, *RecordHeader, error) {
 	}
 	defer handle.Release()
 
-	sp := OpenSlottedPage(handle.Page())
+	sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
 	doc, rh, err := sp.Read(slotID)
 	if err != nil {
 		return nil, nil, err
@@ -286,7 +286,7 @@ func (h *HeapV2) Delete(rid int64, deleteLSN uint64) error {
 	}
 	defer handle.Release()
 
-	sp := OpenSlottedPage(handle.Page())
+	sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
 	if err := sp.MarkDeleted(slotID, deleteLSN); err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (h *HeapV2) Undelete(rid int64, expectedDeleteLSN uint64, pageLSN uint64) e
 	}
 	defer handle.Release()
 
-	sp := OpenSlottedPage(handle.Page())
+	sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
 	doc, rh, err := sp.Read(slotID)
 	if err != nil {
 		return err
@@ -369,7 +369,7 @@ func (h *HeapV2) Vacuum(ctx context.Context, minLSN uint64) (int, error) {
 			return total, err
 		}
 
-		sp := OpenSlottedPage(handle.Page())
+		sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
 		n, err := sp.Compact(minLSN)
 		if err != nil {
 			handle.Release()

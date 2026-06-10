@@ -128,16 +128,33 @@ func InitSlottedPage(p *pagestore.Page, maxBodySize int) *SlottedPage {
 	}
 	h := slottedHeader{
 		freeSpaceStart: SlottedHeaderSize,
-		freeSpaceEnd:   uint16(maxBodySize),
+		freeSpaceEnd:   uint16(maxBodySize), //nolint:gosec // clamped to len(body) above, fits uint16
 	}
 	h.encode(body[:SlottedHeaderSize])
-	return &SlottedPage{page: p, body: body}
+	// Cap the working body at maxBodySize so every record-region computation
+	// (notably Compact, which packs survivors from len(body) downward) stays
+	// inside the space that survives the PageFile cipher round-trip.
+	return &SlottedPage{page: p, body: body[:maxBodySize]}
 }
 
 // OpenSlottedPage conecta-se a uma page já inicializada (ex: lida do disco).
 // NOT zera a page.
-func OpenSlottedPage(p *pagestore.Page) *SlottedPage {
-	return &SlottedPage{page: p, body: p.Body()}
+//
+// `maxBodySize` must match the value used at InitSlottedPage time — i.e.
+// `pagestore.PageFile.UsableBodySize()` when the page goes through an
+// encrypting PageFile, `pagestore.BodySize` otherwise. Opening with the full
+// body on an encrypted file would let Compact repack live records into the
+// cipher-reserved tail (the AES-GCM nonce+tag area), which the next flush
+// silently truncates on disk.
+func OpenSlottedPage(p *pagestore.Page, maxBodySize int) *SlottedPage {
+	body := p.Body()
+	if maxBodySize < SlottedHeaderSize {
+		maxBodySize = SlottedHeaderSize
+	}
+	if maxBodySize > len(body) {
+		maxBodySize = len(body)
+	}
+	return &SlottedPage{page: p, body: body[:maxBodySize]}
 }
 
 func (sp *SlottedPage) header() slottedHeader {
