@@ -337,6 +337,40 @@ func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
 	return 0, nil
 }
 
+// execDropTable removes a table: its heap and index files, the in-memory
+// catalog entry, and the persisted schema. With IfExists, an unknown table is
+// a silent no-op. After the drop it checkpoints so WAL entries of the dropped
+// table are pruned; otherwise a crash after re-creating a table with the same
+// name could replay old rows into the new table during recovery.
+func (e *Executor) execDropTable(ctx context.Context, stmt *DropTableStmt) (int64, error) {
+	if e.ddl == nil {
+		return 0, fmt.Errorf("%w: DROP TABLE requires a database opened with OpenDatabase", ErrExec)
+	}
+	pos, ok := e.ddl.schemaIndex(stmt.Table)
+	if !ok {
+		if stmt.IfExists {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
+	}
+	if err := e.engine.DropTable(ctx, stmt.Table); err != nil {
+		return 0, fmt.Errorf("%w: drop table %q: %v", ErrExec, stmt.Table, err)
+	}
+	e.catalog.RemoveTable(stmt.Table)
+	e.ddl.schemas = append(e.ddl.schemas[:pos], e.ddl.schemas[pos+1:]...)
+	// The table can no longer be vacuumed; drop any pending garbage mark so a
+	// later maintenance pass does not fail on the missing table.
+	e.forgetGarbage(stmt.Table)
+	if err := saveSchemas(e.ddl.dir, e.ddl.schemas); err != nil {
+		return 0, err
+	}
+	if err := e.engine.FuzzyCheckpoint(ctx); err != nil {
+		return 0, fmt.Errorf("%w: checkpoint after drop: %v", ErrExec, err)
+	}
+	e.lastCheckpointLSN.Store(e.engine.Stats().CurrentLSN)
+	return 0, nil
+}
+
 // applyAlter performs the physical and in-memory effects of an ALTER TABLE
 // (creating/dropping the sidecar index, refreshing the catalog and schema list)
 // without persisting the schema file. It returns whether the schema changed; a
@@ -383,9 +417,15 @@ func evolveAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
 	if col.Primary {
 		return TableSchema{}, fmt.Errorf("%w: cannot add a primary key column to table %q", ErrExec, schema.Name)
 	}
+	// Existing rows read the new column as NULL and there is no backfill, so a
+	// NOT NULL constraint can never hold on them. A DEFAULT alone is fine: it
+	// applies to future inserts.
+	if col.NotNull {
+		return TableSchema{}, fmt.Errorf("%w: cannot add NOT NULL column %q to table %q: existing rows would violate it", ErrExec, col.Name, schema.Name)
+	}
 
 	ns := cloneSchema(schema)
-	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type})
+	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type, Default: col.Default})
 	if col.Index {
 		ns.Indexes = append(ns.Indexes, IndexDef{Name: col.Name, Column: col.Name})
 	}
@@ -471,7 +511,7 @@ func (d *ddlManager) schemaIndex(name string) (int, bool) {
 func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 	schema := TableSchema{Name: stmt.Table}
 	for _, c := range stmt.Columns {
-		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type})
+		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type, NotNull: c.NotNull, Default: c.Default})
 		switch {
 		case c.Primary:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name, Primary: true})

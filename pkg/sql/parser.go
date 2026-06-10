@@ -95,9 +95,18 @@ func (p *parser) parseStatement() (Statement, error) {
 	case "DELETE":
 		return p.parseDelete()
 	case "CREATE":
+		// CREATE TABLE vs CREATE [UNIQUE] INDEX, decided by lookahead.
+		if next := p.toks[p.pos+1]; next.Type == TokenKeyword && (next.Literal == "INDEX" || next.Literal == "UNIQUE") {
+			return p.parseCreateIndex()
+		}
 		return p.parseCreateTable()
 	case "ALTER":
 		return p.parseAlterTable()
+	case "DROP":
+		if next := p.toks[p.pos+1]; next.Type == TokenKeyword && next.Literal == "INDEX" {
+			return p.parseDropIndex()
+		}
+		return p.parseDropTable()
 	case "DESCRIBE", "DESC":
 		return p.parseDescribe()
 	default:
@@ -234,6 +243,91 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 	return stmt, nil
 }
 
+func (p *parser) parseCreateIndex() (*CreateIndexStmt, error) {
+	if err := p.expectKeyword("CREATE"); err != nil {
+		return nil, err
+	}
+	stmt := &CreateIndexStmt{}
+	if p.isKeyword("UNIQUE") {
+		p.next()
+		stmt.Unique = true
+	}
+	if err := p.expectKeyword("INDEX"); err != nil {
+		return nil, err
+	}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "NOT", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfNotExists = true
+	}
+	if p.peek().Type == TokenIdent {
+		stmt.Name = p.next().Literal
+	}
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("%w: index requires at least one column", ErrParse)
+	}
+	stmt.Columns = cols
+	return stmt, nil
+}
+
+func (p *parser) parseDropIndex() (*DropIndexStmt, error) {
+	if err := p.expectKeywords("DROP", "INDEX"); err != nil {
+		return nil, err
+	}
+	stmt := &DropIndexStmt{}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfExists = true
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected index name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Name = p.next().Literal
+	if err := p.expectKeyword("ON"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
+	return stmt, nil
+}
+
+func (p *parser) parseDropTable() (*DropTableStmt, error) {
+	if err := p.expectKeyword("DROP"); err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("TABLE"); err != nil {
+		return nil, err
+	}
+	stmt := &DropTableStmt{}
+	if p.isKeyword("IF") {
+		if err := p.expectKeywords("IF", "EXISTS"); err != nil {
+			return nil, err
+		}
+		stmt.IfExists = true
+	}
+	if p.peek().Type != TokenIdent {
+		return nil, fmt.Errorf("%w: expected table name, got %q", ErrParse, p.peek().Literal)
+	}
+	stmt.Table = p.next().Literal
+	return stmt, nil
+}
+
 func (p *parser) parseDescribe() (*DescribeStmt, error) {
 	// The dispatching keyword is DESCRIBE or its DESC alias.
 	p.next()
@@ -259,7 +353,8 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 	}
 	col.Type = dt
 
-	// Optional column constraints: PRIMARY KEY and/or INDEX.
+	// Optional column constraints: PRIMARY KEY, INDEX, UNIQUE, NOT NULL,
+	// and/or DEFAULT <literal>.
 	for {
 		switch {
 		case p.isKeyword("PRIMARY"):
@@ -274,6 +369,23 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		case p.isKeyword("UNIQUE"):
 			p.next()
 			col.Unique = true
+		case p.isKeyword("NOT"):
+			p.next()
+			if err := p.expectKeyword("NULL"); err != nil {
+				return ColumnDef{}, err
+			}
+			col.NotNull = true
+		case p.isKeyword("DEFAULT"):
+			p.next()
+			operand, err := p.parseOperand()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			lit, ok := operand.(*Literal)
+			if !ok {
+				return ColumnDef{}, fmt.Errorf("%w: DEFAULT for column %q must be a literal, got %s", ErrParse, col.Name, operand.String())
+			}
+			col.Default = lit
 		default:
 			return col, nil
 		}
@@ -301,11 +413,17 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 	if err := p.expectKeyword("VALUES"); err != nil {
 		return nil, err
 	}
-	vals, err := p.parseParenLiteralList()
-	if err != nil {
-		return nil, err
+	for {
+		vals, err := p.parseParenLiteralList()
+		if err != nil {
+			return nil, err
+		}
+		ins.Rows = append(ins.Rows, vals)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
 	}
-	ins.Values = vals
 	return ins, nil
 }
 

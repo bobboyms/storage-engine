@@ -61,7 +61,7 @@ var keywords = map[string]struct{}{
 	"JOIN": {}, "ON": {}, "INNER": {}, "LEFT": {}, "OUTER": {}, "EXISTS": {},
 	"CREATE": {}, "TABLE": {}, "PRIMARY": {}, "KEY": {}, "INDEX": {},
 	"ALTER": {}, "ADD": {}, "DROP": {}, "COLUMN": {}, "IF": {},
-	"DESCRIBE": {}, "UNIQUE": {},
+	"DESCRIBE": {}, "UNIQUE": {}, "DEFAULT": {},
 	"UNION": {}, "ALL": {},
 	"OVER": {}, "PARTITION": {},
 }

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+
+	"github.com/bobboyms/storage-engine/pkg/types"
 )
 
 // schemaFileName is the on-disk catalog persisted in a database directory.
@@ -35,8 +38,101 @@ type persistedCatalog struct {
 // forms of a table schema. Types are stored by name so the file stays readable
 // and stable against engine enum reordering.
 type persistedColumn struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name    string            `json:"name"`
+	Type    string            `json:"type"`
+	NotNull bool              `json:"not_null,omitempty"`
+	Default *persistedDefault `json:"default,omitempty"`
+}
+
+// persistedDefault stores a column DEFAULT as a literal kind plus its value
+// rendered as plain text (no SQL quoting), so values that contain quotes
+// round-trip safely.
+type persistedDefault struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+}
+
+// defaultKindNames maps literal kinds to their persisted names. The names are
+// part of the on-disk catalog format; do not rename them.
+var defaultKindNames = map[LiteralKind]string{
+	LitInt: "int", LitFloat: "float", LitString: "string", LitBool: "bool",
+	LitNull: "null", LitUUID: "uuid", LitDate: "date", LitDecimal: "decimal",
+}
+
+func toPersistedDefault(l *Literal) *persistedDefault {
+	if l == nil {
+		return nil
+	}
+	pd := &persistedDefault{Kind: defaultKindNames[l.Kind]}
+	switch l.Kind {
+	case LitInt:
+		pd.Value = strconv.FormatInt(l.Int, 10)
+	case LitFloat:
+		pd.Value = strconv.FormatFloat(l.Float, 'g', -1, 64)
+	case LitString:
+		pd.Value = l.Str
+	case LitBool:
+		pd.Value = strconv.FormatBool(l.Bool)
+	case LitNull:
+		// no value
+	case LitUUID:
+		pd.Value = l.UUID.String()
+	case LitDate:
+		pd.Value = l.Date.String()
+	case LitDecimal:
+		pd.Value = l.Dec.String()
+	}
+	return pd
+}
+
+func fromPersistedDefault(pd *persistedDefault) (*Literal, error) {
+	if pd == nil {
+		return nil, nil
+	}
+	switch pd.Kind {
+	case "int":
+		n, err := strconv.ParseInt(pd.Value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted int default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitInt, Int: n}, nil
+	case "float":
+		f, err := strconv.ParseFloat(pd.Value, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted float default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitFloat, Float: f}, nil
+	case "string":
+		return &Literal{Kind: LitString, Str: pd.Value}, nil
+	case "bool":
+		b, err := strconv.ParseBool(pd.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted bool default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitBool, Bool: b}, nil
+	case "null":
+		return &Literal{Kind: LitNull}, nil
+	case "uuid":
+		k, err := types.ParseUUID(pd.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted uuid default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitUUID, UUID: k}, nil
+	case "date":
+		k, err := types.ParseDateOnly(pd.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted date default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitDate, Date: k}, nil
+	case "decimal":
+		k, err := types.ParseDecimal(pd.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid persisted decimal default %q", ErrInvalidSchema, pd.Value)
+		}
+		return &Literal{Kind: LitDecimal, Dec: k}, nil
+	default:
+		return nil, fmt.Errorf("%w: unknown persisted default kind %q", ErrInvalidSchema, pd.Kind)
+	}
 }
 
 type persistedIndex struct {
@@ -56,7 +152,12 @@ type persistedTable struct {
 func toPersisted(s TableSchema) persistedTable {
 	pt := persistedTable{Name: s.Name}
 	for _, c := range s.Columns {
-		pt.Columns = append(pt.Columns, persistedColumn{Name: c.Name, Type: typeNameForData(c.Type)})
+		pt.Columns = append(pt.Columns, persistedColumn{
+			Name:    c.Name,
+			Type:    typeNameForData(c.Type),
+			NotNull: c.NotNull,
+			Default: toPersistedDefault(c.Default),
+		})
 	}
 	for _, idx := range s.Indexes {
 		pt.Indexes = append(pt.Indexes, persistedIndex(idx))
@@ -71,7 +172,11 @@ func fromPersisted(pt persistedTable) (TableSchema, error) {
 		if !ok {
 			return TableSchema{}, fmt.Errorf("%w: column %q has unknown persisted type %q", ErrInvalidSchema, c.Name, c.Type)
 		}
-		s.Columns = append(s.Columns, Column{Name: c.Name, Type: dt})
+		def, err := fromPersistedDefault(c.Default)
+		if err != nil {
+			return TableSchema{}, err
+		}
+		s.Columns = append(s.Columns, Column{Name: c.Name, Type: dt, NotNull: c.NotNull, Default: def})
 	}
 	for _, idx := range pt.Indexes {
 		s.Indexes = append(s.Indexes, IndexDef(idx))

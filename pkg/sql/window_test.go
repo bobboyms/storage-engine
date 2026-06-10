@@ -16,6 +16,7 @@ func TestParseWindowFunction(t *testing.T) {
 	w := sel.Items[1].Window
 	if w == nil {
 		t.Fatalf("item[1].Window = nil, want a window call")
+		return
 	}
 	if w.Func != "ROW_NUMBER" {
 		t.Fatalf("Func = %q, want ROW_NUMBER", w.Func)

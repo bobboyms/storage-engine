@@ -37,7 +37,12 @@ func parseBound(input string, args []any) (Statement, error) {
 func bindStatement(stmt Statement, args []any) error {
 	switch s := stmt.(type) {
 	case *InsertStmt:
-		return bindExprs(s.Values, args)
+		for _, row := range s.Rows {
+			if err := bindExprs(row, args); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *UpdateStmt:
 		for i := range s.Assignments {
 			bound, err := bindExpr(s.Assignments[i].Value, args)

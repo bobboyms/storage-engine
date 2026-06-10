@@ -24,13 +24,17 @@ var ErrExec = errors.New("sql: exec error")
 // same Executor; the underlying engine serializes writes per table and latches
 // index/heap pages in the buffer pool, and background maintenance is safe
 // against foreground traffic. This has been exercised under the race detector
-// (see TestExecutorConcurrentUsageRace and tests/stress with -race). One known
-// limitation: the B+ tree read descent uses lock-coupling without crabbing (it
-// releases a parent page latch before pinning the child), so a reader that runs
-// exactly while a writer splits or merges that subtree can momentarily observe a
-// restructured node. It did not surface as lost rows or a data race in testing,
-// but callers needing a strict point-in-time view across multiple reads should
-// use a single engine transaction (BeginRead) rather than separate Query calls.
+// (see TestExecutorConcurrentUsageRace and tests/stress with -race). The B+
+// tree read descent uses latch crabbing (it pins the child page before
+// releasing the parent), so point reads and scan starts never follow a stale
+// child pointer past a concurrent split or merge (see TestCrabbingReadDescent
+// in pkg/btree/v2). One remaining narrow window: a scan's leaf-to-leaf
+// sibling walk releases the current leaf before pinning the next (crabbing
+// there would deadlock against the delete paths' right-to-left merge lock
+// order), so a scan running exactly while a merge restructures that sibling
+// can momentarily observe it mid-change. Callers needing a strict
+// point-in-time view across multiple reads should use a single engine
+// transaction (BeginRead) rather than separate Query calls.
 type Executor struct {
 	engine  *storage.StorageEngine
 	catalog *Catalog
@@ -160,7 +164,7 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 		if hasWindows(sel.Items) {
 			return nil, fmt.Errorf("%w: window functions are only supported on single-table queries", ErrExec)
 		}
-		return e.queryFrom(ctx, sel, ec)
+		return queryFrom(ctx, sel, ec, e)
 	}
 
 	schema, ok := e.catalog.Table(sel.Table)

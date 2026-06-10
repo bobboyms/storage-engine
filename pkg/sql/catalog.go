@@ -31,10 +31,15 @@ var ErrDuplicateColumn = errors.New("sql: duplicate column")
 var ErrUniqueViolation = errors.New("sql: unique constraint violation")
 
 // Column describes a single column of a table together with the engine data
-// type used to encode its values.
+// type used to encode its values. NotNull rejects NULL values on INSERT and
+// UPDATE; Default, when non-nil, is the literal stored when an INSERT omits
+// the column. The literal is immutable after parse, so sharing the pointer
+// across schema clones is safe.
 type Column struct {
-	Name string
-	Type storage.DataType
+	Name    string
+	Type    storage.DataType
+	NotNull bool
+	Default *Literal
 }
 
 // IndexDef describes an index. A single-column index serves Column; a composite
@@ -118,6 +123,15 @@ func (s TableSchema) validate() error {
 			return fmt.Errorf("%w: duplicate column %q in table %q", ErrInvalidSchema, c.Name, s.Name)
 		}
 		seenCols[c.Name] = struct{}{}
+		if c.Default != nil {
+			if c.Default.Kind == LitNull {
+				if c.NotNull {
+					return fmt.Errorf("%w: column %q is NOT NULL but declares DEFAULT NULL", ErrInvalidSchema, c.Name)
+				}
+			} else if _, err := ColumnValue(c.Default, c.Type); err != nil {
+				return fmt.Errorf("%w: column %q has a type-incompatible default: %v", ErrInvalidSchema, c.Name, err)
+			}
+		}
 	}
 
 	seenIdx := make(map[string]struct{}, len(s.Indexes))
@@ -190,6 +204,13 @@ func (c *Catalog) ReplaceTable(schema TableSchema) error {
 	stored := schema
 	c.tables[schema.Name] = &stored
 	return nil
+}
+
+// RemoveTable unregisters a table schema. Removing an unknown name is a no-op,
+// matching DROP TABLE IF EXISTS semantics; callers that need to report unknown
+// tables check existence first.
+func (c *Catalog) RemoveTable(name string) {
+	delete(c.tables, name)
 }
 
 // Table returns the schema registered under name and whether it exists.

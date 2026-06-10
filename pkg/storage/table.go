@@ -354,6 +354,62 @@ func (tb *TableMetaData) AddIndex(tableName string, idx Index) error {
 	return nil
 }
 
+// DropTable closes every index tree and the heap of an existing table, deletes
+// their backing files, and unregisters the table. Trees shared by multiple
+// index names (composite aliases) are closed and deleted once. The first error
+// is reported, but removal proceeds so a partial failure never leaves a
+// half-registered table.
+func (tb *TableMetaData) DropTable(tableName string) error {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	table, ok := tb.tables[tableName]
+	if !ok {
+		return &errors.TableNotFoundError{Name: tableName}
+	}
+
+	table.mu.Lock()
+	defer table.mu.Unlock()
+
+	var firstErr error
+	keep := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	closedTrees := make(map[btree.Tree]bool)
+	for _, idx := range table.Indices {
+		if idx.Tree == nil || closedTrees[idx.Tree] {
+			continue
+		}
+		closedTrees[idx.Tree] = true
+		var path string
+		if treeV2, ok := idx.Tree.(*btreev2.BTreeV2); ok {
+			path = treeV2.Path()
+		}
+		keep(idx.Tree.Close())
+		if path != "" {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				keep(err)
+			}
+		}
+	}
+
+	if table.Heap != nil {
+		heapPath := table.Heap.Path()
+		keep(table.Heap.Close())
+		if heapPath != "" {
+			if err := os.Remove(heapPath); err != nil && !os.IsNotExist(err) {
+				keep(err)
+			}
+		}
+	}
+
+	delete(tb.tables, tableName)
+	return firstErr
+}
+
 // DropIndex detaches a secondary index from a table, closes its B+ tree, and
 // deletes the backing file. Primary indexes back the table's heap access path
 // and cannot be dropped.

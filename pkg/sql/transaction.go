@@ -66,8 +66,22 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*ResultSet, 
 	if !ok {
 		return nil, fmt.Errorf("%w: Query expects a SELECT statement", ErrExec)
 	}
+	return t.execSelect(ctx, sel)
+}
+
+// execSelect executes a parsed SELECT inside the transaction. Queries with
+// joins or a derived FROM subquery go through the generalized source pipeline,
+// materializing every source through the write transaction so they see staged
+// writes; a plain single-table query keeps the primary-scan path.
+func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error) {
 	if len(sel.Joins) > 0 || sel.Subquery != nil {
-		return nil, fmt.Errorf("%w: JOIN and FROM subqueries are not yet supported inside a transaction", ErrExec)
+		if sel.ForUpdate {
+			return nil, fmt.Errorf("%w: FOR UPDATE is not supported with JOIN or FROM subqueries", ErrExec)
+		}
+		if hasWindows(sel.Items) {
+			return nil, fmt.Errorf("%w: window functions are only supported on single-table queries", ErrExec)
+		}
+		return queryFrom(ctx, sel, nil, t)
 	}
 	schema, ok := t.catalog.Table(sel.Table)
 	if !ok {
@@ -98,6 +112,30 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*ResultSet, 
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 	return projectRows(rows, expandProjection(sel.Items, schema)), nil
+}
+
+// table resolves a table name against the transaction's catalog.
+func (t *Tx) table(name string) (*TableSchema, bool) { return t.catalog.Table(name) }
+
+// scanQualifiedRows fully scans a table's primary index through the write
+// transaction (read-your-writes), keyed by "alias.col".
+func (t *Tx) scanQualifiedRows(ctx context.Context, schema *TableSchema, alias string) ([]Row, error) {
+	pk, ok := schema.PrimaryIndex()
+	if !ok {
+		return nil, fmt.Errorf("%w: table %q has no primary index", ErrExec, schema.Name)
+	}
+	it, err := t.wtx.NewIterator(ctx, schema.Name, pk.Name, storage.IterOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: open iterator: %v", ErrExec, err)
+	}
+	defer func() { _ = it.Close() }()
+	return scanQualifiedIterator(it, t.codec, schema, alias)
+}
+
+// derivedRows executes a FROM subquery within the transaction, so the derived
+// table also sees staged writes.
+func (t *Tx) derivedRows(ctx context.Context, sub *SelectStmt) (*ResultSet, error) {
+	return t.execSelect(ctx, sub)
 }
 
 // sortDecision reports whether the transactional primary-index scan must be
@@ -183,21 +221,21 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
-	doc, keys, err := buildInsertDoc(schema, stmt)
+	// Validate every row before staging any write, so a malformed later row
+	// does not leave earlier rows staged in the transaction.
+	docs, err := encodeInsertRows(schema, stmt)
 	if err != nil {
 		return 0, err
 	}
-	jsonDoc, err := json.Marshal(doc)
-	if err != nil {
-		return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
-	}
-	if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, true); err != nil {
-		if ue := asUniqueViolation(err); ue != nil {
-			return 0, ue
+	for _, d := range docs {
+		if err := t.wtx.WriteRow(ctx, stmt.Table, d.json, d.keys, true); err != nil {
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
+			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 		}
-		return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 	}
-	return 1, nil
+	return int64(len(docs)), nil
 }
 
 func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
@@ -353,30 +391,48 @@ func (t *Tx) matchingPrimaryKeys(ctx context.Context, schema *TableSchema, where
 	return keys, nil
 }
 
-// buildInsertDoc validates an INSERT and returns its document map and the
-// index key map required to write it.
-func buildInsertDoc(schema *TableSchema, stmt *InsertStmt) (map[string]any, map[string]types.Comparable, error) {
-	if len(stmt.Columns) != len(stmt.Values) {
-		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(stmt.Columns), len(stmt.Values))
+// buildInsertDoc validates one INSERT row (a VALUES tuple positionally aligned
+// with columns) and returns its document map and the index key map required to
+// write it.
+func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, error) {
+	if len(columns) != len(values) {
+		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
 	}
-	doc := make(map[string]any, len(stmt.Columns))
-	values := make(map[string]*Literal, len(stmt.Columns))
-	for i, name := range stmt.Columns {
+	doc := make(map[string]any, len(columns))
+	literals := make(map[string]*Literal, len(columns))
+	for i, name := range columns {
 		col, ok := schema.Column(name)
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
 		}
-		lit, ok := stmt.Values[i].(*Literal)
+		lit, ok := values[i].(*Literal)
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
+		}
+		if lit.Kind == LitNull && col.NotNull {
+			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
 		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
 		doc[name] = literalToDocValue(lit, col.Type)
-		values[name] = lit
+		literals[name] = lit
 	}
-	keys, err := keysForInsert(schema, values)
+	// Fill omitted columns from their defaults, and reject omitted NOT NULL
+	// columns that have no default to fall back on.
+	for _, col := range schema.Columns {
+		if _, provided := literals[col.Name]; provided {
+			continue
+		}
+		switch {
+		case col.Default != nil && col.Default.Kind != LitNull:
+			doc[col.Name] = literalToDocValue(col.Default, col.Type)
+			literals[col.Name] = col.Default
+		case col.NotNull:
+			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
+		}
+	}
+	keys, err := keysForInsert(schema, literals)
 	if err != nil {
 		return nil, nil, err
 	}

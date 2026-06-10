@@ -44,8 +44,14 @@ func (e *Executor) Exec(ctx context.Context, query string, args ...any) (int64, 
 		return e.execCreateTable(s)
 	case *AlterTableStmt:
 		return e.execAlterTable(s)
+	case *DropTableStmt:
+		return e.execDropTable(ctx, s)
+	case *CreateIndexStmt:
+		return e.execCreateIndex(ctx, s)
+	case *DropIndexStmt:
+		return e.execDropIndex(s)
 	default:
-		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, DELETE, CREATE TABLE, or ALTER TABLE", ErrExec)
+		return 0, fmt.Errorf("%w: Exec expects a DML or DDL statement, got %T", ErrExec, stmt)
 	}
 }
 
@@ -54,46 +60,66 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 	if !ok {
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
-	if len(stmt.Columns) != len(stmt.Values) {
-		return 0, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(stmt.Columns), len(stmt.Values))
-	}
 
-	doc := make(map[string]any, len(stmt.Columns))
-	values := make(map[string]*Literal, len(stmt.Columns))
-	for i, name := range stmt.Columns {
-		col, ok := schema.Column(name)
-		if !ok {
-			return 0, fmt.Errorf("%w: unknown column %q", ErrExec, name)
-		}
-		lit, ok := stmt.Values[i].(*Literal)
-		if !ok {
-			return 0, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
-		}
-		// Validate type compatibility up front.
-		if _, err := ColumnValue(lit, col.Type); err != nil {
-			return 0, fmt.Errorf("%w: %v", ErrExec, err)
-		}
-		doc[name] = literalToDocValue(lit, col.Type)
-		values[name] = lit
-	}
-
-	keys, err := keysForInsert(schema, values)
+	// Build and validate every row before writing anything, so a malformed
+	// later row cannot leave a partial insert behind.
+	docs, err := encodeInsertRows(schema, stmt)
 	if err != nil {
 		return 0, err
 	}
-	addCompositeKeyFields(doc, schema, keys)
 
-	jsonDoc, err := json.Marshal(doc)
-	if err != nil {
-		return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
-	}
-	if err := e.engine.InsertRow(ctx, stmt.Table, string(jsonDoc), keys); err != nil {
-		if ue := asUniqueViolation(err); ue != nil {
-			return 0, ue
+	// A single row keeps the engine's auto-commit fast path; multiple rows are
+	// staged in one write transaction so the statement is atomic.
+	if len(docs) == 1 {
+		if err := e.engine.InsertRow(ctx, stmt.Table, docs[0].json, docs[0].keys); err != nil {
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
+			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 		}
-		return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+		return 1, nil
 	}
-	return 1, nil
+
+	wtx := e.engine.BeginWriteTransaction()
+	for _, d := range docs {
+		if err := wtx.WriteRow(ctx, stmt.Table, d.json, d.keys, true); err != nil {
+			_ = wtx.Rollback(ctx)
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
+			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+		}
+	}
+	if err := wtx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("%w: commit multi-row insert: %v", ErrExec, err)
+	}
+	return int64(len(docs)), nil
+}
+
+// encodedRow is one fully validated INSERT row: its JSON document and the
+// index-key map required to write it.
+type encodedRow struct {
+	json string
+	keys map[string]types.Comparable
+}
+
+// encodeInsertRows validates every VALUES tuple of an INSERT against the
+// schema and returns the encoded rows, failing before any write on the first
+// malformed row.
+func encodeInsertRows(schema *TableSchema, stmt *InsertStmt) ([]encodedRow, error) {
+	docs := make([]encodedRow, 0, len(stmt.Rows))
+	for _, row := range stmt.Rows {
+		doc, keys, err := buildInsertDoc(schema, stmt.Columns, row)
+		if err != nil {
+			return nil, err
+		}
+		jsonDoc, err := json.Marshal(doc)
+		if err != nil {
+			return nil, fmt.Errorf("%w: encode document: %v", ErrExec, err)
+		}
+		docs = append(docs, encodedRow{json: string(jsonDoc), keys: keys})
+	}
+	return docs, nil
 }
 
 // keysForInsert builds the index-name -> key map required by InsertRow. Every
@@ -189,6 +215,9 @@ func validateAssignments(stmt *UpdateStmt, schema *TableSchema, pk IndexDef) err
 		lit, ok := a.Value.(*Literal)
 		if !ok {
 			return fmt.Errorf("%w: assignment to %q is not a literal", ErrExec, a.Column)
+		}
+		if lit.Kind == LitNull && col.NotNull {
+			return fmt.Errorf("%w: column %q is NOT NULL", ErrExec, a.Column)
 		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return fmt.Errorf("%w: %v", ErrExec, err)

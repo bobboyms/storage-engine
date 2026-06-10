@@ -137,11 +137,13 @@ type JoinClause struct {
 	Left     bool
 }
 
-// InsertStmt represents INSERT INTO table (cols...) VALUES (vals...).
+// InsertStmt represents INSERT INTO table (cols...) VALUES (vals...)[, ...].
+// Each entry in Rows is one VALUES tuple, positionally aligned with Columns.
+// A multi-row statement is atomic: either every row is inserted or none is.
 type InsertStmt struct {
 	Table   string
 	Columns []string
-	Values  []Expr // one literal per column, positionally aligned
+	Rows    [][]Expr
 }
 
 func (*InsertStmt) stmtNode() {}
@@ -170,13 +172,17 @@ type DeleteStmt struct {
 func (*DeleteStmt) stmtNode() {}
 
 // ColumnDef is a column definition in CREATE TABLE: its name, engine data type,
-// and whether it is the primary key or a secondary index.
+// and whether it is the primary key or a secondary index. NotNull rejects NULL
+// values on INSERT and UPDATE; Default, when non-nil, is the literal stored for
+// the column when an INSERT omits it.
 type ColumnDef struct {
 	Name    string
 	Type    storage.DataType
 	Primary bool
 	Index   bool
 	Unique  bool
+	NotNull bool
+	Default *Literal
 }
 
 // IndexClause is a table-level index definition in CREATE TABLE, e.g.
@@ -200,6 +206,40 @@ type CreateTableStmt struct {
 }
 
 func (*CreateTableStmt) stmtNode() {}
+
+// CreateIndexStmt represents CREATE [UNIQUE] INDEX [IF NOT EXISTS] [name] ON
+// table (cols...): it adds a secondary index to an existing table and
+// backfills it from the current rows. Name is optional; when empty the index
+// is named after its column (single) or the joined column list (composite).
+type CreateIndexStmt struct {
+	Table       string
+	Name        string
+	Columns     []string
+	Unique      bool
+	IfNotExists bool
+}
+
+func (*CreateIndexStmt) stmtNode() {}
+
+// DropIndexStmt represents DROP INDEX [IF EXISTS] name ON table: it detaches
+// and deletes a secondary index. The primary index cannot be dropped.
+type DropIndexStmt struct {
+	Table    string
+	Name     string
+	IfExists bool
+}
+
+func (*DropIndexStmt) stmtNode() {}
+
+// DropTableStmt represents DROP TABLE [IF EXISTS] name: it removes the table's
+// rows, indexes, and schema entry. IfExists makes execution a silent no-op when
+// the table does not exist, instead of returning an error.
+type DropTableStmt struct {
+	Table    string
+	IfExists bool
+}
+
+func (*DropTableStmt) stmtNode() {}
 
 // AlterTableStmt represents ALTER TABLE name ADD/DROP COLUMN. Drop selects the
 // action: false adds Column (a full definition, optionally a secondary index);
