@@ -212,6 +212,9 @@ func validateAssignments(stmt *UpdateStmt, schema *TableSchema, pk IndexDef) err
 		if !ok {
 			return fmt.Errorf("%w: assignment to %q is not a literal", ErrExec, a.Column)
 		}
+		if lit.Kind == LitNull && col.NotNull {
+			return fmt.Errorf("%w: column %q is NOT NULL", ErrExec, a.Column)
+		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return fmt.Errorf("%w: %v", ErrExec, err)
 		}

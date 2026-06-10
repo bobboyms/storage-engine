@@ -282,7 +282,8 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 	}
 	col.Type = dt
 
-	// Optional column constraints: PRIMARY KEY and/or INDEX.
+	// Optional column constraints: PRIMARY KEY, INDEX, UNIQUE, NOT NULL,
+	// and/or DEFAULT <literal>.
 	for {
 		switch {
 		case p.isKeyword("PRIMARY"):
@@ -297,6 +298,23 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		case p.isKeyword("UNIQUE"):
 			p.next()
 			col.Unique = true
+		case p.isKeyword("NOT"):
+			p.next()
+			if err := p.expectKeyword("NULL"); err != nil {
+				return ColumnDef{}, err
+			}
+			col.NotNull = true
+		case p.isKeyword("DEFAULT"):
+			p.next()
+			operand, err := p.parseOperand()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			lit, ok := operand.(*Literal)
+			if !ok {
+				return ColumnDef{}, fmt.Errorf("%w: DEFAULT for column %q must be a literal, got %s", ErrParse, col.Name, operand.String())
+			}
+			col.Default = lit
 		default:
 			return col, nil
 		}

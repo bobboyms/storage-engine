@@ -409,11 +409,28 @@ func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[s
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
 		}
+		if lit.Kind == LitNull && col.NotNull {
+			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
+		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
 		doc[name] = literalToDocValue(lit, col.Type)
 		literals[name] = lit
+	}
+	// Fill omitted columns from their defaults, and reject omitted NOT NULL
+	// columns that have no default to fall back on.
+	for _, col := range schema.Columns {
+		if _, provided := literals[col.Name]; provided {
+			continue
+		}
+		switch {
+		case col.Default != nil && col.Default.Kind != LitNull:
+			doc[col.Name] = literalToDocValue(col.Default, col.Type)
+			literals[col.Name] = col.Default
+		case col.NotNull:
+			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
+		}
 	}
 	keys, err := keysForInsert(schema, literals)
 	if err != nil {

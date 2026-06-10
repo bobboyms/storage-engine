@@ -172,13 +172,17 @@ type DeleteStmt struct {
 func (*DeleteStmt) stmtNode() {}
 
 // ColumnDef is a column definition in CREATE TABLE: its name, engine data type,
-// and whether it is the primary key or a secondary index.
+// and whether it is the primary key or a secondary index. NotNull rejects NULL
+// values on INSERT and UPDATE; Default, when non-nil, is the literal stored for
+// the column when an INSERT omits it.
 type ColumnDef struct {
 	Name    string
 	Type    storage.DataType
 	Primary bool
 	Index   bool
 	Unique  bool
+	NotNull bool
+	Default *Literal
 }
 
 // IndexClause is a table-level index definition in CREATE TABLE, e.g.

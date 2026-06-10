@@ -417,9 +417,15 @@ func evolveAddColumn(schema TableSchema, col ColumnDef) (TableSchema, error) {
 	if col.Primary {
 		return TableSchema{}, fmt.Errorf("%w: cannot add a primary key column to table %q", ErrExec, schema.Name)
 	}
+	// Existing rows read the new column as NULL and there is no backfill, so a
+	// NOT NULL constraint can never hold on them. A DEFAULT alone is fine: it
+	// applies to future inserts.
+	if col.NotNull {
+		return TableSchema{}, fmt.Errorf("%w: cannot add NOT NULL column %q to table %q: existing rows would violate it", ErrExec, col.Name, schema.Name)
+	}
 
 	ns := cloneSchema(schema)
-	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type})
+	ns.Columns = append(ns.Columns, Column{Name: col.Name, Type: col.Type, Default: col.Default})
 	if col.Index {
 		ns.Indexes = append(ns.Indexes, IndexDef{Name: col.Name, Column: col.Name})
 	}
@@ -505,7 +511,7 @@ func (d *ddlManager) schemaIndex(name string) (int, bool) {
 func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 	schema := TableSchema{Name: stmt.Table}
 	for _, c := range stmt.Columns {
-		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type})
+		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type, NotNull: c.NotNull, Default: c.Default})
 		switch {
 		case c.Primary:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name, Primary: true})
