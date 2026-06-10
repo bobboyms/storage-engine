@@ -380,68 +380,53 @@ func (tr *BTreeV2) removeCrabbingVar(encKey []byte) (bool, error) {
 // getLockedVar lê a tree variável com snapshot rápido do rootPageID
 // + latch crabbing de read entre pages.
 func (tr *BTreeV2) getLockedVar(encKey []byte) (int64, bool, error) {
-	pageID := tr.rootPage()
-	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return 0, false, err
-		}
-		vp, err := OpenVariableNodePage(h.Page(), tr.maxBodySize, tr.varCodec.Compare)
-		if err != nil {
-			h.Release()
-			return 0, false, err
-		}
-		if vp.IsLeaf() {
-			v, found := vp.LeafGetVar(encKey)
-			h.Release()
-			return v, found, nil
-		}
-		nextPageID := vp.FindChildVar(encKey)
-		h.Release()
-		pageID = nextPageID
+	h, err := tr.descendReadLeafVar(encKey, false)
+	if err != nil {
+		return 0, false, err
 	}
+	defer h.Release()
+	vp, err := OpenVariableNodePage(h.Page(), tr.maxBodySize, tr.varCodec.Compare)
+	if err != nil {
+		return 0, false, err
+	}
+	v, found := vp.LeafGetVar(encKey)
+	return v, found, nil
 }
 
-func (tr *BTreeV2) findLeafForKeyVar(encKey []byte) (pagestore.PageID, error) {
-	pageID := tr.rootPage()
-	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return pagestore.InvalidPageID, err
-		}
-		vp, err := OpenVariableNodePage(h.Page(), tr.maxBodySize, tr.varCodec.Compare)
-		if err != nil {
-			h.Release()
-			return pagestore.InvalidPageID, err
-		}
-		if vp.IsLeaf() {
-			h.Release()
-			return pageID, nil
-		}
-		nextPageID := vp.FindChildVar(encKey)
-		h.Release()
-		pageID = nextPageID
+// descendReadLeafVar is the variable-key counterpart of descendReadLeafFixed:
+// a crabbing (hand-over-hand) read descent that returns the target leaf with
+// its read latch still held. The caller owns the handle and MUST Release it.
+// See descendReadLeafFixed for why pinning the child before releasing the
+// parent is required for correctness under concurrent splits/merges.
+func (tr *BTreeV2) descendReadLeafVar(encKey []byte, leftmost bool) (*pagestore.PageHandle, error) {
+	h, err := tr.bp.Fetch(tr.rootPage())
+	if err != nil {
+		return nil, err
 	}
-}
-
-func (tr *BTreeV2) findLeftmostLeafVar() (pagestore.PageID, error) {
-	pageID := tr.rootPage()
 	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return pagestore.InvalidPageID, err
-		}
 		vp, err := OpenVariableNodePage(h.Page(), tr.maxBodySize, tr.varCodec.Compare)
 		if err != nil {
 			h.Release()
-			return pagestore.InvalidPageID, err
+			return nil, err
 		}
 		if vp.IsLeaf() {
-			h.Release()
-			return pageID, nil
+			return h, nil
 		}
-		nextPageID := vp.LeftmostChild()
+		var nextPageID pagestore.PageID
+		if leftmost {
+			nextPageID = vp.LeftmostChild()
+		} else {
+			nextPageID = vp.FindChildVar(encKey)
+		}
+		childH, err := tr.bp.Fetch(nextPageID) // pin child BEFORE releasing parent
+		if err != nil {
+			h.Release()
+			return nil, err
+		}
 		h.Release()
-		pageID = nextPageID
+		if tr.onDescendChild != nil {
+			tr.onDescendChild()
+		}
+		h = childH
 	}
 }

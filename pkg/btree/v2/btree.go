@@ -90,6 +90,12 @@ type BTreeV2 struct {
 	// no structural logging (e.g. unit tests that exercise the tree
 	// in isolation without a WAL).
 	structural StructuralLogger
+
+	// onDescendChild, when non-nil, is invoked during a read descent at the
+	// moment the descent has committed to a child and released the parent
+	// latch. It is a test-only seam for exercising read latch coupling
+	// (crabbing) and is nil in production.
+	onDescendChild func()
 }
 
 // StructuralLogger mirrors pkg/storage.StructuralLogger so the B+ tree
@@ -893,51 +899,49 @@ func (tr *BTreeV2) scanWithCursor(start, end types.Comparable, fn func(key types
 	return cur.Err()
 }
 
-func (tr *BTreeV2) findLeafForKey(encKey uint64) (pagestore.PageID, error) {
-	pageID := tr.rootPage()
-	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return pagestore.InvalidPageID, err
-		}
-		np, err := OpenNodePage(h.Page(), tr.maxBodySize, tr.codec.Compare)
-		if err != nil {
-			h.Release()
-			return pagestore.InvalidPageID, err
-		}
-		if np.IsLeaf() {
-			h.Release()
-			return pageID, nil
-		}
-		nextPageID, err := np.FindChild(encKey)
-		if err != nil {
-			h.Release()
-			return pagestore.InvalidPageID, err
-		}
-		h.Release()
-		pageID = nextPageID
+// descendReadLeafFixed performs a hand-over-hand (crabbing) read descent from
+// the root to the leaf that would hold encKey — or the leftmost leaf when
+// leftmost is true — and returns that leaf with its read latch still held. The
+// caller owns the returned handle and MUST Release it.
+//
+// Crabbing — pinning the child before releasing the parent — is what makes the
+// returned leaf safe: while the parent latch is held, no writer can split or
+// merge the parent to redirect the child pointer, so the child we pin is the
+// live one. Releasing the parent only after the child is pinned closes the
+// window where a concurrent split could otherwise migrate the key to a sibling
+// and leave the descent on a stale page (the cause of the corrupt heap read
+// under TDE + concurrent vacuum).
+func (tr *BTreeV2) descendReadLeafFixed(encKey uint64, leftmost bool) (*pagestore.PageHandle, error) {
+	h, err := tr.bp.Fetch(tr.rootPage())
+	if err != nil {
+		return nil, err
 	}
-}
-
-func (tr *BTreeV2) findLeftmostLeaf() (pagestore.PageID, error) {
-	pageID := tr.rootPage()
 	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return pagestore.InvalidPageID, err
-		}
 		np, err := OpenNodePage(h.Page(), tr.maxBodySize, tr.codec.Compare)
 		if err != nil {
 			h.Release()
-			return pagestore.InvalidPageID, err
+			return nil, err
 		}
 		if np.IsLeaf() {
-			h.Release()
-			return pageID, nil
+			return h, nil
 		}
-		nextPageID := np.LeftmostChild()
+		var nextPageID pagestore.PageID
+		if leftmost {
+			nextPageID = np.LeftmostChild()
+		} else if nextPageID, err = np.FindChild(encKey); err != nil {
+			h.Release()
+			return nil, err
+		}
+		childH, err := tr.bp.Fetch(nextPageID) // pin child BEFORE releasing parent
+		if err != nil {
+			h.Release()
+			return nil, err
+		}
 		h.Release()
-		pageID = nextPageID
+		if tr.onDescendChild != nil {
+			tr.onDescendChild()
+		}
+		h = childH
 	}
 }
 
@@ -957,31 +961,18 @@ func (tr *BTreeV2) Get(key types.Comparable) (int64, bool, error) {
 	return tr.getLocked(encKey)
 }
 
-// getLocked lê a tree usando apenas um snapshot rápido do rootPageID
-// + latch crabbing de read entre pages.
+// getLocked reads the tree with a crabbing read descent (see
+// descendReadLeafFixed) and looks the key up in the pinned leaf.
 func (tr *BTreeV2) getLocked(encKey uint64) (int64, bool, error) {
-	pageID := tr.rootPage()
-	for {
-		h, err := tr.bp.Fetch(pageID)
-		if err != nil {
-			return 0, false, err
-		}
-		np, err := OpenNodePage(h.Page(), tr.maxBodySize, tr.codec.Compare)
-		if err != nil {
-			h.Release()
-			return 0, false, err
-		}
-		if np.IsLeaf() {
-			v, found := np.LeafGet(encKey)
-			h.Release()
-			return v, found, nil
-		}
-		nextPageID, err := np.FindChild(encKey)
-		if err != nil {
-			h.Release()
-			return 0, false, err
-		}
-		h.Release()
-		pageID = nextPageID
+	h, err := tr.descendReadLeafFixed(encKey, false)
+	if err != nil {
+		return 0, false, err
 	}
+	defer h.Release()
+	np, err := OpenNodePage(h.Page(), tr.maxBodySize, tr.codec.Compare)
+	if err != nil {
+		return 0, false, err
+	}
+	v, found := np.LeafGet(encKey)
+	return v, found, nil
 }

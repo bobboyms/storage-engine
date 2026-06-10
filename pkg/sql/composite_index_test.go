@@ -38,6 +38,7 @@ func TestSchemaFromCreateBuildsCompositeIndex(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("composite index not found in schema")
+		return
 	}
 	if !reflect.DeepEqual(found.Columns, []string{"environment_id", "email"}) {
 		t.Fatalf("composite columns = %v", found.Columns)

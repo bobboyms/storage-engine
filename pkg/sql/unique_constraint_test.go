@@ -19,6 +19,7 @@ func TestParseColumnUnique(t *testing.T) {
 	}
 	if email == nil {
 		t.Fatal("email column not parsed")
+		return
 	}
 	if !email.Unique {
 		t.Fatal("email column should be UNIQUE")
@@ -65,6 +66,7 @@ func TestSchemaFromCreateUniqueIndexes(t *testing.T) {
 	}
 	if compositeUnique == nil {
 		t.Fatal("composite unique index missing")
+		return
 	}
 	if len(compositeUnique.Columns) != 2 {
 		t.Fatalf("composite unique columns = %v", compositeUnique.Columns)

@@ -165,38 +165,30 @@ func (c *Cursor) releaseHandle() {
 	c.idx = 0
 }
 
+// seekToStartLeaf positions the cursor on the leaf holding the start bound (or
+// the leftmost leaf for an unbounded scan). It uses the crabbing read descent,
+// which hands back the leaf with its read latch already held, so the leaf the
+// cursor reads from is never re-fetched by page id (closing the descend→re-pin
+// window where a concurrent split could swap the page out).
 func (c *Cursor) seekToStartLeaf() error {
 	var (
-		startLeaf pagestore.PageID
-		err       error
+		h   *pagestore.PageHandle
+		err error
 	)
-	if c.hasStart {
-		if c.tr.isVariable {
-			startLeaf, err = c.tr.findLeafForKeyVar(c.startV)
-		} else {
-			startLeaf, err = c.tr.findLeafForKey(c.startU)
-		}
+	if c.tr.isVariable {
+		h, err = c.tr.descendReadLeafVar(c.startV, !c.hasStart)
 	} else {
-		if c.tr.isVariable {
-			startLeaf, err = c.tr.findLeftmostLeafVar()
-		} else {
-			startLeaf, err = c.tr.findLeftmostLeaf()
-		}
+		h, err = c.tr.descendReadLeafFixed(c.startU, !c.hasStart)
 	}
 	if err != nil {
 		return err
 	}
-	if startLeaf == pagestore.InvalidPageID {
-		return nil
-	}
-	return c.pinLeaf(startLeaf)
+	return c.adoptLeaf(h)
 }
 
-func (c *Cursor) pinLeaf(pageID pagestore.PageID) error {
-	h, err := c.tr.bp.Fetch(pageID)
-	if err != nil {
-		return err
-	}
+// adoptLeaf takes ownership of an already-pinned leaf handle and stages it as
+// the cursor's current page.
+func (c *Cursor) adoptLeaf(h *pagestore.PageHandle) error {
 	if c.tr.isVariable {
 		vp, err := OpenVariableNodePage(h.Page(), c.tr.maxBodySize, c.tr.varCodec.Compare)
 		if err != nil {
@@ -213,7 +205,7 @@ func (c *Cursor) pinLeaf(pageID pagestore.PageID) error {
 		c.n = np.NumKeys()
 	}
 	c.handle = h
-	c.pageID = pageID
+	c.pageID = h.ID()
 	c.idx = 0
 	return nil
 }
@@ -283,9 +275,22 @@ func (c *Cursor) advanceToNextLeaf() error {
 		}
 		nextLeaf = np.NextLeafPageID()
 	}
+	// The current leaf MUST be released before pinning the right sibling.
+	// Crabbing here (hold current, then fetch next) would order leaf latches
+	// left-to-right, while the delete paths' merge/redistribute lock the
+	// underflowing child first and then FetchForWrite its LEFT sibling
+	// (right-to-left; see mergeWithLeftVar and the delete_fixed.go merges) —
+	// holding both would form an ABBA deadlock cycle with a concurrent merge.
+	// The cost is a small window where the sibling can be restructured between
+	// release and pin; the descent itself crabs (descendReadLeafFixed/Var), so
+	// lookups and scan starts never land on a stale page.
 	c.releaseHandle()
 	if nextLeaf == pagestore.InvalidPageID {
 		return nil
 	}
-	return c.pinLeaf(nextLeaf)
+	h, err := c.tr.bp.Fetch(nextLeaf)
+	if err != nil {
+		return err
+	}
+	return c.adoptLeaf(h)
 }
