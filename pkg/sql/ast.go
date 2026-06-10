@@ -137,11 +137,13 @@ type JoinClause struct {
 	Left     bool
 }
 
-// InsertStmt represents INSERT INTO table (cols...) VALUES (vals...).
+// InsertStmt represents INSERT INTO table (cols...) VALUES (vals...)[, ...].
+// Each entry in Rows is one VALUES tuple, positionally aligned with Columns.
+// A multi-row statement is atomic: either every row is inserted or none is.
 type InsertStmt struct {
 	Table   string
 	Columns []string
-	Values  []Expr // one literal per column, positionally aligned
+	Rows    [][]Expr
 }
 
 func (*InsertStmt) stmtNode() {}

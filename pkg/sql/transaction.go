@@ -183,21 +183,21 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
-	doc, keys, err := buildInsertDoc(schema, stmt)
+	// Validate every row before staging any write, so a malformed later row
+	// does not leave earlier rows staged in the transaction.
+	docs, err := encodeInsertRows(schema, stmt)
 	if err != nil {
 		return 0, err
 	}
-	jsonDoc, err := json.Marshal(doc)
-	if err != nil {
-		return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
-	}
-	if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, true); err != nil {
-		if ue := asUniqueViolation(err); ue != nil {
-			return 0, ue
+	for _, d := range docs {
+		if err := t.wtx.WriteRow(ctx, stmt.Table, d.json, d.keys, true); err != nil {
+			if ue := asUniqueViolation(err); ue != nil {
+				return 0, ue
+			}
+			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 		}
-		return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
 	}
-	return 1, nil
+	return int64(len(docs)), nil
 }
 
 func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
@@ -353,20 +353,21 @@ func (t *Tx) matchingPrimaryKeys(ctx context.Context, schema *TableSchema, where
 	return keys, nil
 }
 
-// buildInsertDoc validates an INSERT and returns its document map and the
-// index key map required to write it.
-func buildInsertDoc(schema *TableSchema, stmt *InsertStmt) (map[string]any, map[string]types.Comparable, error) {
-	if len(stmt.Columns) != len(stmt.Values) {
-		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(stmt.Columns), len(stmt.Values))
+// buildInsertDoc validates one INSERT row (a VALUES tuple positionally aligned
+// with columns) and returns its document map and the index key map required to
+// write it.
+func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, error) {
+	if len(columns) != len(values) {
+		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
 	}
-	doc := make(map[string]any, len(stmt.Columns))
-	values := make(map[string]*Literal, len(stmt.Columns))
-	for i, name := range stmt.Columns {
+	doc := make(map[string]any, len(columns))
+	literals := make(map[string]*Literal, len(columns))
+	for i, name := range columns {
 		col, ok := schema.Column(name)
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
 		}
-		lit, ok := stmt.Values[i].(*Literal)
+		lit, ok := values[i].(*Literal)
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
 		}
@@ -374,9 +375,9 @@ func buildInsertDoc(schema *TableSchema, stmt *InsertStmt) (map[string]any, map[
 			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
 		doc[name] = literalToDocValue(lit, col.Type)
-		values[name] = lit
+		literals[name] = lit
 	}
-	keys, err := keysForInsert(schema, values)
+	keys, err := keysForInsert(schema, literals)
 	if err != nil {
 		return nil, nil, err
 	}

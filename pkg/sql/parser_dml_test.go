@@ -20,11 +20,15 @@ func TestParseInsert(t *testing.T) {
 	if len(ins.Columns) != 3 || ins.Columns[0] != "id" || ins.Columns[2] != "age" {
 		t.Fatalf("Columns = %v", ins.Columns)
 	}
-	if len(ins.Values) != 3 {
-		t.Fatalf("Values len = %d, want 3", len(ins.Values))
+	if len(ins.Rows) != 1 {
+		t.Fatalf("Rows len = %d, want 1", len(ins.Rows))
 	}
-	if ins.Values[0].String() != "1" || ins.Values[1].String() != "'bob'" || ins.Values[2].String() != "30" {
-		t.Fatalf("Values = [%s %s %s]", ins.Values[0], ins.Values[1], ins.Values[2])
+	row := ins.Rows[0]
+	if len(row) != 3 {
+		t.Fatalf("Values len = %d, want 3", len(row))
+	}
+	if row[0].String() != "1" || row[1].String() != "'bob'" || row[2].String() != "30" {
+		t.Fatalf("Values = [%s %s %s]", row[0], row[1], row[2])
 	}
 }
 

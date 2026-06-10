@@ -324,11 +324,17 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 	if err := p.expectKeyword("VALUES"); err != nil {
 		return nil, err
 	}
-	vals, err := p.parseParenLiteralList()
-	if err != nil {
-		return nil, err
+	for {
+		vals, err := p.parseParenLiteralList()
+		if err != nil {
+			return nil, err
+		}
+		ins.Rows = append(ins.Rows, vals)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
 	}
-	ins.Values = vals
 	return ins, nil
 }
 
