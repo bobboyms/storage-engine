@@ -479,8 +479,32 @@ func TestFaultEngineWALFsyncFailureDoesNotMutateVisibleState(t *testing.T) {
 	}
 
 	_ = os.Remove(markerPath)
-	if err := se.Close(); err != nil {
-		t.Fatalf("close engine after removing fsync fault marker: %v", err)
+	// Fail-stop: once an fsync fails the kernel may have dropped dirty
+	// pages, so the WAL writer stays poisoned even after the fault clears.
+	// Close must surface that instead of pretending the tail is durable.
+	closeErr := se.Close()
+	if closeErr == nil {
+		t.Fatal("expected Close to surface poisoned WAL writer after fsync failure")
+	}
+	if !strings.Contains(closeErr.Error(), "poisoned by fsync failure") {
+		t.Fatalf("expected poisoned-writer error from Close, got: %v", closeErr)
+	}
+
+	// Recovery path: a fresh engine over the same files must replay the WAL
+	// and still see the row committed before the fault. The row whose fsync
+	// failed has indeterminate outcome (commit bytes may have reached the
+	// file), so it is intentionally not asserted here.
+	se2 := openEngine(t, p)
+	defer func() {
+		if err := se2.Close(); err != nil {
+			t.Errorf("close recovered engine: %v", err)
+		}
+	}()
+	if err := se2.Recover(context.Background(), p.walPath); err != nil {
+		t.Fatalf("recover after poisoned close: %v", err)
+	}
+	if _, found, getErr := se2.GetBytes(context.Background(), "t", "id", types.IntKey(1)); getErr != nil || !found {
+		t.Fatalf("stable row must survive recovery after fsync fault, found=%v err=%v", found, getErr)
 	}
 }
 
