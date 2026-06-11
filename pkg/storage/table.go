@@ -81,6 +81,14 @@ func defaultV2IndexPath(heapPath, tableName, indexName string) string {
 	return filepath.Join(dir, fmt.Sprintf("%s.%s.%s.btree.v2", base, tableName, indexName))
 }
 
+// IndexFilePath returns the on-disk path of the sidecar BTreeV2 file that
+// NewTable/AddIndex create for an index. Exposed so tooling (e.g. the
+// verifier) can check file existence without opening — and thereby
+// implicitly creating — the index.
+func IndexFilePath(heapPath, tableName, indexName string) string {
+	return defaultV2IndexPath(heapPath, tableName, indexName)
+}
+
 // codecForDataType mapeia DataType fixo → btreev2.KeyCodec.
 // Varchar tem path separado (NewBTreeV2Varchar) e does not go through aqui.
 func codecForDataType(t DataType) (btreev2.KeyCodec, error) {
