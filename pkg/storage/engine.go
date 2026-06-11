@@ -196,6 +196,12 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 		},
 	})
 	se.registerPageRedoHooks()
+	if tableMetaData != nil {
+		// Re-arm the hooks whenever a table or index is created on the live
+		// engine (runtime DDL): registerPageRedoHooks is idempotent and the
+		// callback fires outside the metadata locks.
+		tableMetaData.setOnTopologyChange(se.registerPageRedoHooks)
+	}
 	return se, nil
 }
 
@@ -247,9 +253,7 @@ func scanMaxWALLSN(path string, cipher crypto.Cipher) (uint64, uint64, error) {
 			}
 			return 0, 0, fmt.Errorf("storage: scanMaxWALLSN at entry %d: %w", count, err)
 		}
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
-		}
+		advanceMaxLSN(&maxLSN, entry.Header.LSN)
 		wal.ReleaseEntry(entry)
 		count++
 	}
@@ -1061,9 +1065,7 @@ func (se *StorageEngine) runPhysicalRedo(ctx context.Context, walPath string, ci
 			return applied, skipped, maxLSN, fmt.Errorf("physical redo error at entry %d: %w", applied+skipped, err)
 		}
 
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
-		}
+		advanceMaxLSN(&maxLSN, entry.Header.LSN)
 		// ARIES: physical redo can start from min(DPT.recLSN) instead
 		// of CheckpointLSN. Pages absent from the DPT at checkpoint
 		// time were flushed; entries before minRec for those pages
@@ -1126,9 +1128,7 @@ func (se *StorageEngine) runLogicalRedo(ctx context.Context, walPath string, cip
 			return count, skipped, maxLSN, fmt.Errorf("recovery error at entry %d: %w", count, err)
 		}
 
-		if entry.Header.LSN > maxLSN {
-			maxLSN = entry.Header.LSN
-		}
+		advanceMaxLSN(&maxLSN, entry.Header.LSN)
 
 		payload, shouldRedo, err := analysis.shouldRedo(entry)
 		if err != nil {
@@ -1205,7 +1205,18 @@ func (se *StorageEngine) Vacuum(ctx context.Context, tableName string) error {
 
 	// 2. Determine Minimum Visible LSN
 	// Any Tombstone with DeleteLSN < minLSN is safe to remove.
+	//
+	// With no active transactions the registry reports MaxUint64 ("everything
+	// is reclaimable"). That sentinel must never leave this function: the heap
+	// stamps the horizon into compacted pages' PageLSN, from where it would
+	// flow into WAL page-redo entries and, on the next open, into the LSN
+	// counter — whose first increment then wraps to 0 and hides every
+	// committed row. Clamping to the current LSN keeps the same reclaim
+	// semantics (every committed delete is below it) while staying a real LSN.
 	minLSN := se.TxRegistry.GetMinActiveLSN()
+	if current := se.lsnTracker.Current(); minLSN > current {
+		minLSN = current
+	}
 
 	se.logger.Info("storage: vacuum start", "table", tableName, "min_lsn", minLSN)
 

@@ -66,8 +66,12 @@ func (se *StorageEngine) fuzzyCheckpointLocked(ctx context.Context) error {
 	}
 
 	beginLSN := se.oldestDirtyPageLSN()
-	if beginLSN == 0 {
-		beginLSN = se.lsnTracker.Current()
+	if current := se.lsnTracker.Current(); beginLSN == 0 || beginLSN > current {
+		// beginLSN > current means a dirty page carries a PageLSN beyond the
+		// log (e.g. the MaxUint64 horizon a pre-clamp vacuum stamped). The
+		// checkpoint record's LSN must stay a real LSN or the next open
+		// adopts the bogus value as its counter.
+		beginLSN = current
 	}
 
 	if err := se.WAL.Sync(); err != nil {

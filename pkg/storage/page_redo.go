@@ -103,6 +103,14 @@ func (se *StorageEngine) writePageRedoRecord(path string, pageID pagestore.PageI
 	if hdr.PageLSN == 0 {
 		return nil
 	}
+	// A page can only be dirtied by an operation that allocated an LSN, so a
+	// PageLSN beyond the engine's current LSN is corrupt metadata (e.g. the
+	// MaxUint64 horizon a pre-clamp vacuum stamped). Writing it verbatim would
+	// poison the WAL: the next open adopts the log's max LSN as its counter.
+	entryLSN := hdr.PageLSN
+	if current := se.lsnTracker.Current(); entryLSN > current {
+		entryLSN = current
+	}
 
 	payload, err := serializePageRedoPayload(path, pageID, page)
 	if err != nil {
@@ -113,7 +121,7 @@ func (se *StorageEngine) writePageRedoRecord(path string, pageID pagestore.PageI
 	entry.Header.Magic = wal.WALMagic
 	entry.Header.Version = wal.WALVersion
 	entry.Header.EntryType = wal.EntryPageRedo
-	entry.Header.LSN = hdr.PageLSN
+	entry.Header.LSN = entryLSN
 	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // payload size bounded by PageSize
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload[:0], payload...)
