@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 // KeyStore implementa a hierarquia de keys de dois níveis:
@@ -63,13 +64,52 @@ func (ks *KeyStore) load() error {
 	return nil
 }
 
+// save persists the wrapped DEKs durably and atomically: temp file +
+// fsync + rename + parent-dir fsync. The keystore is the only copy of the
+// wrapped DEKs — a torn write here would make every byte they encrypt
+// unrecoverable, so an interrupted save must leave the previous file intact.
 func (ks *KeyStore) save() error {
 	data, err := json.MarshalIndent(keyFile{WrappedDEKs: ks.wrapped}, "", "  ")
 	if err != nil {
 		return err
 	}
-	// 0600: somente o owner lê/escreve
-	return os.WriteFile(ks.path, data, 0600)
+
+	tmp := ks.path + ".tmp"
+	// 0600: only the owner reads/writes key material.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, ks.path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return fsyncDir(filepath.Dir(ks.path))
+}
+
+// fsyncDir makes the rename in `dirPath` durable across a crash (POSIX
+// requires syncing the directory for renames/creates inside it).
+func fsyncDir(dirPath string) error {
+	d, err := os.Open(dirPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 
 // GetOrCreateDEK devolve um Cipher pronto pra usar para o recurso `name`.

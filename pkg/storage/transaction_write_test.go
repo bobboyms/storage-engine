@@ -377,21 +377,20 @@ func TestWriteTransaction_RollbackWAL(t *testing.T) {
 	tableMgr := NewTableMenager()
 	tableMgr.NewTable("users", []Index{{Name: "id", Primary: true, Type: TypeInt}}, 3, hm)
 
-	walWriter, _ := wal.NewWALWriter(walPath, wal.DefaultOptions())
-	se, _ := NewStorageEngine(tableMgr, walWriter)
-
-	// Create a new WAL writer with SyncEveryWrite and replace the engine's one
 	opts := wal.DefaultOptions()
 	opts.SyncPolicy = wal.SyncEveryWrite
-	writer, _ := wal.NewWALWriter(walPath, opts)
-	se.WAL = writer
+	walWriter, err := wal.NewWALWriter(walPath, opts)
+	if err != nil {
+		t.Fatalf("NewWALWriter: %v", err)
+	}
+	se, _ := NewStorageEngine(tableMgr, walWriter)
 
 	se.WAL.Close() // Close it
 
 	tx := se.BeginWriteTransaction()
 	tx.Put(context.Background(), "users", "id", types.IntKey(1), "{}")
 
-	err := tx.Commit(context.Background())
+	err = tx.Commit(context.Background())
 	if err == nil {
 		t.Error("Expected commit error when WAL is closed and SyncEveryWrite is active")
 	}
