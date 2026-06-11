@@ -32,6 +32,9 @@ type ddlManager struct {
 	// empty otherwise. Backup copies it so a restored TDE database can be
 	// reopened with the same master key.
 	keystorePath string
+	// encryption retains the options the database was opened with so Backup
+	// can verify the snapshot's scratch restore with the same master key.
+	encryption *EncryptionOptions
 }
 
 // defaultMaintenanceInterval is how often a database started with default
@@ -190,7 +193,7 @@ func OpenDatabaseWithOptions(ctx context.Context, dir string, opts OpenOptions) 
 		engine:  engine,
 		catalog: catalog,
 		codec:   bsoncodec.New(),
-		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore, keystorePath: keystorePath},
+		ddl:     &ddlManager{dir: dir, tm: tm, schemas: schemas, keystore: keystore, keystorePath: keystorePath, encryption: opts.Encryption},
 		dirLock: lock,
 	}
 	opened = true // hand the lock's lifetime to exec.Close.

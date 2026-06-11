@@ -58,7 +58,40 @@ func (e *Executor) Backup(ctx context.Context, backupDir string) (*storage.Backu
 		return nil, err
 	}
 
+	// A backup is only valid if it restores into a database that passes the
+	// integrity scrub. The manifest's SHA-256 proves the copy is faithful;
+	// this proves the copied state itself is sane. On failure the backup
+	// directory is kept for forensics, but the error means it must not be
+	// trusted.
+	report, err := VerifyBackup(ctx, backupDir, VerifyOptions{Encryption: e.ddl.encryption})
+	if err != nil {
+		return nil, fmt.Errorf("sql: backup verification could not run: %w", err)
+	}
+	if report.HasErrors() {
+		return nil, fmt.Errorf("sql: backup failed verification (%d findings, first: %s)",
+			len(report.Findings), report.Findings[0])
+	}
+
 	return manifest, nil
+}
+
+// VerifyBackup checks that a backup produced by Executor.Backup is usable: it
+// restores the backup into a scratch directory (which exercises the manifest
+// and SHA-256 validation) and runs the full integrity scrub (VerifyDir) over
+// the result. The scratch restore is created next to backupDir — so it lands
+// on the same volume — and always removed. For an encrypted database, opts
+// must carry the same master key used when the backup was taken.
+func VerifyBackup(ctx context.Context, backupDir string, opts VerifyOptions) (*storage.VerifyReport, error) {
+	scratch, err := os.MkdirTemp(filepath.Dir(backupDir), ".verify-restore-")
+	if err != nil {
+		return nil, fmt.Errorf("sql: verify backup: create scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	if _, err := RestoreDatabase(ctx, backupDir, scratch); err != nil {
+		return nil, fmt.Errorf("sql: verify backup: restore failed: %w", err)
+	}
+	return VerifyDir(ctx, scratch, opts)
 }
 
 // backupKeystore copies the TDE keystore into sidecarDir when encryption is on
