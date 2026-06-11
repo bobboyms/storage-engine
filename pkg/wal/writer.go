@@ -55,20 +55,42 @@ type WALWriter struct {
 	// Indica se o segmento ativo contém pelo menos uma entrada completa.
 	segmentHasEntries bool
 
+	// bgSyncErr poisons the writer after a background fsync failure
+	// (SyncInterval policy). Once the kernel reports an fsync error, dirty
+	// pages may have been dropped — continuing to buffer writes would
+	// silently lose them, so every subsequent WriteEntry/Sync fails with
+	// this error until the writer is reopened. Guarded by mu.
+	bgSyncErr error
+
 	// Controle de threads
 	done   chan struct{}
 	ticker *time.Ticker
 	closed atomic.Bool
+
+	// lockFile holds the advisory exclusive lock (<path>.lock) that
+	// guarantees a single writer per WAL path across processes. Held for
+	// the writer's lifetime; rotation renames the active segment but the
+	// lock file name stays constant.
+	lockFile *os.File
 }
 
 // NewWALWriter cria um novo Writer. Abre o arquivo via pagestore
 // (aplicando cipher se configurado em `opts.Cipher`).
 func NewWALWriter(path string, opts Options) (*WALWriter, error) {
+	// Exclusive writer lock first: the tolerant open below mutates the file
+	// (tail truncation), so a second writer must be rejected before it can
+	// touch anything.
+	lock, err := acquireFileLock(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+
 	// Tolerant open repairs a torn trailing page left by a crash mid-append:
 	// the incomplete tail is truncated back to the last fully written page so
 	// the writer resumes from a consistent, page-aligned boundary.
 	pf, err := pagestore.NewPageFileTolerant(path, opts.Cipher)
 	if err != nil {
+		releaseFileLock(lock)
 		return nil, fmt.Errorf("wal: open page file: %w", err)
 	}
 
@@ -77,6 +99,7 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 		options:        opts,
 		usableBodySize: pf.UsableBodySize(),
 		done:           make(chan struct{}),
+		lockFile:       lock,
 	}
 
 	// Detecta se estamos reabrindo arquivo existsnte ou criando novo.
@@ -85,12 +108,14 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 		// Reabrir: busca última page e continua preenchendo onde parou.
 		if err := w.adoptLastPage(); err != nil {
 			_ = pf.Close()
+			releaseFileLock(lock)
 			return nil, err
 		}
 	} else {
 		// Novo: aloca primeira page.
 		if err := w.allocateNewPage(); err != nil {
 			_ = pf.Close()
+			releaseFileLock(lock)
 			return nil, err
 		}
 	}
@@ -123,7 +148,10 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	defer w.mu.Unlock()
 
 	if w.closed.Load() {
-		return fmt.Errorf("wal: writer fechado")
+		return fmt.Errorf("wal: writer closed")
+	}
+	if err := w.poisonedErrLocked(); err != nil {
+		return err
 	}
 
 	// Serializa header + payload num buffer (headerSize + payloadLen bytes)
@@ -299,7 +327,19 @@ func (w *WALWriter) Sync() error {
 	return w.syncLocked()
 }
 
+// poisonedErrLocked reports the sticky background-sync failure, if any.
+// Caller must hold w.mu.
+func (w *WALWriter) poisonedErrLocked() error {
+	if w.bgSyncErr != nil {
+		return fmt.Errorf("wal: writer poisoned by background sync failure: %w", w.bgSyncErr)
+	}
+	return nil
+}
+
 func (w *WALWriter) syncLocked() error {
+	if err := w.poisonedErrLocked(); err != nil {
+		return err
+	}
 	if err := w.flushCurrentPageLocked(); err != nil {
 		return err
 	}
@@ -327,6 +367,8 @@ func (w *WALWriter) Close() error {
 	// Flush final (pode fail se disk full; tentamos fechar mesmo assim)
 	syncErr := w.syncLocked()
 	closeErr := w.pf.Close()
+	releaseFileLock(w.lockFile)
+	w.lockFile = nil
 	if syncErr != nil {
 		return syncErr
 	}
@@ -391,8 +433,17 @@ func (w *WALWriter) backgroundSync() {
 	for {
 		select {
 		case <-w.ticker.C:
-			// Thread-safe; Sync adquire lock internamente
-			_ = w.Sync()
+			// Thread-safe; Sync acquires the lock internally. An fsync
+			// failure here must not be dropped: poison the writer so the
+			// next WriteEntry surfaces it (fail-stop) instead of buffering
+			// entries that may never become durable.
+			if err := w.Sync(); err != nil && !w.closed.Load() {
+				w.mu.Lock()
+				if w.bgSyncErr == nil {
+					w.bgSyncErr = err
+				}
+				w.mu.Unlock()
+			}
 		case <-w.done:
 			return
 		}
