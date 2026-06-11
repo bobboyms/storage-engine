@@ -55,17 +55,37 @@ type WALWriter struct {
 	// Indica se o segmento ativo contém pelo menos uma entrada completa.
 	segmentHasEntries bool
 
-	// bgSyncErr poisons the writer after a background fsync failure
-	// (SyncInterval policy). Once the kernel reports an fsync error, dirty
-	// pages may have been dropped — continuing to buffer writes would
-	// silently lose them, so every subsequent WriteEntry/Sync fails with
-	// this error until the writer is reopened. Guarded by mu.
+	// Group commit state. Concurrent SyncEveryWrite committers elect a
+	// leader that issues one fsync covering every entry appended (and
+	// page-flushed) before it started; followers wait on syncCond.
+	//
+	//   appendSeq — sequence assigned to each entry after its bytes were
+	//               flushed to the OS (incremented under mu, read atomically)
+	//   syncedSeq — highest sequence covered by a completed fsync
+	//   syncInFlight — gate: one fsync (or pf swap/close) at a time
+	//
+	// syncedSeq, syncInFlight and bgSyncErr are guarded by syncMu.
+	appendSeq    atomic.Uint64
+	syncMu       sync.Mutex
+	syncCond     *sync.Cond
+	syncedSeq    uint64
+	syncInFlight bool
+
+	// bgSyncErr poisons the writer after any fsync failure (background
+	// ticker or group-commit leader). Once the kernel reports an fsync
+	// error, dirty pages may have been dropped — continuing to buffer
+	// writes would silently lose them, so every subsequent WriteEntry/Sync
+	// fails with this error until the writer is reopened. Guarded by syncMu.
 	bgSyncErr error
 
 	// Controle de threads
 	done   chan struct{}
 	ticker *time.Ticker
 	closed atomic.Bool
+
+	// syncCount counts real fsyncs issued to the page file
+	// (observability and group-commit tests).
+	syncCount atomic.Uint64
 
 	// lockFile holds the advisory exclusive lock (<path>.lock) that
 	// guarantees a single writer per WAL path across processes. Held for
@@ -101,6 +121,7 @@ func NewWALWriter(path string, opts Options) (*WALWriter, error) {
 		done:           make(chan struct{}),
 		lockFile:       lock,
 	}
+	w.syncCond = sync.NewCond(&w.syncMu)
 
 	// Detecta se estamos reabrindo arquivo existsnte ou criando novo.
 	// pf.NumPages() == 1 significa só o slot 0 reservado (arquivo empty).
@@ -143,14 +164,20 @@ func (w *WALWriter) Cipher() crypto.Cipher {
 
 // WriteEntry serializa `entry` e escreve na page atual, alocando
 // novas pages quando necessário. Aplica a política de sync.
+//
+// SyncEveryWrite uses group commit: the entry is appended and its page is
+// flushed under mu, then the fsync happens outside mu through groupSync,
+// so committers that arrive during an in-flight fsync are all covered by
+// the next one instead of each paying their own.
 func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	if w.closed.Load() {
+		w.mu.Unlock()
 		return fmt.Errorf("wal: writer closed")
 	}
-	if err := w.poisonedErrLocked(); err != nil {
+	if err := w.poisonedErr(); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 
@@ -161,6 +188,7 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 
 	// Escreve byte-a-byte, cruzando pages se preciso.
 	if err := w.appendBytes(buf); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	w.segmentHasEntries = true
@@ -170,19 +198,97 @@ func (w *WALWriter) WriteEntry(entry *WALEntry) error {
 	// Política de sync
 	switch w.options.SyncPolicy {
 	case SyncEveryWrite:
-		if err := w.syncLocked(); err != nil {
+		// Flush to the OS under mu so the group fsync covers these bytes,
+		// take a sequence number, then sync outside mu (group commit).
+		if err := w.flushCurrentPageLocked(); err != nil {
+			w.mu.Unlock()
 			return err
 		}
-		return w.maybeRotateLocked()
+		seq := w.appendSeq.Add(1)
+		w.mu.Unlock()
+		if err := w.groupSync(seq); err != nil {
+			return err
+		}
+		return w.maybeRotate()
 	case SyncBatch:
 		if w.batchBytes >= w.options.SyncBatchBytes {
 			if err := w.syncLocked(); err != nil {
+				w.mu.Unlock()
 				return err
 			}
-			return w.maybeRotateLocked()
 		}
 	}
-	return w.maybeRotateLocked()
+	err := w.maybeRotateLocked()
+	w.mu.Unlock()
+	return err
+}
+
+// groupSync blocks until an fsync covering `mySeq` has completed. If no
+// fsync is in flight, the caller becomes the leader and issues one fsync
+// for every sequence flushed so far; otherwise it waits and is usually
+// absorbed by the leader's (or the next leader's) fsync. A leader fsync
+// failure poisons the writer (fail-stop). Caller must NOT hold w.mu.
+func (w *WALWriter) groupSync(mySeq uint64) error {
+	w.syncMu.Lock()
+	for {
+		if w.bgSyncErr != nil {
+			err := w.bgSyncErr
+			w.syncMu.Unlock()
+			return fmt.Errorf("wal: writer poisoned by fsync failure: %w", err)
+		}
+		if w.syncedSeq >= mySeq {
+			w.syncMu.Unlock()
+			return nil
+		}
+		if !w.syncInFlight {
+			break
+		}
+		w.syncCond.Wait()
+	}
+	w.syncInFlight = true
+	// pf is stable while the gate is held: rotation/Close swap or close it
+	// only after acquiring this same gate.
+	pf := w.pf
+	target := w.appendSeq.Load()
+	w.syncMu.Unlock()
+
+	w.syncCount.Add(1)
+	err := pf.Sync()
+
+	w.syncMu.Lock()
+	w.syncInFlight = false
+	if err != nil {
+		if w.bgSyncErr == nil {
+			w.bgSyncErr = err
+		}
+	} else if w.syncedSeq < target {
+		w.syncedSeq = target
+	}
+	w.syncCond.Broadcast()
+	w.syncMu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("wal: fsync: %w", err)
+	}
+	return nil
+}
+
+// acquireSyncGate blocks until no group fsync is in flight and claims the
+// gate, making it safe to close or swap w.pf. Caller must not hold syncMu.
+func (w *WALWriter) acquireSyncGate() {
+	w.syncMu.Lock()
+	for w.syncInFlight {
+		w.syncCond.Wait()
+	}
+	w.syncInFlight = true
+	w.syncMu.Unlock()
+}
+
+func (w *WALWriter) releaseSyncGate() {
+	w.syncMu.Lock()
+	w.syncInFlight = false
+	w.syncCond.Broadcast()
+	w.syncMu.Unlock()
 }
 
 // appendBytes escreve `data` na stream lógica, alocando pages conforme
@@ -290,6 +396,12 @@ func (w *WALWriter) rotateActiveLocked() error {
 	if !w.segmentHasEntries {
 		return nil
 	}
+
+	// Exclude any in-flight group fsync before closing/swapping w.pf: a
+	// leader must never fsync a file that rotation is about to close.
+	w.acquireSyncGate()
+	defer w.releaseSyncGate()
+
 	if err := w.syncLocked(); err != nil {
 		return err
 	}
@@ -311,9 +423,13 @@ func (w *WALWriter) rotateActiveLocked() error {
 
 	pf, err := pagestore.NewPageFileTolerant(base, w.options.Cipher)
 	if err != nil {
-		return fmt.Errorf("wal: abrir novo segmento ativo: %w", err)
+		return fmt.Errorf("wal: open new active segment: %w", err)
 	}
+	// Swap under syncMu so a future group-commit leader (which reads w.pf
+	// under syncMu) observes the new file.
+	w.syncMu.Lock()
 	w.pf = pf
+	w.syncMu.Unlock()
 	w.usableBodySize = pf.UsableBodySize()
 	w.segmentHasEntries = false
 	w.batchBytes = 0
@@ -327,27 +443,69 @@ func (w *WALWriter) Sync() error {
 	return w.syncLocked()
 }
 
-// poisonedErrLocked reports the sticky background-sync failure, if any.
-// Caller must hold w.mu.
-func (w *WALWriter) poisonedErrLocked() error {
+// maybeRotate é maybeRotateLocked para callers que não seguram w.mu.
+func (w *WALWriter) maybeRotate() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.maybeRotateLocked()
+}
+
+// poisonedErr reports the sticky fsync failure, if any. Takes syncMu.
+func (w *WALWriter) poisonedErr() error {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
 	if w.bgSyncErr != nil {
-		return fmt.Errorf("wal: writer poisoned by background sync failure: %w", w.bgSyncErr)
+		return fmt.Errorf("wal: writer poisoned by fsync failure: %w", w.bgSyncErr)
 	}
 	return nil
 }
 
+// poison records the first fsync failure (fail-stop) and wakes any group
+// committers so they observe it instead of waiting forever.
+func (w *WALWriter) poison(err error) {
+	w.syncMu.Lock()
+	if w.bgSyncErr == nil {
+		w.bgSyncErr = err
+	}
+	w.syncCond.Broadcast()
+	w.syncMu.Unlock()
+}
+
 func (w *WALWriter) syncLocked() error {
-	if err := w.poisonedErrLocked(); err != nil {
+	if err := w.poisonedErr(); err != nil {
 		return err
 	}
 	if err := w.flushCurrentPageLocked(); err != nil {
 		return err
 	}
+	w.syncCount.Add(1)
 	if err := w.pf.Sync(); err != nil {
 		return fmt.Errorf("wal: fsync: %w", err)
 	}
 	w.batchBytes = 0
+	// Everything appended so far was just flushed and fsynced: release any
+	// group committers waiting on these sequences. (appendSeq is stable
+	// here — appends require w.mu, which the caller holds.)
+	w.advanceSyncedSeq(w.appendSeq.Load())
 	return nil
+}
+
+// advanceSyncedSeq marks every sequence up to `target` as durable and
+// wakes waiting group committers.
+func (w *WALWriter) advanceSyncedSeq(target uint64) {
+	w.syncMu.Lock()
+	if w.syncedSeq < target {
+		w.syncedSeq = target
+	}
+	w.syncCond.Broadcast()
+	w.syncMu.Unlock()
+}
+
+// SyncCount returns the number of fsyncs issued to the page file since the
+// writer was opened. Group commit makes this grow slower than the number
+// of entries under concurrent SyncEveryWrite load.
+func (w *WALWriter) SyncCount() uint64 {
+	return w.syncCount.Load()
 }
 
 // Close fecha o writer: flush final + fsync + fecha page file.
@@ -363,6 +521,10 @@ func (w *WALWriter) Close() error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	// Exclude any in-flight group fsync before closing the page file.
+	w.acquireSyncGate()
+	defer w.releaseSyncGate()
 
 	// Flush final (pode fail se disk full; tentamos fechar mesmo assim)
 	syncErr := w.syncLocked()
@@ -438,11 +600,7 @@ func (w *WALWriter) backgroundSync() {
 			// next WriteEntry surfaces it (fail-stop) instead of buffering
 			// entries that may never become durable.
 			if err := w.Sync(); err != nil && !w.closed.Load() {
-				w.mu.Lock()
-				if w.bgSyncErr == nil {
-					w.bgSyncErr = err
-				}
-				w.mu.Unlock()
+				w.poison(err)
 			}
 		case <-w.done:
 			return

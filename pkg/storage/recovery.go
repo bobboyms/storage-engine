@@ -277,7 +277,7 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 		return result, nil
 	}
 
-	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	reader, err := se.openRecoveryReader(walPath, cipher)
 	if err != nil {
 		return nil, err
 	}
