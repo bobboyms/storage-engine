@@ -179,6 +179,13 @@ func (ra *recoveryAnalysis) ingestCheckpoint(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	if isPoisonedLSN(beginLSN) {
+		// A pre-clamp vacuum could stamp MaxUint64 into a dirty page and from
+		// there into a checkpoint's beginLSN. Trusting it would skip the
+		// entire redo; ignoring the record just costs a fuller (idempotent)
+		// replay.
+		return nil
+	}
 	if beginLSN < ra.CheckpointLSN {
 		return nil
 	}
@@ -294,9 +301,7 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 			}
 			return nil, fmt.Errorf("analysis error at entry %d: %w", count, err)
 		}
-		if entry.Header.LSN > result.MaxLSN {
-			result.MaxLSN = entry.Header.LSN
-		}
+		advanceMaxLSN(&result.MaxLSN, entry.Header.LSN)
 
 		if entry.Header.EntryType == wal.EntryCheckpoint && len(entry.Payload) >= 8 {
 			if err := result.ingestCheckpoint(entry.Payload); err != nil {

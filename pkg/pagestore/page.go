@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"math"
 )
 
 // Constantes de formato. Mudar qualquer uma implica bump de Version.
@@ -95,11 +96,23 @@ func (p *Page) Reset() {
 	}
 }
 
+// IsPoisonedPageLSN reports whether lsn is the MaxUint64 sentinel that a
+// pre-clamp vacuum stamped into page headers ("no active transaction" GC
+// horizon). It is never a real LSN — the engine's LSN counter fail-stops
+// before reaching it — so LSN comparisons must treat it as corrupt metadata
+// rather than as the newest value.
+func IsPoisonedPageLSN(lsn uint64) bool {
+	return lsn == math.MaxUint64
+}
+
 // AdvancePageLSN atualiza o campo PageLSN do header — apenas se `lsn` for
 // MAIOR que o value atual (LSN é monotonicamente crescente).
 //
 // Crítico pra recovery/ARIES: recovery usa pageLSN pra saber se uma mudança
 // já foi aplicada à page (skip se pageLSN >= entry.LSN).
+//
+// Um PageLSN atual envenenado (sentinela MaxUint64) não participa da regra
+// monotônica: o próximo LSN real o substitui, curando a page.
 //
 // Chamadores típicos: heap.v2 e btree.v2 ao modificar uma page.
 func (p *Page) AdvancePageLSN(lsn uint64) {
@@ -107,7 +120,7 @@ func (p *Page) AdvancePageLSN(lsn uint64) {
 	if err != nil {
 		return
 	}
-	if lsn > hdr.PageLSN {
+	if lsn > hdr.PageLSN || (IsPoisonedPageLSN(hdr.PageLSN) && !IsPoisonedPageLSN(lsn)) {
 		hdr.PageLSN = lsn
 		p.SetHeader(hdr)
 	}

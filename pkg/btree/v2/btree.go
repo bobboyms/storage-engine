@@ -277,11 +277,16 @@ func (tr *BTreeV2) ApplyPageRedo(pageID pagestore.PageID, page *pagestore.Page, 
 	current, err := tr.pf.ReadPage(pageID)
 	if err == nil {
 		hdr, hdrErr := current.GetHeader()
-		if hdrErr == nil && hdr.PageLSN >= lsn {
+		// A poisoned on-disk PageLSN (MaxUint64 sentinel) is corrupt
+		// metadata, not "newer than every entry" — it must not veto the redo.
+		if hdrErr == nil && hdr.PageLSN >= lsn && !pagestore.IsPoisonedPageLSN(hdr.PageLSN) {
 			tr.bp.ReplacePageImage(pageID, current)
 			return false, nil
 		}
 	}
+	// AdvancePageLSN heals a poisoned LSN embedded in the redo image itself
+	// (captured from a stamped page); for healthy images it is a no-op.
+	page.AdvancePageLSN(lsn)
 	if err := tr.pf.WritePage(pageID, page); err != nil {
 		return false, err
 	}

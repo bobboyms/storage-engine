@@ -205,6 +205,12 @@ type TableMetaData struct {
 	tables             map[string]*Table
 	defaultIndexCipher crypto.Cipher
 	mu                 sync.RWMutex // Protects access to the table map
+	// onTopologyChange runs after a table or index is added, outside the
+	// locks above. The engine installs it to (re-)arm page-redo flush hooks
+	// and structural loggers on heaps/trees created at runtime — without it,
+	// runtime DDL would flush pages with no WAL-before-data record until the
+	// next reopen.
+	onTopologyChange func()
 }
 
 func NewTableMenager() *TableMetaData {
@@ -232,7 +238,35 @@ func (tb *TableMetaData) SetDefaultIndexCipher(indexCipher crypto.Cipher) {
 	tb.defaultIndexCipher = indexCipher
 }
 
-func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm heap.Heap) error {
+// setOnTopologyChange registers the callback invoked after a table or index
+// is added. The callback runs outside tb.mu and the per-table locks, so it
+// may freely walk the table map (e.g. StorageEngine.registerPageRedoHooks).
+func (tb *TableMetaData) setOnTopologyChange(fn func()) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.onTopologyChange = fn
+}
+
+func (tb *TableMetaData) notifyTopologyChange() {
+	tb.mu.RLock()
+	fn := tb.onTopologyChange
+	tb.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// NewTable registers a table. The t parameter (legacy B-tree order) is kept
+// for API compatibility but unused: V2 trees size their nodes by page.
+func (tb *TableMetaData) NewTable(tableName string, indices []Index, _ int, hm heap.Heap) error {
+	if err := tb.newTable(tableName, indices, hm); err != nil {
+		return err
+	}
+	tb.notifyTopologyChange()
+	return nil
+}
+
+func (tb *TableMetaData) newTable(tableName string, indices []Index, hm heap.Heap) error {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
@@ -316,6 +350,14 @@ func (tb *TableMetaData) NewTable(tableName string, indices []Index, t int, hm h
 // databases keep encrypting their indexes. Primary indexes cannot be added to
 // a table that already has one.
 func (tb *TableMetaData) AddIndex(tableName string, idx Index) error {
+	if err := tb.addIndex(tableName, idx); err != nil {
+		return err
+	}
+	tb.notifyTopologyChange()
+	return nil
+}
+
+func (tb *TableMetaData) addIndex(tableName string, idx Index) error {
 	if idx.Primary {
 		return fmt.Errorf("storage: cannot add a primary index to existing table %q", tableName)
 	}
