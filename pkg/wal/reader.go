@@ -33,6 +33,17 @@ type WALReader struct {
 	paths          []string
 	pathIndex      int
 	cipher         crypto.Cipher
+	// limitLSN, when non-zero, makes the log appear to end right before
+	// the first entry whose LSN exceeds it (point-in-time recovery).
+	limitLSN uint64
+}
+
+// SetLimitLSN bounds the read to entries with LSN <= maxLSN. The first
+// entry beyond the limit terminates the stream with io.EOF, exactly as if
+// the process had crashed right after writing the last in-range entry —
+// which is what point-in-time recovery replays.
+func (r *WALReader) SetLimitLSN(maxLSN uint64) {
+	r.limitLSN = maxLSN
 }
 
 // NewWALReader cria um leitor sem TDE.
@@ -111,6 +122,11 @@ func (r *WALReader) ReadEntry() (*WALEntry, error) {
 
 	if header.Magic != WALMagic {
 		return nil, ErrInvalidMagic
+	}
+
+	// Point-in-time bound: the first entry beyond the limit ends the log.
+	if r.limitLSN > 0 && header.LSN > r.limitLSN {
+		return nil, io.EOF
 	}
 
 	// Proteção contra alocação absurda

@@ -118,7 +118,7 @@ func (se *StorageEngine) undoLoserTransactionsWithLimit(walPath string, cipher c
 }
 
 func (se *StorageEngine) collectLoserUndoTasks(walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis) ([]undoTask, error) {
-	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	reader, err := se.openRecoveryReader(walPath, cipher)
 	if err != nil {
 		return nil, err
 	}

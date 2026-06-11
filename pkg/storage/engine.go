@@ -66,6 +66,12 @@ type StorageEngine struct {
 	// when set, Commit attempts an in-process Heal on post-commit apply
 	// failure instead of staying degraded until reopen.
 	autoHealAfterApplyFailure bool
+	// maxTxWriteSetBytes mirrors Options.MaxTxWriteSetBytes (0 = unlimited).
+	maxTxWriteSetBytes int64
+	// recoveryLimitLSN bounds WAL replay while RecoverToLSN runs (0 =
+	// full replay). Recovery requires exclusive engine access, so a plain
+	// field is safe here.
+	recoveryLimitLSN uint64
 	// Note: per-table lock now lives in Table.mu
 }
 
@@ -157,6 +163,7 @@ func NewStorageEngineWithOptions(tableMetaData *TableMetaData, walWriter *wal.WA
 		listener:                  opts.Listener,
 		codec:                     docCodec,
 		autoHealAfterApplyFailure: opts.AutoHealAfterApplyFailure,
+		maxTxWriteSetBytes:        opts.MaxTxWriteSetBytes,
 	}
 	if tailTruncations > 0 {
 		se.counters.walTailTruncations.Add(tailTruncations)
@@ -903,6 +910,39 @@ func (se *StorageEngine) Recover(ctx context.Context, walPath string) error {
 	return se.RecoverWithCipher(ctx, walPath, se.walCipher())
 }
 
+// RecoverToLSN is point-in-time recovery: it replays `walPath` exactly as
+// Recover does, but treats the log as ending right before the first entry
+// whose LSN exceeds targetLSN. Transactions whose COMMIT lies beyond the
+// target are discarded (they become losers, as in crash recovery), so the
+// engine lands on the committed state as of targetLSN.
+//
+// Intended flow: restore a backup, wire the engine over the restored data
+// files with a FRESH WAL (so new commits cannot collide with LSNs from the
+// discarded tail), then call RecoverToLSN against the original/archived
+// WAL. The WAL is decrypted with the engine's current cipher — configure
+// the fresh writer with the same DEK that encrypted the source log.
+func (se *StorageEngine) RecoverToLSN(ctx context.Context, walPath string, targetLSN uint64) error {
+	if targetLSN == 0 {
+		return fmt.Errorf("storage: RecoverToLSN requires a non-zero target LSN")
+	}
+	se.recoveryLimitLSN = targetLSN
+	defer func() { se.recoveryLimitLSN = 0 }()
+	return se.RecoverWithCipher(ctx, walPath, se.walCipher())
+}
+
+// openRecoveryReader opens the WAL for a recovery phase, applying the
+// point-in-time bound when RecoverToLSN is driving the replay.
+func (se *StorageEngine) openRecoveryReader(walPath string, cipher crypto.Cipher) (*wal.WALReader, error) {
+	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	if err != nil {
+		return nil, err
+	}
+	if se.recoveryLimitLSN > 0 {
+		reader.SetLimitLSN(se.recoveryLimitLSN)
+	}
+	return reader, nil
+}
+
 // RecoverWithCipher is Recover with an explicit cipher. Use this only
 // when the engine's WALWriter is not yet available.
 func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, cipher crypto.Cipher) error {
@@ -994,7 +1034,7 @@ func (se *StorageEngine) walCipher() crypto.Cipher {
 // runPhysicalRedo replays page-image WAL entries up to / starting from
 // the checkpoint LSN. ctx is checked every 256 entries.
 func (se *StorageEngine) runPhysicalRedo(ctx context.Context, walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis, pageRedoTargets map[string]pageRedoTarget) (int, int, uint64, error) {
-	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	reader, err := se.openRecoveryReader(walPath, cipher)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -1059,7 +1099,7 @@ func (se *StorageEngine) runPhysicalRedo(ctx context.Context, walPath string, ci
 // runLogicalRedo replays the logical (document / multi-index / CLR) WAL
 // entries. ctx is checked every 256 entries.
 func (se *StorageEngine) runLogicalRedo(ctx context.Context, walPath string, cipher crypto.Cipher, analysis *recoveryAnalysis, loadedLSNs map[string]uint64) (int, int, uint64, error) {
-	reader, err := wal.NewWALReaderWithCipher(walPath, cipher)
+	reader, err := se.openRecoveryReader(walPath, cipher)
 	if err != nil {
 		return 0, 0, 0, err
 	}

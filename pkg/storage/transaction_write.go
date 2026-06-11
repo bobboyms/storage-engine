@@ -14,6 +14,18 @@ import (
 
 var ErrSerializationConflict = errors.New("storage: serialization conflict")
 
+// ErrTxWriteSetLimit is returned by Put/Del/WriteRow when the transaction's
+// buffered write set would exceed Options.MaxTxWriteSetBytes. The engine is
+// no-steal — the whole write set stays in memory until Commit — so the cap
+// protects the process from a single unbounded transaction. The transaction
+// remains usable: it can commit the operations accepted so far or roll back.
+var ErrTxWriteSetLimit = errors.New("storage: transaction write set exceeds the configured limit")
+
+// writeOpFixedCost is the per-operation overhead charged against
+// MaxTxWriteSetBytes on top of the variable-size fields. It approximates
+// the writeOp struct, slice header, and lock bookkeeping.
+const writeOpFixedCost = 128
+
 type SerializationConflictError struct {
 	TableName string
 	IndexName string
@@ -43,12 +55,41 @@ type WriteTransaction struct {
 	readSet    map[string]readObservation
 	pending    map[string]int
 	savepoints []savepoint
-	lastLSN    uint64
-	committed  bool
-	aborted    bool
-	abortErr   error
-	walBegun   bool
-	mu         sync.Mutex
+	// writeSetBytes is the estimated memory charged against
+	// Options.MaxTxWriteSetBytes for the buffered write set.
+	writeSetBytes int64
+	lastLSN       uint64
+	committed     bool
+	aborted       bool
+	abortErr      error
+	walBegun      bool
+	mu            sync.Mutex
+}
+
+// estimatedCost approximates how much memory the buffered operation pins
+// until Commit. The document dominates; names, key and per-index entries
+// are charged with a fixed overhead each.
+func (op *writeOp) estimatedCost() int64 {
+	cost := int64(writeOpFixedCost + len(op.document) + len(op.tableName) + len(op.indexName))
+	for name := range op.keys {
+		cost += int64(writeOpFixedCost/2 + len(name))
+	}
+	return cost
+}
+
+// appendWriteOpLocked charges `op` against the transaction's write-set
+// budget and buffers it. Fails with ErrTxWriteSetLimit when the budget is
+// exhausted, leaving the transaction usable. Caller must hold tx.mu.
+func (tx *WriteTransaction) appendWriteOpLocked(op writeOp) error {
+	limit := tx.engine.maxTxWriteSetBytes
+	cost := op.estimatedCost()
+	if limit > 0 && tx.writeSetBytes+cost > limit {
+		return fmt.Errorf("%w: %d bytes buffered, op needs %d, limit %d",
+			ErrTxWriteSetLimit, tx.writeSetBytes, cost, limit)
+	}
+	tx.writeSet = append(tx.writeSet, op)
+	tx.writeSetBytes += cost
+	return nil
 }
 
 // savepoint marks a position in the transaction's buffered write set.
@@ -137,13 +178,15 @@ func (tx *WriteTransaction) Put(ctx context.Context, tableName string, indexName
 		return err
 	}
 
-	tx.writeSet = append(tx.writeSet, writeOp{
+	if err := tx.appendWriteOpLocked(writeOp{
 		opType:    wal.EntryInsert, // We treat updates as inserts (log-structured)
 		tableName: tableName,
 		indexName: indexName,
 		key:       key,
 		document:  document,
-	})
+	}); err != nil {
+		return err
+	}
 	tx.pending[resource] = len(tx.writeSet) - 1
 	return nil
 }
@@ -180,12 +223,14 @@ func (tx *WriteTransaction) Del(ctx context.Context, tableName string, indexName
 		return err
 	}
 
-	tx.writeSet = append(tx.writeSet, writeOp{
+	if err := tx.appendWriteOpLocked(writeOp{
 		opType:    wal.EntryDelete,
 		tableName: tableName,
 		indexName: indexName,
 		key:       key,
-	})
+	}); err != nil {
+		return err
+	}
 	tx.pending[resource] = len(tx.writeSet) - 1
 	return nil
 }
@@ -265,12 +310,14 @@ func (tx *WriteTransaction) WriteRow(ctx context.Context, tableName string, docu
 	}
 
 	opIdx := len(tx.writeSet)
-	tx.writeSet = append(tx.writeSet, writeOp{
+	if err := tx.appendWriteOpLocked(writeOp{
 		opType:    wal.EntryMultiInsert,
 		tableName: tableName,
 		keys:      keys,
 		document:  document,
-	})
+	}); err != nil {
+		return err
+	}
 	for _, resource := range resources {
 		tx.pending[resource] = opIdx
 	}
@@ -603,12 +650,23 @@ func (tx *WriteTransaction) RollbackToSavepoint(name string) error {
 	target := tx.savepoints[idx]
 	if target.writeSetLen <= len(tx.writeSet) {
 		tx.writeSet = tx.writeSet[:target.writeSetLen]
+		tx.rechargeWriteSetBytesLocked()
 	}
 	// Drop savepoints established after the matched one; keep the
 	// matched savepoint so it can be rolled back to again.
 	tx.savepoints = tx.savepoints[:idx+1]
 	tx.rebuildPendingLocked()
 	return nil
+}
+
+// rechargeWriteSetBytesLocked recomputes the budget charge after a
+// savepoint truncation released part of the write set.
+func (tx *WriteTransaction) rechargeWriteSetBytesLocked() {
+	var total int64
+	for i := range tx.writeSet {
+		total += tx.writeSet[i].estimatedCost()
+	}
+	tx.writeSetBytes = total
 }
 
 // rebuildPendingLocked recomputes the resource→write-set-index map from

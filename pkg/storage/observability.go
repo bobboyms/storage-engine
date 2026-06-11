@@ -98,6 +98,16 @@ type Options struct {
 	// degraded and Commit returns the apply error. Defaults to false,
 	// preserving the fail-stop contract.
 	AutoHealAfterApplyFailure bool
+
+	// MaxTxWriteSetBytes caps the estimated bytes a single write
+	// transaction may buffer before Commit. The engine is no-steal: the
+	// entire write set lives in memory until commit, so one unbounded
+	// transaction can OOM the process and take every other transaction
+	// down with it. Once the budget is exceeded, further buffered
+	// operations fail with ErrTxWriteSetLimit; the transaction itself
+	// stays usable and can commit what was already accepted. Zero (the
+	// default) means unlimited, preserving historical behavior.
+	MaxTxWriteSetBytes int64
 }
 
 // Stats is a point-in-time snapshot of cumulative engine counters.
