@@ -81,6 +81,27 @@ func openEngine(t testing.TB, p dbPaths) *storage.StorageEngine {
 	return se
 }
 
+// scrubFinalState runs the read-only integrity verifier over the recovered
+// engine and its WAL. A chaos run must end not only with the right query
+// answers but with a structurally sound directory: heap/index cross-checks
+// and WAL invariants all holding. Torn WAL tails are expected after kill -9
+// and surface as warnings, which are logged but do not fail the run.
+func scrubFinalState(t testing.TB, se *storage.StorageEngine, walPath string) {
+	t.Helper()
+	report, err := storage.VerifyTables(context.Background(), se.TableMetaData, nil)
+	if err != nil {
+		t.Fatalf("integrity scrub: %v", err)
+	}
+	findings := append(report.Findings, storage.VerifyWALFile(walPath, nil)...)
+	for _, finding := range findings {
+		if finding.Severity == storage.VerifyError {
+			t.Errorf("integrity finding after chaos run: %s", finding)
+		} else {
+			t.Logf("integrity warning after chaos run: %s", finding)
+		}
+	}
+}
+
 func appendOracle(t testing.TB, path string, key int, doc string) {
 	t.Helper()
 
@@ -195,6 +216,8 @@ func TestChaosKill9CommittedWritesRecover(t *testing.T) {
 			t.Fatalf("committed key %d corrupted after recovery: got %q want %q", key, got, doc)
 		}
 	}
+
+	scrubFinalState(t, se, p.walPath)
 }
 
 func TestChaosChildProcess(t *testing.T) {
@@ -269,4 +292,6 @@ func TestChaosRepeatedReopenRecovery(t *testing.T) {
 			t.Fatalf("key %d corrupted after repeated reopen: got %q want %q", key, got, doc)
 		}
 	}
+
+	scrubFinalState(t, se, p.walPath)
 }
