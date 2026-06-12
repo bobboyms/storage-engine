@@ -53,6 +53,7 @@ type SelectItem struct {
 	Column *ColumnRef     // bare column projection (nil otherwise)
 	Agg    *AggregateCall // aggregate projection (nil otherwise)
 	Window *WindowCall    // window-function projection (nil otherwise)
+	Expr   Expr           // general value expression projection (nil otherwise)
 	Alias  string         // output name override, empty if none
 }
 
@@ -103,6 +104,8 @@ func (it SelectItem) OutputName() string {
 		return it.Agg.canonicalName()
 	case it.Window != nil:
 		return it.Window.canonicalName()
+	case it.Expr != nil:
+		return it.Expr.String()
 	default:
 		return "*"
 	}
@@ -434,6 +437,64 @@ func (e *ExistsExpr) String() string {
 	return "(EXISTS (subquery))"
 }
 func (*ExistsExpr) exprNode() {}
+
+// ArithExpr is an arithmetic value expression (+ - * / %) over two numeric
+// sub-expressions. It evaluates to a value, not a boolean; comparisons over
+// arithmetic results use a BinaryExpr whose operand is an ArithExpr.
+type ArithExpr struct {
+	Op    string
+	Left  Expr
+	Right Expr
+}
+
+func (e *ArithExpr) String() string {
+	return "(" + e.Left.String() + " " + e.Op + " " + e.Right.String() + ")"
+}
+func (*ArithExpr) exprNode() {}
+
+// FuncCall is a scalar function application (UPPER, LOWER, LENGTH, ABS,
+// COALESCE). Name holds the canonical uppercase function name.
+type FuncCall struct {
+	Name string
+	Args []Expr
+}
+
+func (e *FuncCall) String() string {
+	args := make([]string, len(e.Args))
+	for i, a := range e.Args {
+		args[i] = a.String()
+	}
+	return strings.ToLower(e.Name) + "(" + strings.Join(args, ", ") + ")"
+}
+func (*FuncCall) exprNode() {}
+
+// WhenClause is one WHEN cond THEN result arm of a CASE expression.
+type WhenClause struct {
+	Cond Expr
+	Then Expr
+}
+
+// CaseExpr is a searched CASE expression: CASE WHEN cond THEN result ...
+// [ELSE result] END. Without an ELSE, a CASE whose conditions all fail
+// evaluates to NULL.
+type CaseExpr struct {
+	Whens []WhenClause
+	Else  Expr // nil when no ELSE arm
+}
+
+func (e *CaseExpr) String() string {
+	var b strings.Builder
+	b.WriteString("CASE")
+	for _, w := range e.Whens {
+		b.WriteString(" WHEN " + w.Cond.String() + " THEN " + w.Then.String())
+	}
+	if e.Else != nil {
+		b.WriteString(" ELSE " + e.Else.String())
+	}
+	b.WriteString(" END")
+	return b.String()
+}
+func (*CaseExpr) exprNode() {}
 
 // BinaryExpr is a comparison (= <> != < <= > >=) or a logical connective
 // (AND, OR) joining two sub-expressions.

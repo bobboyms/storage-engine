@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/bobboyms/storage-engine/pkg/types"
 )
@@ -147,10 +149,11 @@ func evalComparison(be *BinaryExpr, row Row, ec *evalContext) (bool, error) {
 	}
 }
 
-// resolveColumn returns the value for a reference operand (column, aggregate, or
-// scalar subquery). The boolean reports whether expr was such a reference (vs. a
-// literal). Column and aggregate references resolve against the row, falling
-// back to the correlated outer row; a scalar subquery is executed.
+// resolveColumn returns the value for a reference operand (column, aggregate,
+// scalar subquery, or computed expression). The boolean reports whether expr
+// was such a reference (vs. a literal). Column and aggregate references resolve
+// against the row, falling back to the correlated outer row; a scalar subquery
+// is executed; arithmetic, function, and CASE expressions are evaluated.
 func resolveColumn(expr Expr, row Row, ec *evalContext) (types.Comparable, bool, error) {
 	switch e := expr.(type) {
 	case *ColumnRef:
@@ -168,9 +171,189 @@ func resolveColumn(expr Expr, row Row, ec *evalContext) (types.Comparable, bool,
 	case *ScalarSubquery:
 		v, err := runScalarSubquery(e, row, ec)
 		return v, true, err
+	case *ArithExpr, *FuncCall, *CaseExpr:
+		v, err := evalValue(expr, row, ec)
+		return v, true, err
 	default:
 		return nil, false, nil
 	}
+}
+
+// evalValue evaluates a value expression (column, literal, arithmetic,
+// function call, CASE, aggregate reference, or scalar subquery) to a typed
+// value against the given row.
+func evalValue(expr Expr, row Row, ec *evalContext) (types.Comparable, error) {
+	switch e := expr.(type) {
+	case *Literal:
+		return naturalLiteral(e), nil
+	case *ArithExpr:
+		return evalArith(e, row, ec)
+	case *FuncCall:
+		return evalFunc(e, row, ec)
+	case *CaseExpr:
+		return evalCase(e, row, ec)
+	default:
+		v, isRef, err := resolveColumn(expr, row, ec)
+		if err != nil {
+			return nil, err
+		}
+		if !isRef {
+			return nil, fmt.Errorf("%w: expression %s cannot be used as a value", ErrEval, expr.String())
+		}
+		return v, nil
+	}
+}
+
+// evalArith evaluates an arithmetic expression. A NULL operand yields NULL.
+// Two integer operands keep integer semantics (truncating division); any float
+// operand promotes the computation to float.
+func evalArith(e *ArithExpr, row Row, ec *evalContext) (types.Comparable, error) {
+	lv, err := evalValue(e.Left, row, ec)
+	if err != nil {
+		return nil, err
+	}
+	rv, err := evalValue(e.Right, row, ec)
+	if err != nil {
+		return nil, err
+	}
+	if isNull(lv) || isNull(rv) {
+		return types.NullKey{}, nil
+	}
+	li, lIsInt := lv.(types.IntKey)
+	ri, rIsInt := rv.(types.IntKey)
+	if lIsInt && rIsInt {
+		return intArith(e.Op, int64(li), int64(ri))
+	}
+	lf, lOK := numericFloat(lv)
+	rf, rOK := numericFloat(rv)
+	if !lOK || !rOK {
+		return nil, fmt.Errorf("%w: operator %q requires numeric operands, got %T and %T", ErrEval, e.Op, lv, rv)
+	}
+	return floatArith(e.Op, lf, rf)
+}
+
+func intArith(op string, a, b int64) (types.Comparable, error) {
+	switch op {
+	case "+":
+		return types.IntKey(a + b), nil
+	case "-":
+		return types.IntKey(a - b), nil
+	case "*":
+		return types.IntKey(a * b), nil
+	case "/":
+		if b == 0 {
+			return nil, fmt.Errorf("%w: division by zero", ErrEval)
+		}
+		return types.IntKey(a / b), nil
+	case "%":
+		if b == 0 {
+			return nil, fmt.Errorf("%w: division by zero", ErrEval)
+		}
+		return types.IntKey(a % b), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported arithmetic operator %q", ErrEval, op)
+	}
+}
+
+func floatArith(op string, a, b float64) (types.Comparable, error) {
+	switch op {
+	case "+":
+		return types.FloatKey(a + b), nil
+	case "-":
+		return types.FloatKey(a - b), nil
+	case "*":
+		return types.FloatKey(a * b), nil
+	case "/":
+		if b == 0 {
+			return nil, fmt.Errorf("%w: division by zero", ErrEval)
+		}
+		return types.FloatKey(a / b), nil
+	case "%":
+		if b == 0 {
+			return nil, fmt.Errorf("%w: division by zero", ErrEval)
+		}
+		return types.FloatKey(math.Mod(a, b)), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported arithmetic operator %q", ErrEval, op)
+	}
+}
+
+// evalFunc evaluates a scalar function call. Single-argument functions
+// propagate NULL; COALESCE returns its first non-NULL argument.
+func evalFunc(e *FuncCall, row Row, ec *evalContext) (types.Comparable, error) {
+	if e.Name == "COALESCE" {
+		if len(e.Args) == 0 {
+			return nil, fmt.Errorf("%w: COALESCE requires at least one argument", ErrEval)
+		}
+		for _, arg := range e.Args {
+			v, err := evalValue(arg, row, ec)
+			if err != nil {
+				return nil, err
+			}
+			if !isNull(v) {
+				return v, nil
+			}
+		}
+		return types.NullKey{}, nil
+	}
+
+	if len(e.Args) != 1 {
+		return nil, fmt.Errorf("%w: %s expects exactly one argument, got %d", ErrEval, e.Name, len(e.Args))
+	}
+	v, err := evalValue(e.Args[0], row, ec)
+	if err != nil {
+		return nil, err
+	}
+	if isNull(v) {
+		return types.NullKey{}, nil
+	}
+	switch e.Name {
+	case "UPPER", "LOWER", "LENGTH":
+		s, ok := v.(types.VarcharKey)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s requires a text argument, got %T", ErrEval, e.Name, v)
+		}
+		switch e.Name {
+		case "UPPER":
+			return types.VarcharKey(strings.ToUpper(string(s))), nil
+		case "LOWER":
+			return types.VarcharKey(strings.ToLower(string(s))), nil
+		default:
+			return types.IntKey(int64(len([]rune(string(s))))), nil
+		}
+	case "ABS":
+		switch n := v.(type) {
+		case types.IntKey:
+			if n < 0 {
+				return -n, nil
+			}
+			return n, nil
+		case types.FloatKey:
+			return types.FloatKey(math.Abs(float64(n))), nil
+		default:
+			return nil, fmt.Errorf("%w: ABS requires a numeric argument, got %T", ErrEval, v)
+		}
+	default:
+		return nil, fmt.Errorf("%w: unknown function %q", ErrEval, e.Name)
+	}
+}
+
+// evalCase evaluates a searched CASE expression: the first WHEN whose condition
+// holds yields its THEN value; otherwise the ELSE value, or NULL without one.
+func evalCase(e *CaseExpr, row Row, ec *evalContext) (types.Comparable, error) {
+	for _, w := range e.Whens {
+		ok, err := evaluate(w.Cond, row, ec)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return evalValue(w.Then, row, ec)
+		}
+	}
+	if e.Else != nil {
+		return evalValue(e.Else, row, ec)
+	}
+	return types.NullKey{}, nil
 }
 
 // lookupRow resolves a key in the current row, then in the correlated outer row.

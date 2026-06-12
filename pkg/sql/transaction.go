@@ -111,7 +111,7 @@ func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error
 		sortRows(rows, order)
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
-	return projectRows(rows, expandProjection(sel.Items, schema)), nil
+	return projectRows(rows, expandProjection(sel.Items, schema), nil)
 }
 
 // table resolves a table name against the transaction's catalog.
@@ -264,9 +264,12 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		for _, a := range stmt.Assignments {
-			col, _ := schema.Column(a.Column)
-			doc[a.Column] = literalToDocValue(a.Value.(*Literal), col.Type)
+		typedRow, err := decodeRow(t.codec, schema, "", raw)
+		if err != nil {
+			return 0, err
+		}
+		if err := applyAssignments(schema, stmt.Assignments, doc, typedRow); err != nil {
+			return 0, err
 		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {

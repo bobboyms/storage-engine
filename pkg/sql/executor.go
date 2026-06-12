@@ -198,7 +198,7 @@ func (e *Executor) execSelect(ctx context.Context, sel *SelectStmt, outer Row) (
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 
-	return projectRows(rows, expandProjection(sel.Items, schema)), nil
+	return projectRows(rows, expandProjection(sel.Items, schema), ec)
 }
 
 // planSelect plans a single-table SELECT. When correlated (a column may refer

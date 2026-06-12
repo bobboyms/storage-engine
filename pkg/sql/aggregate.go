@@ -17,10 +17,12 @@ func hasAggregates(items []SelectItem) bool {
 	return false
 }
 
-// projSpec maps an output column name to the source row column it reads.
+// projSpec maps an output column name to the source row column it reads, or to
+// a value expression evaluated against each row when expr is non-nil.
 type projSpec struct {
 	name   string
 	source string
+	expr   Expr
 }
 
 // expandProjection turns the projection list into concrete output specs,
@@ -35,13 +37,16 @@ func expandProjection(items []SelectItem, schema *TableSchema) []projSpec {
 			}
 		case it.Column != nil:
 			specs = append(specs, projSpec{name: it.OutputName(), source: it.Column.String()})
+		case it.Expr != nil:
+			specs = append(specs, projSpec{name: it.OutputName(), expr: it.Expr})
 		}
 	}
 	return specs
 }
 
-// projectRows builds a result set from rows using the projection specs.
-func projectRows(rows []Row, specs []projSpec) *ResultSet {
+// projectRows builds a result set from rows using the projection specs,
+// evaluating expression specs against each row.
+func projectRows(rows []Row, specs []projSpec, ec *evalContext) (*ResultSet, error) {
 	cols := make([]string, len(specs))
 	for i, s := range specs {
 		cols[i] = s.name
@@ -50,6 +55,14 @@ func projectRows(rows []Row, specs []projSpec) *ResultSet {
 	for i, row := range rows {
 		vals := make([]types.Comparable, len(specs))
 		for j, s := range specs {
+			if s.expr != nil {
+				v, err := evalValue(s.expr, row, ec)
+				if err != nil {
+					return nil, err
+				}
+				vals[j] = v
+				continue
+			}
 			v, ok := row[s.source]
 			if !ok {
 				v = types.NullKey{}
@@ -58,7 +71,7 @@ func projectRows(rows []Row, specs []projSpec) *ResultSet {
 		}
 		rs.Rows[i] = vals
 	}
-	return rs
+	return rs, nil
 }
 
 // isGrouped reports whether the query requires the grouping/aggregation path.
@@ -84,6 +97,8 @@ func groupedResultSet(sel *SelectStmt, rows []Row, ec *evalContext) (*ResultSet,
 			if _, ok := groupSet[it.Column.String()]; !ok {
 				return nil, fmt.Errorf("%w: column %q must appear in GROUP BY or an aggregate", ErrExec, it.Column.String())
 			}
+		case it.Expr != nil:
+			return nil, fmt.Errorf("%w: expression projections are not supported with GROUP BY or aggregates", ErrExec)
 		}
 	}
 
@@ -126,13 +141,11 @@ func groupedResultSet(sel *SelectStmt, rows []Row, ec *evalContext) (*ResultSet,
 	}
 	resultRows = applyOffsetLimit(resultRows, sel.Offset, sel.Limit)
 
-	cols := make([]string, len(sel.Items))
 	specs := make([]projSpec, len(sel.Items))
 	for i, it := range sel.Items {
-		cols[i] = it.OutputName()
 		specs[i] = projSpec{name: it.OutputName(), source: it.OutputName()}
 	}
-	return projectRows(resultRows, specs), nil
+	return projectRows(resultRows, specs, nil)
 }
 
 func itemValue(it SelectItem, gRow Row) types.Comparable {

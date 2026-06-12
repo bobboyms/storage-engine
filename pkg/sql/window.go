@@ -33,7 +33,7 @@ func windowResultSet(sel *SelectStmt, rows []Row, schema *TableSchema) (*ResultS
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
 
-	return projectRows(rows, windowProjection(sel.Items, schema)), nil
+	return projectRows(rows, windowProjection(sel.Items, schema), nil)
 }
 
 // windowProjection builds the projection specs for a window query, expanding

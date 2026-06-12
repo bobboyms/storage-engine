@@ -176,9 +176,12 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		if err != nil {
 			return 0, err
 		}
-		for _, a := range stmt.Assignments {
-			col, _ := schema.Column(a.Column)
-			doc[a.Column] = literalToDocValue(a.Value.(*Literal), col.Type)
+		typedRow, err := decodeRow(e.codec, schema, "", raw)
+		if err != nil {
+			return 0, err
+		}
+		if err := applyAssignments(schema, stmt.Assignments, doc, typedRow); err != nil {
+			return 0, err
 		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
@@ -212,9 +215,14 @@ func validateAssignments(stmt *UpdateStmt, schema *TableSchema, pk IndexDef) err
 		if a.Column == pk.Column {
 			return fmt.Errorf("%w: cannot update primary key column %q", ErrExec, a.Column)
 		}
-		lit, ok := a.Value.(*Literal)
-		if !ok {
-			return fmt.Errorf("%w: assignment to %q is not a literal", ErrExec, a.Column)
+		lit, isLit := a.Value.(*Literal)
+		if !isLit {
+			// Computed assignment (arithmetic, function, CASE): its columns must
+			// exist; the value is type-checked per row at evaluation time.
+			if err := validateExprColumns(a.Value, schema, ""); err != nil {
+				return err
+			}
+			continue
 		}
 		if lit.Kind == LitNull && col.NotNull {
 			return fmt.Errorf("%w: column %q is NOT NULL", ErrExec, a.Column)
@@ -224,6 +232,64 @@ func validateAssignments(stmt *UpdateStmt, schema *TableSchema, pk IndexDef) err
 		}
 	}
 	return nil
+}
+
+// applyAssignments writes the SET assignments into the decoded document.
+// Computed assignments are evaluated against the pre-update row (typedRow), so
+// "SET a = a + 1, b = a" reads the original value of a in both expressions.
+func applyAssignments(schema *TableSchema, assignments []Assignment, doc map[string]any, typedRow Row) error {
+	for _, a := range assignments {
+		col, _ := schema.Column(a.Column)
+		if lit, ok := a.Value.(*Literal); ok {
+			doc[a.Column] = literalToDocValue(lit, col.Type)
+			continue
+		}
+		v, err := evalValue(a.Value, typedRow, nil)
+		if err != nil {
+			return err
+		}
+		if isNull(v) && col.NotNull {
+			return fmt.Errorf("%w: column %q is NOT NULL", ErrExec, a.Column)
+		}
+		gv, err := comparableToDocValue(v, col.Type)
+		if err != nil {
+			return fmt.Errorf("%w: assignment to %q: %v", ErrExec, a.Column, err)
+		}
+		doc[a.Column] = gv
+	}
+	return nil
+}
+
+// comparableToDocValue renders an evaluated expression result into the JSON
+// document representation matching the column's declared type.
+func comparableToDocValue(v types.Comparable, dt storage.DataType) (any, error) {
+	v = NormalizeValue(v, dt)
+	if isNull(v) {
+		return nil, nil
+	}
+	switch dt {
+	case storage.TypeInt:
+		if n, ok := v.(types.IntKey); ok {
+			return int64(n), nil
+		}
+	case storage.TypeFloat:
+		if f, ok := v.(types.FloatKey); ok {
+			return float64(f), nil
+		}
+	case storage.TypeVarchar:
+		if s, ok := v.(types.VarcharKey); ok {
+			return string(s), nil
+		}
+	case storage.TypeBoolean:
+		if b, ok := v.(types.BoolKey); ok {
+			return bool(b), nil
+		}
+	case storage.TypeUUID:
+		if k, ok := v.(types.UUIDKey); ok {
+			return uuidExtJSON(k), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: expression result %T is not compatible with column type %s", ErrValue, v, dt)
 }
 
 func (e *Executor) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, error) {
