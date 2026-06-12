@@ -237,6 +237,13 @@ func NewEncryptedTableMenager(indexCipher crypto.Cipher) *TableMetaData {
 	}
 }
 
+// indexCipher returns the cipher BTreeV2 sidecar indexes are created with.
+func (tb *TableMetaData) indexCipher() crypto.Cipher {
+	tb.mu.RLock()
+	defer tb.mu.RUnlock()
+	return tb.defaultIndexCipher
+}
+
 // SetDefaultIndexCipher configures the cipher used by BTreeV2 indexes created
 // automatically by NewTable. Indexes provided explicitly in Index.Tree
 // preserve the cipher they were opened with.

@@ -393,5 +393,84 @@ func (h *HeapV2) Vacuum(ctx context.Context, minLSN uint64) (int, error) {
 	return total, nil
 }
 
+// ForEachRecord visits every stored record — live and tombstoned — in
+// (page, slot) order, passing the stable record ID, the decoded header, and
+// the raw document bytes. Vacuumed slots are skipped. Used by offline tooling
+// (index rebuild) that needs the heap as the source of truth.
+//
+// The callback must not mutate the heap; an error from it stops the scan.
+func (h *HeapV2) ForEachRecord(ctx context.Context, fn func(rid int64, rh RecordHeader, doc []byte) error) error {
+	if err := h.bp.FlushAll(); err != nil {
+		return err
+	}
+	numPages := h.pf.NumPages()
+	for pageID := pagestore.PageID(1); uint64(pageID) < numPages; pageID++ {
+		if pageID%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		handle, err := h.bp.Fetch(pageID)
+		if err != nil {
+			return err
+		}
+		sp := OpenSlottedPage(handle.Page(), h.maxBodySize)
+		numSlots := sp.NumSlots()
+		for slotID := 0; slotID < numSlots; slotID++ {
+			doc, rh, err := sp.Read(uint16(slotID)) //nolint:gosec // bounded by numSlots (uint16)
+			if errors.Is(err, ErrVacuumed) {
+				continue
+			}
+			if err != nil {
+				handle.Release()
+				return err
+			}
+			if err := fn(EncodeRecordID(pageID, uint16(slotID)), rh, doc); err != nil { //nolint:gosec // bounded by numSlots
+				handle.Release()
+				return err
+			}
+		}
+		handle.Release()
+	}
+	return nil
+}
+
+// HealPoisonedPageLSNs rewrites every page whose header PageLSN carries the
+// MaxUint64 sentinel (stamped by a pre-clamp vacuum), replacing it with lsn —
+// a real LSN supplied by the caller, typically the WAL's current maximum. It
+// returns the number of pages healed and flushes them. Part of the offline
+// repair (fsck) path; healthy pages are untouched, so the pass is idempotent.
+func (h *HeapV2) HealPoisonedPageLSNs(ctx context.Context, lsn uint64) (int, error) {
+	if err := h.bp.FlushAll(); err != nil {
+		return 0, err
+	}
+	healed := 0
+	numPages := h.pf.NumPages()
+	for pageID := pagestore.PageID(1); uint64(pageID) < numPages; pageID++ {
+		if pageID%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return healed, err
+			}
+		}
+		handle, err := h.bp.FetchForWrite(pageID)
+		if err != nil {
+			return healed, err
+		}
+		hdr, err := handle.Page().GetHeader()
+		if err == nil && pagestore.IsPoisonedPageLSN(hdr.PageLSN) {
+			// AdvancePageLSN replaces a poisoned current value (see
+			// pagestore.Page.AdvancePageLSN).
+			handle.Page().AdvancePageLSN(lsn)
+			handle.MarkDirty()
+			healed++
+		}
+		handle.Release()
+	}
+	if healed == 0 {
+		return 0, nil
+	}
+	return healed, h.bp.FlushAll()
+}
+
 // FSM retorna o Free Space Map desta heap. Exposto para testes e diagnóstico.
 func (h *HeapV2) FSM() *FreeSpaceMap { return h.fsm }

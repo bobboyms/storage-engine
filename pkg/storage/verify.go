@@ -257,6 +257,14 @@ func reportCountMismatches(report *VerifyReport, tableName string, liveCounts ma
 	}
 }
 
+// MaxWALLSN returns the highest sane LSN recorded in the log at path,
+// ignoring poisoned sentinel values. Repair tooling uses it as the target
+// when healing poisoned page LSNs. A missing or empty log yields 0.
+func MaxWALLSN(path string, cipher crypto.Cipher) (uint64, error) {
+	maxLSN, _, err := scanMaxWALLSN(path, cipher)
+	return maxLSN, err
+}
+
 // VerifyWALFile scans every segment of the write-ahead log at path and
 // reports entries that violate WAL invariants: undecodable content, poisoned
 // (MaxUint64 sentinel) entry LSNs, and checkpoint records whose beginLSN is

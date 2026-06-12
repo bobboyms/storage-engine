@@ -33,7 +33,12 @@ func VerifyDir(ctx context.Context, dir string, opts VerifyOptions) (*storage.Ve
 		return nil, err
 	}
 	defer func() { _ = lock.release() }()
+	return verifyDirLocked(ctx, dir, opts)
+}
 
+// verifyDirLocked is VerifyDir without the directory lock, for callers (the
+// repair flow) that already hold it across several passes.
+func verifyDirLocked(ctx context.Context, dir string, opts VerifyOptions) (*storage.VerifyReport, error) {
 	schemas, err := loadSchemas(dir)
 	if err != nil {
 		return nil, fmt.Errorf("sql: verify: load schemas: %w", err)

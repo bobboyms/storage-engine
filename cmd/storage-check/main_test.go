@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bobboyms/storage-engine/pkg/pagestore"
 	storagesql "github.com/bobboyms/storage-engine/pkg/sql"
 	"github.com/bobboyms/storage-engine/pkg/wal"
 )
@@ -45,8 +46,10 @@ func TestRun_CleanDatabaseExitsZero(t *testing.T) {
 	}
 }
 
-func TestRun_PoisonedWALExitsOne(t *testing.T) {
-	dir := buildDatabase(t)
+// poisonWAL appends one sentinel-LSN page-redo entry (well-formed payload) to
+// a closed database's WAL.
+func poisonWAL(t *testing.T, dir string) {
+	t.Helper()
 	writer, err := wal.NewWALWriter(filepath.Join(dir, "data.wal"), wal.DefaultOptions())
 	if err != nil {
 		t.Fatalf("reopen WAL: %v", err)
@@ -56,8 +59,8 @@ func TestRun_PoisonedWALExitsOne(t *testing.T) {
 	entry.Header.Version = wal.WALVersion
 	entry.Header.EntryType = wal.EntryPageRedo
 	entry.Header.LSN = math.MaxUint64
-	payload := []byte("xxxxxxxxxx")
-	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // small test payload
+	payload := make([]byte, 2+8+pagestore.PageSize)
+	entry.Header.PayloadLen = uint32(len(payload)) //nolint:gosec // bounded test payload
 	entry.Header.CRC32 = wal.CalculateCRC32(payload)
 	entry.Payload = append(entry.Payload, payload...)
 	if err := writer.WriteEntry(entry); err != nil {
@@ -67,6 +70,11 @@ func TestRun_PoisonedWALExitsOne(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close WAL: %v", err)
 	}
+}
+
+func TestRun_PoisonedWALExitsOne(t *testing.T) {
+	dir := buildDatabase(t)
+	poisonWAL(t, dir)
 
 	var out bytes.Buffer
 	if code := run(context.Background(), []string{dir}, noEnv, &out); code != 1 {
@@ -74,6 +82,40 @@ func TestRun_PoisonedWALExitsOne(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "wal_poisoned_lsn") {
 		t.Fatalf("output does not mention the poisoned WAL finding:\n%s", out.String())
+	}
+}
+
+func TestRun_RepairFixesPoisonedWAL(t *testing.T) {
+	dir := buildDatabase(t)
+	poisonWAL(t, dir)
+
+	var out bytes.Buffer
+	if code := run(context.Background(), []string{dir}, noEnv, &out); code != 1 {
+		t.Fatalf("pre-repair check = %d, want 1; output:\n%s", code, out.String())
+	}
+
+	out.Reset()
+	if code := run(context.Background(), []string{"-repair", dir}, noEnv, &out); code != 0 {
+		t.Fatalf("repair run = %d, want 0; output:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "removed 1 poisoned WAL entries") {
+		t.Fatalf("repair output does not log the WAL sanitation:\n%s", out.String())
+	}
+
+	out.Reset()
+	if code := run(context.Background(), []string{dir}, noEnv, &out); code != 0 {
+		t.Fatalf("post-repair check = %d, want 0; output:\n%s", code, out.String())
+	}
+}
+
+func TestRun_RepairOfCleanDatabaseIsNoop(t *testing.T) {
+	dir := buildDatabase(t)
+	var out bytes.Buffer
+	if code := run(context.Background(), []string{"-repair", dir}, noEnv, &out); code != 0 {
+		t.Fatalf("repair of clean db = %d, want 0; output:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "nothing to repair") {
+		t.Fatalf("output does not report the no-op:\n%s", out.String())
 	}
 }
 
