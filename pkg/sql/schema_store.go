@@ -143,10 +143,22 @@ type persistedIndex struct {
 	Unique  bool     `json:"unique,omitempty"`
 }
 
+// persistedForeignKey is the JSON form of a ForeignKey constraint.
+type persistedForeignKey struct {
+	Column    string `json:"column"`
+	RefTable  string `json:"ref_table"`
+	RefColumn string `json:"ref_column"`
+}
+
 type persistedTable struct {
 	Name    string            `json:"name"`
 	Columns []persistedColumn `json:"columns"`
 	Indexes []persistedIndex  `json:"indexes"`
+	// Checks holds each CHECK constraint as its canonical SQL expression text;
+	// it is re-parsed on load. ForeignKeys persist referential constraints.
+	// Both are additive optional fields (same catalog format version).
+	Checks      []string              `json:"checks,omitempty"`
+	ForeignKeys []persistedForeignKey `json:"foreign_keys,omitempty"`
 }
 
 func toPersisted(s TableSchema) persistedTable {
@@ -161,6 +173,12 @@ func toPersisted(s TableSchema) persistedTable {
 	}
 	for _, idx := range s.Indexes {
 		pt.Indexes = append(pt.Indexes, persistedIndex(idx))
+	}
+	for _, chk := range s.Checks {
+		pt.Checks = append(pt.Checks, chk.String())
+	}
+	for _, fk := range s.ForeignKeys {
+		pt.ForeignKeys = append(pt.ForeignKeys, persistedForeignKey(fk))
 	}
 	return pt
 }
@@ -181,7 +199,35 @@ func fromPersisted(pt persistedTable) (TableSchema, error) {
 	for _, idx := range pt.Indexes {
 		s.Indexes = append(s.Indexes, IndexDef(idx))
 	}
+	for _, chk := range pt.Checks {
+		expr, err := parseExprString(chk)
+		if err != nil {
+			return TableSchema{}, fmt.Errorf("%w: table %q has an unparseable persisted CHECK %q: %v", ErrInvalidSchema, pt.Name, chk, err)
+		}
+		s.Checks = append(s.Checks, expr)
+	}
+	for _, fk := range pt.ForeignKeys {
+		s.ForeignKeys = append(s.ForeignKeys, ForeignKey(fk))
+	}
 	return s, nil
+}
+
+// parseExprString parses a standalone boolean expression, as persisted for
+// CHECK constraints (the canonical Expr.String form is parseable).
+func parseExprString(input string) (Expr, error) {
+	toks, err := Lex(input)
+	if err != nil {
+		return nil, err
+	}
+	p := &parser{toks: toks}
+	expr, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenEOF {
+		return nil, fmt.Errorf("%w: unexpected token %q after expression", ErrParse, p.peek().Literal)
+	}
+	return expr, nil
 }
 
 // loadSchemas reads the persisted table schemas from dir. A missing file yields

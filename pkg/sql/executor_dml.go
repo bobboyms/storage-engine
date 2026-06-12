@@ -43,7 +43,7 @@ func (e *Executor) Exec(ctx context.Context, query string, args ...any) (int64, 
 	case *CreateTableStmt:
 		return e.execCreateTable(s)
 	case *AlterTableStmt:
-		return e.execAlterTable(s)
+		return e.execAlterTable(ctx, s)
 	case *DropTableStmt:
 		return e.execDropTable(ctx, s)
 	case *CreateIndexStmt:
@@ -66,6 +66,11 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 	docs, err := encodeInsertRows(schema, stmt)
 	if err != nil {
 		return 0, err
+	}
+	for _, d := range docs {
+		if err := enforceRowIntegrity(ctx, e.catalog, schema, d.row, e.fkLookup()); err != nil {
+			return 0, err
+		}
 	}
 
 	// A single row keeps the engine's auto-commit fast path; multiple rows are
@@ -96,11 +101,20 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 	return int64(len(docs)), nil
 }
 
-// encodedRow is one fully validated INSERT row: its JSON document and the
-// index-key map required to write it.
+// preparedUpdate is one fully validated UPDATE row, ready to be written: its
+// JSON document and the index-key map required to upsert it.
+type preparedUpdate struct {
+	json string
+	keys map[string]types.Comparable
+}
+
+// encodedRow is one fully validated INSERT row: its JSON document, the
+// index-key map required to write it, and the typed row used by CHECK and
+// FOREIGN KEY validation.
 type encodedRow struct {
 	json string
 	keys map[string]types.Comparable
+	row  Row
 }
 
 // encodeInsertRows validates every VALUES tuple of an INSERT against the
@@ -109,7 +123,7 @@ type encodedRow struct {
 func encodeInsertRows(schema *TableSchema, stmt *InsertStmt) ([]encodedRow, error) {
 	docs := make([]encodedRow, 0, len(stmt.Rows))
 	for _, row := range stmt.Rows {
-		doc, keys, err := buildInsertDoc(schema, stmt.Columns, row)
+		doc, keys, typed, err := buildInsertDoc(schema, stmt.Columns, row)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +131,7 @@ func encodeInsertRows(schema *TableSchema, stmt *InsertStmt) ([]encodedRow, erro
 		if err != nil {
 			return nil, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
-		docs = append(docs, encodedRow{json: string(jsonDoc), keys: keys})
+		docs = append(docs, encodedRow{json: string(jsonDoc), keys: keys, row: typed})
 	}
 	return docs, nil
 }
@@ -170,7 +184,9 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		return 0, err
 	}
 
-	var affected int64
+	// Prepare and validate every updated row before writing anything, so a
+	// constraint violation on a later row cannot leave a partial update behind.
+	updates := make([]preparedUpdate, 0, len(matches))
 	for _, raw := range matches {
 		doc, err := rawToMap(e.codec, raw)
 		if err != nil {
@@ -183,6 +199,9 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		if err := applyAssignments(schema, stmt.Assignments, doc, typedRow); err != nil {
 			return 0, err
 		}
+		if err := enforceRowIntegrity(ctx, e.catalog, schema, typedRow, e.fkLookup()); err != nil {
+			return 0, err
+		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
 			return 0, err
@@ -192,7 +211,12 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 		if err != nil {
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
-		if err := e.engine.UpsertRow(ctx, stmt.Table, string(jsonDoc), keys); err != nil {
+		updates = append(updates, preparedUpdate{json: string(jsonDoc), keys: keys})
+	}
+
+	var affected int64
+	for _, u := range updates {
+		if err := e.engine.UpsertRow(ctx, stmt.Table, u.json, u.keys); err != nil {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
@@ -234,14 +258,24 @@ func validateAssignments(stmt *UpdateStmt, schema *TableSchema, pk IndexDef) err
 	return nil
 }
 
-// applyAssignments writes the SET assignments into the decoded document.
-// Computed assignments are evaluated against the pre-update row (typedRow), so
-// "SET a = a + 1, b = a" reads the original value of a in both expressions.
+// applyAssignments writes the SET assignments into the decoded document and
+// mirrors them into typedRow, which afterwards reflects the post-update row
+// (used by CHECK and FOREIGN KEY validation). Computed assignments are
+// evaluated against the pre-update row, so "SET a = a + 1, b = a" reads the
+// original value of a in both expressions.
 func applyAssignments(schema *TableSchema, assignments []Assignment, doc map[string]any, typedRow Row) error {
+	// Evaluate every assignment against the original row first, then apply, so
+	// no assignment observes another assignment's result.
+	newValues := make(map[string]types.Comparable, len(assignments))
 	for _, a := range assignments {
 		col, _ := schema.Column(a.Column)
 		if lit, ok := a.Value.(*Literal); ok {
+			v, err := ColumnValue(lit, col.Type)
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrExec, err)
+			}
 			doc[a.Column] = literalToDocValue(lit, col.Type)
+			newValues[a.Column] = v
 			continue
 		}
 		v, err := evalValue(a.Value, typedRow, nil)
@@ -256,6 +290,10 @@ func applyAssignments(schema *TableSchema, assignments []Assignment, doc map[str
 			return fmt.Errorf("%w: assignment to %q: %v", ErrExec, a.Column, err)
 		}
 		doc[a.Column] = gv
+		newValues[a.Column] = NormalizeValue(v, col.Type)
+	}
+	for name, v := range newValues {
+		typedRow[name] = v
 	}
 	return nil
 }
@@ -308,6 +346,9 @@ func (e *Executor) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, err
 	pkCol, _ := schema.Column(pk.Column)
 	keys, err := e.matchingPrimaryKeys(ctx, schema, stmt.Where, pk.Column, pkCol.Type)
 	if err != nil {
+		return 0, err
+	}
+	if err := enforceDeleteRestrict(ctx, e.catalog, schema, keys, e.integrityScan()); err != nil {
 		return 0, err
 	}
 

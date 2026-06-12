@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -303,6 +304,9 @@ func (e *Executor) applyCreate(stmt *CreateTableStmt) (bool, error) {
 	if err := schema.validate(); err != nil {
 		return false, err
 	}
+	if err := validateForeignKeyTargets(schema, e.catalog.Table); err != nil {
+		return false, err
+	}
 	if _, exists := e.catalog.Table(schema.Name); exists {
 		if stmt.IfNotExists {
 			return false, nil
@@ -319,15 +323,15 @@ func (e *Executor) applyCreate(stmt *CreateTableStmt) (bool, error) {
 	return true, nil
 }
 
-// execAlterTable applies an ADD/DROP COLUMN to a table opened via OpenDatabase.
-// It mutates the engine (creating or dropping a sidecar index), refreshes the
-// in-memory catalog, and persists the evolved schema so the change survives a
-// reopen.
-func (e *Executor) execAlterTable(stmt *AlterTableStmt) (int64, error) {
+// execAlterTable applies an ADD/DROP/RENAME COLUMN to a table opened via
+// OpenDatabase. It mutates the engine (creating or dropping a sidecar index,
+// or rewriting rows for a rename), refreshes the in-memory catalog, and
+// persists the evolved schema so the change survives a reopen.
+func (e *Executor) execAlterTable(ctx context.Context, stmt *AlterTableStmt) (int64, error) {
 	if e.ddl == nil {
 		return 0, fmt.Errorf("%w: ALTER TABLE requires a database opened with OpenDatabase", ErrExec)
 	}
-	changed, err := e.applyAlter(stmt)
+	changed, err := e.applyAlter(ctx, stmt)
 	if err != nil {
 		return 0, err
 	}
@@ -356,6 +360,13 @@ func (e *Executor) execDropTable(ctx context.Context, stmt *DropTableStmt) (int6
 		}
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
+	// RESTRICT: a parent table still referenced by another table's foreign key
+	// cannot be dropped (self-references do not block the drop).
+	for _, ref := range e.catalog.referencingForeignKeys(stmt.Table) {
+		if ref.child.Name != stmt.Table {
+			return 0, fmt.Errorf("%w: table %q is referenced by foreign key on %s.%s", ErrForeignKeyViolation, stmt.Table, ref.child.Name, ref.fk.Column)
+		}
+	}
 	if err := e.engine.DropTable(ctx, stmt.Table); err != nil {
 		return 0, fmt.Errorf("%w: drop table %q: %v", ErrExec, stmt.Table, err)
 	}
@@ -380,7 +391,7 @@ func (e *Executor) execDropTable(ctx context.Context, stmt *DropTableStmt) (int6
 // guarded statement (IF [NOT] EXISTS) whose precondition is already satisfied
 // is a no-op that returns false. See applyCreate for why persistence is the
 // caller's responsibility.
-func (e *Executor) applyAlter(stmt *AlterTableStmt) (bool, error) {
+func (e *Executor) applyAlter(ctx context.Context, stmt *AlterTableStmt) (bool, error) {
 	pos, ok := e.ddl.schemaIndex(stmt.Table)
 	if !ok {
 		return false, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
@@ -394,9 +405,12 @@ func (e *Executor) applyAlter(stmt *AlterTableStmt) (bool, error) {
 		newSchema TableSchema
 		err       error
 	)
-	if stmt.Drop {
+	switch {
+	case stmt.Rename:
+		newSchema, err = e.alterRenameColumn(ctx, schema, stmt.Column.Name, stmt.NewName)
+	case stmt.Drop:
 		newSchema, err = e.alterDropColumn(schema, stmt.Column.Name)
-	} else {
+	default:
 		newSchema, err = e.alterAddColumn(schema, stmt.Column)
 	}
 	if err != nil {
@@ -492,12 +506,141 @@ func (e *Executor) alterDropColumn(schema TableSchema, name string) (TableSchema
 }
 
 // cloneSchema returns a deep copy of s so callers can mutate the column and
-// index slices without aliasing the original.
+// index slices without aliasing the original. Check expressions and foreign
+// keys are immutable after parse, so sharing their values is safe.
 func cloneSchema(s TableSchema) TableSchema {
 	ns := TableSchema{Name: s.Name}
 	ns.Columns = append(ns.Columns, s.Columns...)
 	ns.Indexes = append(ns.Indexes, s.Indexes...)
+	ns.Checks = append(ns.Checks, s.Checks...)
+	ns.ForeignKeys = append(ns.ForeignKeys, s.ForeignKeys...)
 	return ns
+}
+
+// validateForeignKeyTargets checks every foreign key of schema against its
+// referenced table: the parent must exist (the table itself for a
+// self-reference), the referenced column must be the parent's primary key, and
+// the child column type must match it.
+func validateForeignKeyTargets(schema TableSchema, lookup func(string) (*TableSchema, bool)) error {
+	for _, fk := range schema.ForeignKeys {
+		parent := &schema
+		if fk.RefTable != schema.Name {
+			p, ok := lookup(fk.RefTable)
+			if !ok {
+				return fmt.Errorf("%w: foreign key on %q references unknown table %q", ErrExec, fk.Column, fk.RefTable)
+			}
+			parent = p
+		}
+		pk, ok := parent.PrimaryIndex()
+		if !ok || pk.Column != fk.RefColumn {
+			return fmt.Errorf("%w: foreign key on %q must reference the primary key of %q, not column %q", ErrExec, fk.Column, fk.RefTable, fk.RefColumn)
+		}
+		ccol, _ := schema.Column(fk.Column)
+		pcol, _ := parent.Column(fk.RefColumn)
+		if ccol.Type != pcol.Type {
+			return fmt.Errorf("%w: foreign key column %q (%s) does not match referenced column %q (%s)", ErrExec, fk.Column, ccol.Type, fk.RefColumn, pcol.Type)
+		}
+	}
+	return nil
+}
+
+// evolveRenameColumn computes the schema resulting from RENAME COLUMN,
+// validating the change without touching physical state. Indexed columns
+// (primary, secondary, unique, or part of a composite index) cannot be renamed
+// because engine index names are bound to the column name, and columns
+// referenced by a CHECK constraint are rejected rather than rewriting the
+// expression. Foreign keys declared on the renamed column follow the rename.
+func evolveRenameColumn(schema TableSchema, oldName, newName string) (TableSchema, error) {
+	if _, ok := schema.Column(oldName); !ok {
+		return TableSchema{}, fmt.Errorf("%w: unknown column %q in table %q", ErrExec, oldName, schema.Name)
+	}
+	if _, ok := schema.Column(newName); ok {
+		return TableSchema{}, fmt.Errorf("%w: column %q already exists in table %q", ErrDuplicateColumn, newName, schema.Name)
+	}
+	for _, idx := range schema.Indexes {
+		if idx.Column == oldName {
+			return TableSchema{}, fmt.Errorf("%w: cannot rename indexed column %q", ErrExec, oldName)
+		}
+		for _, c := range idx.Columns {
+			if c == oldName {
+				return TableSchema{}, fmt.Errorf("%w: cannot rename column %q used by composite index %q", ErrExec, oldName, idx.Name)
+			}
+		}
+	}
+	for _, chk := range schema.Checks {
+		if exprReferencesColumn(chk, oldName) {
+			return TableSchema{}, fmt.Errorf("%w: cannot rename column %q referenced by CHECK %s", ErrExec, oldName, chk.String())
+		}
+	}
+
+	ns := cloneSchema(schema)
+	for i := range ns.Columns {
+		if ns.Columns[i].Name == oldName {
+			ns.Columns[i].Name = newName
+		}
+	}
+	for i := range ns.ForeignKeys {
+		if ns.ForeignKeys[i].Column == oldName {
+			ns.ForeignKeys[i].Column = newName
+		}
+	}
+	return ns, nil
+}
+
+// exprReferencesColumn reports whether expr contains a reference to the named
+// column (qualified or not).
+func exprReferencesColumn(expr Expr, name string) bool {
+	found := false
+	walkColumnRefs(expr, func(c *ColumnRef) {
+		if c.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+// alterRenameColumn evolves the schema and rewrites every stored row, moving
+// the field from the old name to the new one so reads under the new schema see
+// the data. The rename is rejected for indexed columns, so index keys are
+// unaffected by the rewrite.
+func (e *Executor) alterRenameColumn(ctx context.Context, schema TableSchema, oldName, newName string) (TableSchema, error) {
+	ns, err := evolveRenameColumn(schema, oldName, newName)
+	if err != nil {
+		return TableSchema{}, err
+	}
+
+	matches, err := e.matchingRaw(ctx, &schema, nil)
+	if err != nil {
+		return TableSchema{}, err
+	}
+	rewrote := false
+	for _, raw := range matches {
+		doc, err := rawToMap(e.codec, raw)
+		if err != nil {
+			return TableSchema{}, err
+		}
+		if _, present := doc[oldName]; !present {
+			continue
+		}
+		doc[newName] = doc[oldName]
+		delete(doc, oldName)
+		keys, err := keysFromMap(&schema, doc)
+		if err != nil {
+			return TableSchema{}, err
+		}
+		jsonDoc, err := json.Marshal(doc)
+		if err != nil {
+			return TableSchema{}, fmt.Errorf("%w: encode document: %v", ErrExec, err)
+		}
+		if err := e.engine.UpsertRow(ctx, schema.Name, string(jsonDoc), keys); err != nil {
+			return TableSchema{}, fmt.Errorf("%w: rewrite row for rename: %v", ErrExec, err)
+		}
+		rewrote = true
+	}
+	if rewrote {
+		e.markGarbage(schema.Name) // each rewrite tombstones the old version
+	}
+	return ns, nil
 }
 
 // schemaIndex returns the position of the named schema in d.schemas.
@@ -512,9 +655,15 @@ func (d *ddlManager) schemaIndex(name string) (int, bool) {
 
 // schemaFromCreate converts a parsed CREATE TABLE into a catalog schema.
 func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
-	schema := TableSchema{Name: stmt.Table}
+	schema := TableSchema{Name: stmt.Table, Checks: stmt.Checks, ForeignKeys: stmt.ForeignKeys}
 	for _, c := range stmt.Columns {
 		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type, NotNull: c.NotNull, Default: c.Default})
+		if c.Check != nil {
+			schema.Checks = append(schema.Checks, c.Check)
+		}
+		if c.References != nil {
+			schema.ForeignKeys = append(schema.ForeignKeys, *c.References)
+		}
 		switch {
 		case c.Primary:
 			schema.Indexes = append(schema.Indexes, IndexDef{Name: c.Name, Column: c.Name, Primary: true})

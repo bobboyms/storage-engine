@@ -228,6 +228,11 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 		return 0, err
 	}
 	for _, d := range docs {
+		if err := enforceRowIntegrity(ctx, t.catalog, schema, d.row, t.fkLookup()); err != nil {
+			return 0, err
+		}
+	}
+	for _, d := range docs {
 		if err := t.wtx.WriteRow(ctx, stmt.Table, d.json, d.keys, true); err != nil {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
@@ -258,7 +263,9 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var affected int64
+	// Prepare and validate every updated row before staging any write, so a
+	// constraint violation on a later row does not leave earlier rows staged.
+	updates := make([]preparedUpdate, 0, len(matches))
 	for _, raw := range matches {
 		doc, err := rawToMap(t.codec, raw)
 		if err != nil {
@@ -271,6 +278,9 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 		if err := applyAssignments(schema, stmt.Assignments, doc, typedRow); err != nil {
 			return 0, err
 		}
+		if err := enforceRowIntegrity(ctx, t.catalog, schema, typedRow, t.fkLookup()); err != nil {
+			return 0, err
+		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
 			return 0, err
@@ -279,7 +289,12 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
-		if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, false); err != nil {
+		updates = append(updates, preparedUpdate{json: string(jsonDoc), keys: keys})
+	}
+
+	var affected int64
+	for _, u := range updates {
+		if err := t.wtx.WriteRow(ctx, stmt.Table, u.json, u.keys, false); err != nil {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
@@ -309,6 +324,9 @@ func (t *Tx) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, error) {
 	pkCol, _ := schema.Column(pk.Column)
 	keys, err := t.matchingPrimaryKeys(ctx, schema, stmt.Where, pk.Column, pkCol.Type)
 	if err != nil {
+		return 0, err
+	}
+	if err := enforceDeleteRestrict(ctx, t.catalog, schema, keys, t.integrityScan()); err != nil {
 		return 0, err
 	}
 	var affected int64
@@ -395,28 +413,28 @@ func (t *Tx) matchingPrimaryKeys(ctx context.Context, schema *TableSchema, where
 }
 
 // buildInsertDoc validates one INSERT row (a VALUES tuple positionally aligned
-// with columns) and returns its document map and the index key map required to
-// write it.
-func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, error) {
+// with columns) and returns its document map, the index key map required to
+// write it, and the typed row used for constraint validation.
+func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, Row, error) {
 	if len(columns) != len(values) {
-		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
+		return nil, nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
 	}
 	doc := make(map[string]any, len(columns))
 	literals := make(map[string]*Literal, len(columns))
 	for i, name := range columns {
 		col, ok := schema.Column(name)
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
 		}
 		lit, ok := values[i].(*Literal)
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
 		}
 		if lit.Kind == LitNull && col.NotNull {
-			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
 		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
-			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
+			return nil, nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
 		doc[name] = literalToDocValue(lit, col.Type)
 		literals[name] = lit
@@ -432,13 +450,27 @@ func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[s
 			doc[col.Name] = literalToDocValue(col.Default, col.Type)
 			literals[col.Name] = col.Default
 		case col.NotNull:
-			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
+			return nil, nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
 		}
 	}
 	keys, err := keysForInsert(schema, literals)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	addCompositeKeyFields(doc, schema, keys)
-	return doc, keys, nil
+
+	typed := make(Row, len(schema.Columns))
+	for _, col := range schema.Columns {
+		lit, ok := literals[col.Name]
+		if !ok {
+			typed[col.Name] = types.NullKey{}
+			continue
+		}
+		v, err := ColumnValue(lit, col.Type)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
+		}
+		typed[col.Name] = v
+	}
+	return doc, keys, typed, nil
 }

@@ -143,13 +143,26 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	p.next()
 
 	for {
-		if p.isKeyword("INDEX") || p.isKeyword("UNIQUE") {
+		switch {
+		case p.isKeyword("INDEX") || p.isKeyword("UNIQUE"):
 			idx, err := p.parseTableIndex()
 			if err != nil {
 				return nil, err
 			}
 			stmt.Indexes = append(stmt.Indexes, idx)
-		} else {
+		case p.isKeyword("CHECK"):
+			chk, err := p.parseCheckClause()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Checks = append(stmt.Checks, chk)
+		case p.isKeyword("FOREIGN"):
+			fk, err := p.parseForeignKeyClause()
+			if err != nil {
+				return nil, err
+			}
+			stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
+		default:
 			col, err := p.parseColumnDef()
 			if err != nil {
 				return nil, err
@@ -167,6 +180,68 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	}
 	p.next()
 	return stmt, nil
+}
+
+// parseCheckClause parses "CHECK ( expr )". The CHECK keyword has not been
+// consumed yet.
+func (p *parser) parseCheckClause() (Expr, error) {
+	if err := p.expectKeyword("CHECK"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( after CHECK, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	expr, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close CHECK, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return expr, nil
+}
+
+// parseForeignKeyClause parses a table-level
+// "FOREIGN KEY ( col ) REFERENCES table ( col )" clause.
+func (p *parser) parseForeignKeyClause() (ForeignKey, error) {
+	if err := p.expectKeywords("FOREIGN", "KEY"); err != nil {
+		return ForeignKey{}, err
+	}
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	if len(cols) != 1 {
+		return ForeignKey{}, fmt.Errorf("%w: FOREIGN KEY supports exactly one column, got %d", ErrParse, len(cols))
+	}
+	ref, err := p.parseReferences()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	ref.Column = cols[0]
+	return ref, nil
+}
+
+// parseReferences parses "REFERENCES table ( col )", returning a ForeignKey
+// whose Column field the caller fills in.
+func (p *parser) parseReferences() (ForeignKey, error) {
+	if err := p.expectKeyword("REFERENCES"); err != nil {
+		return ForeignKey{}, err
+	}
+	if p.peek().Type != TokenIdent {
+		return ForeignKey{}, fmt.Errorf("%w: expected referenced table name, got %q", ErrParse, p.peek().Literal)
+	}
+	table := p.next().Literal
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	if len(cols) != 1 {
+		return ForeignKey{}, fmt.Errorf("%w: REFERENCES supports exactly one column, got %d", ErrParse, len(cols))
+	}
+	return ForeignKey{RefTable: table, RefColumn: cols[0]}, nil
 }
 
 // parseTableIndex parses a table-level "INDEX (cols...)" or "UNIQUE (cols...)"
@@ -237,8 +312,26 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 		}
 		stmt.Drop = true
 		stmt.Column = ColumnDef{Name: p.next().Literal}
+	case p.isKeyword("RENAME"):
+		p.next()
+		if p.isKeyword("COLUMN") {
+			p.next()
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+		}
+		old := p.next().Literal
+		if err := p.expectKeyword("TO"); err != nil {
+			return nil, err
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected new column name, got %q", ErrParse, p.peek().Literal)
+		}
+		stmt.Rename = true
+		stmt.Column = ColumnDef{Name: old}
+		stmt.NewName = p.next().Literal
 	default:
-		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
+		return nil, fmt.Errorf("%w: expected ADD, DROP, or RENAME, got %q", ErrParse, p.peek().Literal)
 	}
 	return stmt, nil
 }
@@ -386,6 +479,19 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 				return ColumnDef{}, fmt.Errorf("%w: DEFAULT for column %q must be a literal, got %s", ErrParse, col.Name, operand.String())
 			}
 			col.Default = lit
+		case p.isKeyword("CHECK"):
+			chk, err := p.parseCheckClause()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			col.Check = chk
+		case p.isKeyword("REFERENCES"):
+			ref, err := p.parseReferences()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			ref.Column = col.Name
+			col.References = &ref
 		default:
 			return col, nil
 		}
