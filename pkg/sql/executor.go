@@ -60,6 +60,15 @@ type Executor struct {
 	// It is test-only instrumentation for asserting that LIMIT push-down stops
 	// the scan early; it is nil in production.
 	decodeHook func()
+
+	// aiMu guards the per-table AUTO_INCREMENT counters. Each counter holds the
+	// last value handed out for that table; it is lazily seeded from the current
+	// maximum primary key on first use and advanced in memory thereafter (so
+	// allocations need no per-insert disk scan, and rolled-back values are not
+	// reused, matching conventional auto-increment semantics).
+	aiMu       sync.Mutex
+	aiCounters map[string]int64
+	aiSeeded   map[string]struct{}
 }
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses

@@ -61,9 +61,14 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
 
-	// Build and validate every row before writing anything, so a malformed
-	// later row cannot leave a partial insert behind.
-	docs, err := encodeInsertRows(schema, stmt)
+	// Assign AUTO_INCREMENT values before building rows, then build and validate
+	// every row before writing anything, so a malformed later row cannot leave a
+	// partial insert behind.
+	columns, rows, err := e.resolveAutoIncrement(ctx, schema, stmt.Columns, stmt.Rows)
+	if err != nil {
+		return 0, err
+	}
+	docs, err := encodeInsertRows(schema, columns, rows)
 	if err != nil {
 		return 0, err
 	}
@@ -119,11 +124,12 @@ type encodedRow struct {
 
 // encodeInsertRows validates every VALUES tuple of an INSERT against the
 // schema and returns the encoded rows, failing before any write on the first
-// malformed row.
-func encodeInsertRows(schema *TableSchema, stmt *InsertStmt) ([]encodedRow, error) {
-	docs := make([]encodedRow, 0, len(stmt.Rows))
-	for _, row := range stmt.Rows {
-		doc, keys, typed, err := buildInsertDoc(schema, stmt.Columns, row)
+// malformed row. columns and rows are the (auto-increment-resolved) column
+// list and value tuples to encode.
+func encodeInsertRows(schema *TableSchema, columns []string, rows [][]Expr) ([]encodedRow, error) {
+	docs := make([]encodedRow, 0, len(rows))
+	for _, row := range rows {
+		doc, keys, typed, err := buildInsertDoc(schema, columns, row)
 		if err != nil {
 			return nil, err
 		}

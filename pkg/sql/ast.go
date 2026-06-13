@@ -186,6 +186,9 @@ type ColumnDef struct {
 	Unique  bool
 	NotNull bool
 	Default *Literal
+	// AutoIncrement marks an INT PRIMARY KEY column whose value is assigned
+	// automatically when an INSERT omits it (or provides NULL).
+	AutoIncrement bool
 	// Check is a column-level CHECK (expr); it becomes a table check.
 	Check Expr
 	// References is a column-level REFERENCES parent(col) clause; its Column

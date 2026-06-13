@@ -657,7 +657,7 @@ func (d *ddlManager) schemaIndex(name string) (int, bool) {
 func schemaFromCreate(stmt *CreateTableStmt) TableSchema {
 	schema := TableSchema{Name: stmt.Table, Checks: stmt.Checks, ForeignKeys: stmt.ForeignKeys}
 	for _, c := range stmt.Columns {
-		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type, NotNull: c.NotNull, Default: c.Default})
+		schema.Columns = append(schema.Columns, Column{Name: c.Name, Type: c.Type, NotNull: c.NotNull, Default: c.Default, AutoIncrement: c.AutoIncrement})
 		if c.Check != nil {
 			schema.Checks = append(schema.Checks, c.Check)
 		}

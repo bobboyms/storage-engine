@@ -479,6 +479,9 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 				return ColumnDef{}, fmt.Errorf("%w: DEFAULT for column %q must be a literal, got %s", ErrParse, col.Name, operand.String())
 			}
 			col.Default = lit
+		case p.isKeyword("AUTO_INCREMENT"):
+			p.next()
+			col.AutoIncrement = true
 		case p.isKeyword("CHECK"):
 			chk, err := p.parseCheckClause()
 			if err != nil {

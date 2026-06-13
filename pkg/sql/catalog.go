@@ -49,6 +49,9 @@ type Column struct {
 	Type    storage.DataType
 	NotNull bool
 	Default *Literal
+	// AutoIncrement marks an INT primary-key column whose value is assigned
+	// from a per-table counter when an INSERT omits it or provides NULL.
+	AutoIncrement bool
 }
 
 // IndexDef describes an index. A single-column index serves Column; a composite
@@ -145,6 +148,24 @@ func (s TableSchema) validate() error {
 			} else if _, err := ColumnValue(c.Default, c.Type); err != nil {
 				return fmt.Errorf("%w: column %q has a type-incompatible default: %v", ErrInvalidSchema, c.Name, err)
 			}
+		}
+	}
+
+	pkColumn := ""
+	for _, idx := range s.Indexes {
+		if idx.Primary {
+			pkColumn = idx.Column
+		}
+	}
+	for _, c := range s.Columns {
+		if !c.AutoIncrement {
+			continue
+		}
+		if c.Type != storage.TypeInt {
+			return fmt.Errorf("%w: AUTO_INCREMENT column %q must be INT, got %s", ErrInvalidSchema, c.Name, c.Type)
+		}
+		if c.Name != pkColumn {
+			return fmt.Errorf("%w: AUTO_INCREMENT column %q must be the primary key", ErrInvalidSchema, c.Name)
 		}
 	}
 

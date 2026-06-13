@@ -38,10 +38,11 @@ type persistedCatalog struct {
 // forms of a table schema. Types are stored by name so the file stays readable
 // and stable against engine enum reordering.
 type persistedColumn struct {
-	Name    string            `json:"name"`
-	Type    string            `json:"type"`
-	NotNull bool              `json:"not_null,omitempty"`
-	Default *persistedDefault `json:"default,omitempty"`
+	Name          string            `json:"name"`
+	Type          string            `json:"type"`
+	NotNull       bool              `json:"not_null,omitempty"`
+	Default       *persistedDefault `json:"default,omitempty"`
+	AutoIncrement bool              `json:"auto_increment,omitempty"`
 }
 
 // persistedDefault stores a column DEFAULT as a literal kind plus its value
@@ -165,10 +166,11 @@ func toPersisted(s TableSchema) persistedTable {
 	pt := persistedTable{Name: s.Name}
 	for _, c := range s.Columns {
 		pt.Columns = append(pt.Columns, persistedColumn{
-			Name:    c.Name,
-			Type:    typeNameForData(c.Type),
-			NotNull: c.NotNull,
-			Default: toPersistedDefault(c.Default),
+			Name:          c.Name,
+			Type:          typeNameForData(c.Type),
+			NotNull:       c.NotNull,
+			Default:       toPersistedDefault(c.Default),
+			AutoIncrement: c.AutoIncrement,
 		})
 	}
 	for _, idx := range s.Indexes {
@@ -194,7 +196,7 @@ func fromPersisted(pt persistedTable) (TableSchema, error) {
 		if err != nil {
 			return TableSchema{}, err
 		}
-		s.Columns = append(s.Columns, Column{Name: c.Name, Type: dt, NotNull: c.NotNull, Default: def})
+		s.Columns = append(s.Columns, Column{Name: c.Name, Type: dt, NotNull: c.NotNull, Default: def, AutoIncrement: c.AutoIncrement})
 	}
 	for _, idx := range pt.Indexes {
 		s.Indexes = append(s.Indexes, IndexDef(idx))

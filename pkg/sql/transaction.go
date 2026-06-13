@@ -221,9 +221,14 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
-	// Validate every row before staging any write, so a malformed later row
-	// does not leave earlier rows staged in the transaction.
-	docs, err := encodeInsertRows(schema, stmt)
+	// Assign AUTO_INCREMENT values, then validate every row before staging any
+	// write, so a malformed later row does not leave earlier rows staged in the
+	// transaction.
+	columns, rows, err := t.exec.resolveAutoIncrement(ctx, schema, stmt.Columns, stmt.Rows)
+	if err != nil {
+		return 0, err
+	}
+	docs, err := encodeInsertRows(schema, columns, rows)
 	if err != nil {
 		return 0, err
 	}
