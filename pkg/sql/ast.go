@@ -53,6 +53,7 @@ type SelectItem struct {
 	Column *ColumnRef     // bare column projection (nil otherwise)
 	Agg    *AggregateCall // aggregate projection (nil otherwise)
 	Window *WindowCall    // window-function projection (nil otherwise)
+	Expr   Expr           // general value expression projection (nil otherwise)
 	Alias  string         // output name override, empty if none
 }
 
@@ -103,6 +104,8 @@ func (it SelectItem) OutputName() string {
 		return it.Agg.canonicalName()
 	case it.Window != nil:
 		return it.Window.canonicalName()
+	case it.Expr != nil:
+		return it.Expr.String()
 	default:
 		return "*"
 	}
@@ -183,6 +186,24 @@ type ColumnDef struct {
 	Unique  bool
 	NotNull bool
 	Default *Literal
+	// AutoIncrement marks an INT PRIMARY KEY column whose value is assigned
+	// automatically when an INSERT omits it (or provides NULL).
+	AutoIncrement bool
+	// Check is a column-level CHECK (expr); it becomes a table check.
+	Check Expr
+	// References is a column-level REFERENCES parent(col) clause; its Column
+	// field is filled with this column's name when the schema is built.
+	References *ForeignKey
+}
+
+// ForeignKey describes a referential constraint: every non-NULL value of
+// Column must exist in RefTable's RefColumn, which must be that table's
+// primary key. Enforcement is RESTRICT: parent rows referenced by a child
+// cannot be deleted, and a referenced parent table cannot be dropped.
+type ForeignKey struct {
+	Column    string
+	RefTable  string
+	RefColumn string
 }
 
 // IndexClause is a table-level index definition in CREATE TABLE, e.g.
@@ -200,6 +221,10 @@ type CreateTableStmt struct {
 	Table   string
 	Columns []ColumnDef
 	Indexes []IndexClause
+	// Checks are table-level CHECK (expr) constraints.
+	Checks []Expr
+	// ForeignKeys are table-level FOREIGN KEY (col) REFERENCES t(c) clauses.
+	ForeignKeys []ForeignKey
 	// IfNotExists makes execution a silent no-op when a table with the same
 	// name already exists, instead of returning ErrDuplicateTable.
 	IfNotExists bool
@@ -241,13 +266,17 @@ type DropTableStmt struct {
 
 func (*DropTableStmt) stmtNode() {}
 
-// AlterTableStmt represents ALTER TABLE name ADD/DROP COLUMN. Drop selects the
-// action: false adds Column (a full definition, optionally a secondary index);
-// true drops the column named by Column.Name.
+// AlterTableStmt represents ALTER TABLE name ADD/DROP/RENAME COLUMN. Drop
+// selects the drop action; Rename selects RENAME COLUMN old TO new, where
+// Column.Name holds the old name and NewName the new one. Otherwise Column (a
+// full definition, optionally a secondary index) is added.
 type AlterTableStmt struct {
 	Table  string
 	Drop   bool
-	Column ColumnDef
+	Rename bool
+	// NewName is the target name for RENAME COLUMN.
+	NewName string
+	Column  ColumnDef
 	// IfExists guards the column operation so it can run idempotently: ADD
 	// COLUMN IF NOT EXISTS is a silent no-op when the column already exists, and
 	// DROP COLUMN IF EXISTS is a silent no-op when the column is absent.
@@ -277,6 +306,27 @@ type DescribeStmt struct {
 }
 
 func (*DescribeStmt) stmtNode() {}
+
+// TxControl enumerates the transaction-control actions expressible as SQL text.
+type TxControl int
+
+const (
+	// TxBegin starts a session transaction (BEGIN / START TRANSACTION).
+	TxBegin TxControl = iota
+	// TxCommit commits the open session transaction (COMMIT).
+	TxCommit
+	// TxRollback discards the open session transaction (ROLLBACK).
+	TxRollback
+)
+
+// TxControlStmt represents a transaction-control statement (BEGIN, COMMIT, or
+// ROLLBACK) driven from SQL text. It opens or closes a session transaction on
+// the executor, so subsequent statements run inside it until it ends.
+type TxControlStmt struct {
+	Action TxControl
+}
+
+func (*TxControlStmt) stmtNode() {}
 
 // Expr is a WHERE-clause expression node.
 type Expr interface {
@@ -434,6 +484,64 @@ func (e *ExistsExpr) String() string {
 	return "(EXISTS (subquery))"
 }
 func (*ExistsExpr) exprNode() {}
+
+// ArithExpr is an arithmetic value expression (+ - * / %) over two numeric
+// sub-expressions. It evaluates to a value, not a boolean; comparisons over
+// arithmetic results use a BinaryExpr whose operand is an ArithExpr.
+type ArithExpr struct {
+	Op    string
+	Left  Expr
+	Right Expr
+}
+
+func (e *ArithExpr) String() string {
+	return "(" + e.Left.String() + " " + e.Op + " " + e.Right.String() + ")"
+}
+func (*ArithExpr) exprNode() {}
+
+// FuncCall is a scalar function application (UPPER, LOWER, LENGTH, ABS,
+// COALESCE). Name holds the canonical uppercase function name.
+type FuncCall struct {
+	Name string
+	Args []Expr
+}
+
+func (e *FuncCall) String() string {
+	args := make([]string, len(e.Args))
+	for i, a := range e.Args {
+		args[i] = a.String()
+	}
+	return strings.ToLower(e.Name) + "(" + strings.Join(args, ", ") + ")"
+}
+func (*FuncCall) exprNode() {}
+
+// WhenClause is one WHEN cond THEN result arm of a CASE expression.
+type WhenClause struct {
+	Cond Expr
+	Then Expr
+}
+
+// CaseExpr is a searched CASE expression: CASE WHEN cond THEN result ...
+// [ELSE result] END. Without an ELSE, a CASE whose conditions all fail
+// evaluates to NULL.
+type CaseExpr struct {
+	Whens []WhenClause
+	Else  Expr // nil when no ELSE arm
+}
+
+func (e *CaseExpr) String() string {
+	var b strings.Builder
+	b.WriteString("CASE")
+	for _, w := range e.Whens {
+		b.WriteString(" WHEN " + w.Cond.String() + " THEN " + w.Then.String())
+	}
+	if e.Else != nil {
+		b.WriteString(" ELSE " + e.Else.String())
+	}
+	b.WriteString(" END")
+	return b.String()
+}
+func (*CaseExpr) exprNode() {}
 
 // BinaryExpr is a comparison (= <> != < <= > >=) or a logical connective
 // (AND, OR) joining two sub-expressions.

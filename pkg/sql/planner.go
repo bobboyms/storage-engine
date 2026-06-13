@@ -289,6 +289,10 @@ func validateColumns(stmt *SelectStmt, schema *TableSchema) error {
 			if err := validateRef(item.Agg.Column, schema, alias); err != nil {
 				return err
 			}
+		case item.Expr != nil:
+			if err := validateExprColumns(item.Expr, schema, alias); err != nil {
+				return err
+			}
 		}
 	}
 	for _, g := range stmt.GroupBy {
@@ -348,6 +352,27 @@ func validateExprColumns(expr Expr, schema *TableSchema, alias string) error {
 			return err
 		}
 		return validateExprColumns(e.Right, schema, alias)
+	case *ArithExpr:
+		if err := validateExprColumns(e.Left, schema, alias); err != nil {
+			return err
+		}
+		return validateExprColumns(e.Right, schema, alias)
+	case *FuncCall:
+		for _, arg := range e.Args {
+			if err := validateExprColumns(arg, schema, alias); err != nil {
+				return err
+			}
+		}
+	case *CaseExpr:
+		for _, w := range e.Whens {
+			if err := validateExprColumns(w.Cond, schema, alias); err != nil {
+				return err
+			}
+			if err := validateExprColumns(w.Then, schema, alias); err != nil {
+				return err
+			}
+		}
+		return validateExprColumns(e.Else, schema, alias)
 	}
 	return nil
 }

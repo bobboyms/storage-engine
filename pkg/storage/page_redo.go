@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
 
 	btreev2 "github.com/bobboyms/storage-engine/pkg/btree/v2"
 	heapv2 "github.com/bobboyms/storage-engine/pkg/heap/v2"
@@ -135,6 +136,48 @@ func (se *StorageEngine) writePageRedoRecord(path string, pageID pagestore.PageI
 		return fmt.Errorf("storage: sync page redo: %w", err)
 	}
 	return nil
+}
+
+// resolvePageRedoTarget finds the target a WAL-recorded page path refers to.
+// Recovery normally runs in the directory that wrote the log, so the full
+// path matches exactly; after the directory was copied or restored somewhere
+// else the prefix changed, and we fall back to the basename when exactly one
+// registered target carries it (a database directory holds each file name
+// once). Ambiguity returns nil — silently skipping is safe, writing to the
+// wrong file is not.
+func resolvePageRedoTarget(targets map[string]pageRedoTarget, path string) pageRedoTarget {
+	if target, ok := targets[path]; ok {
+		return target
+	}
+	base := filepath.Base(path)
+	var match pageRedoTarget
+	for p, t := range targets {
+		if filepath.Base(p) != base {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = t
+	}
+	return match
+}
+
+// recordedFlushMatches reports whether a registered file path appears in the
+// set of WAL-recorded flush paths, tolerating a relocated directory the same
+// way resolvePageRedoTarget does. Here ambiguity may return true: the only
+// consequence is a conservative index rebuild.
+func recordedFlushMatches(recorded map[string]struct{}, path string) bool {
+	if _, ok := recorded[path]; ok {
+		return true
+	}
+	base := filepath.Base(path)
+	for p := range recorded {
+		if filepath.Base(p) == base {
+			return true
+		}
+	}
+	return false
 }
 
 func (se *StorageEngine) pageRedoTargets() map[string]pageRedoTarget {

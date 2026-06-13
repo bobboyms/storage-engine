@@ -269,6 +269,28 @@ func (pf *PageFile) ReadPage(pageID PageID) (*Page, error) {
 	return &page, nil
 }
 
+// ReadPageRaw returns the on-disk bytes of `pageID` without header, checksum,
+// or cipher validation. Recovery uses it to distinguish a zero-filled hole —
+// a page slot a later flush extended the file over but that was never
+// written — from real corruption, which ReadPage rejects.
+func (pf *PageFile) ReadPageRaw(pageID PageID) (*Page, error) {
+	if pf.closed.Load() {
+		return nil, ErrClosed
+	}
+	if pageID == InvalidPageID {
+		return nil, fmt.Errorf("pagestore: pageID 0 is reserved")
+	}
+	if uint64(pageID) >= pf.numPages.Load() {
+		return nil, ErrPageOutOfRange
+	}
+	var page Page
+	offset := int64(pageID) * PageSize //nolint:gosec // pageID bounded by file size; offset fits int64
+	if _, err := pf.file.ReadAt(page[:], offset); err != nil {
+		return nil, err
+	}
+	return &page, nil
+}
+
 // Sync força fsync no arquivo.
 func (pf *PageFile) Sync() error {
 	if pf.closed.Load() {

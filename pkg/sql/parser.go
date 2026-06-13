@@ -109,9 +109,41 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseDropTable()
 	case "DESCRIBE", "DESC":
 		return p.parseDescribe()
+	case "BEGIN", "START", "COMMIT", "ROLLBACK":
+		return p.parseTxControl()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
 	}
+}
+
+// parseTxControl parses a transaction-control statement: BEGIN [TRANSACTION],
+// START TRANSACTION, COMMIT [TRANSACTION|WORK], or ROLLBACK [TRANSACTION|WORK].
+func (p *parser) parseTxControl() (*TxControlStmt, error) {
+	kw := p.next().Literal
+	stmt := &TxControlStmt{}
+	switch kw {
+	case "BEGIN":
+		stmt.Action = TxBegin
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	case "START":
+		stmt.Action = TxBegin
+		if err := p.expectKeyword("TRANSACTION"); err != nil {
+			return nil, err
+		}
+	case "COMMIT":
+		stmt.Action = TxCommit
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	case "ROLLBACK":
+		stmt.Action = TxRollback
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	}
+	return stmt, nil
 }
 
 func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
@@ -143,13 +175,26 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	p.next()
 
 	for {
-		if p.isKeyword("INDEX") || p.isKeyword("UNIQUE") {
+		switch {
+		case p.isKeyword("INDEX") || p.isKeyword("UNIQUE"):
 			idx, err := p.parseTableIndex()
 			if err != nil {
 				return nil, err
 			}
 			stmt.Indexes = append(stmt.Indexes, idx)
-		} else {
+		case p.isKeyword("CHECK"):
+			chk, err := p.parseCheckClause()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Checks = append(stmt.Checks, chk)
+		case p.isKeyword("FOREIGN"):
+			fk, err := p.parseForeignKeyClause()
+			if err != nil {
+				return nil, err
+			}
+			stmt.ForeignKeys = append(stmt.ForeignKeys, fk)
+		default:
 			col, err := p.parseColumnDef()
 			if err != nil {
 				return nil, err
@@ -167,6 +212,68 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	}
 	p.next()
 	return stmt, nil
+}
+
+// parseCheckClause parses "CHECK ( expr )". The CHECK keyword has not been
+// consumed yet.
+func (p *parser) parseCheckClause() (Expr, error) {
+	if err := p.expectKeyword("CHECK"); err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenLParen {
+		return nil, fmt.Errorf("%w: expected ( after CHECK, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	expr, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close CHECK, got %q", ErrParse, p.peek().Literal)
+	}
+	p.next()
+	return expr, nil
+}
+
+// parseForeignKeyClause parses a table-level
+// "FOREIGN KEY ( col ) REFERENCES table ( col )" clause.
+func (p *parser) parseForeignKeyClause() (ForeignKey, error) {
+	if err := p.expectKeywords("FOREIGN", "KEY"); err != nil {
+		return ForeignKey{}, err
+	}
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	if len(cols) != 1 {
+		return ForeignKey{}, fmt.Errorf("%w: FOREIGN KEY supports exactly one column, got %d", ErrParse, len(cols))
+	}
+	ref, err := p.parseReferences()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	ref.Column = cols[0]
+	return ref, nil
+}
+
+// parseReferences parses "REFERENCES table ( col )", returning a ForeignKey
+// whose Column field the caller fills in.
+func (p *parser) parseReferences() (ForeignKey, error) {
+	if err := p.expectKeyword("REFERENCES"); err != nil {
+		return ForeignKey{}, err
+	}
+	if p.peek().Type != TokenIdent {
+		return ForeignKey{}, fmt.Errorf("%w: expected referenced table name, got %q", ErrParse, p.peek().Literal)
+	}
+	table := p.next().Literal
+	cols, err := p.parseParenColumnList()
+	if err != nil {
+		return ForeignKey{}, err
+	}
+	if len(cols) != 1 {
+		return ForeignKey{}, fmt.Errorf("%w: REFERENCES supports exactly one column, got %d", ErrParse, len(cols))
+	}
+	return ForeignKey{RefTable: table, RefColumn: cols[0]}, nil
 }
 
 // parseTableIndex parses a table-level "INDEX (cols...)" or "UNIQUE (cols...)"
@@ -237,8 +344,26 @@ func (p *parser) parseAlterTable() (*AlterTableStmt, error) {
 		}
 		stmt.Drop = true
 		stmt.Column = ColumnDef{Name: p.next().Literal}
+	case p.isKeyword("RENAME"):
+		p.next()
+		if p.isKeyword("COLUMN") {
+			p.next()
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected column name, got %q", ErrParse, p.peek().Literal)
+		}
+		old := p.next().Literal
+		if err := p.expectKeyword("TO"); err != nil {
+			return nil, err
+		}
+		if p.peek().Type != TokenIdent {
+			return nil, fmt.Errorf("%w: expected new column name, got %q", ErrParse, p.peek().Literal)
+		}
+		stmt.Rename = true
+		stmt.Column = ColumnDef{Name: old}
+		stmt.NewName = p.next().Literal
 	default:
-		return nil, fmt.Errorf("%w: expected ADD or DROP, got %q", ErrParse, p.peek().Literal)
+		return nil, fmt.Errorf("%w: expected ADD, DROP, or RENAME, got %q", ErrParse, p.peek().Literal)
 	}
 	return stmt, nil
 }
@@ -386,6 +511,22 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 				return ColumnDef{}, fmt.Errorf("%w: DEFAULT for column %q must be a literal, got %s", ErrParse, col.Name, operand.String())
 			}
 			col.Default = lit
+		case p.isKeyword("AUTO_INCREMENT"):
+			p.next()
+			col.AutoIncrement = true
+		case p.isKeyword("CHECK"):
+			chk, err := p.parseCheckClause()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			col.Check = chk
+		case p.isKeyword("REFERENCES"):
+			ref, err := p.parseReferences()
+			if err != nil {
+				return ColumnDef{}, err
+			}
+			ref.Column = col.Name
+			col.References = &ref
 		default:
 			return col, nil
 		}
@@ -448,7 +589,7 @@ func (p *parser) parseUpdate() (*UpdateStmt, error) {
 			return nil, fmt.Errorf("%w: expected = in assignment, got %q", ErrParse, t.Literal)
 		}
 		p.next()
-		val, err := p.parseLiteralOperand()
+		val, err := p.parseOperand()
 		if err != nil {
 			return nil, err
 		}
@@ -817,14 +958,16 @@ func (p *parser) parseSelectItem() (SelectItem, error) {
 		}
 	}
 
-	if p.peek().Type != TokenIdent {
-		return SelectItem{}, fmt.Errorf("%w: expected a column or aggregate, got %q", ErrParse, p.peek().Literal)
-	}
-	col, err := p.parseColumnRef()
+	// Anything else is a value expression. A bare column reference keeps the
+	// dedicated Column form so existing projection paths stay unchanged.
+	expr, err := p.parseOperand()
 	if err != nil {
 		return SelectItem{}, err
 	}
-	return SelectItem{Column: col, Alias: p.parseOptionalAlias()}, nil
+	if col, ok := expr.(*ColumnRef); ok {
+		return SelectItem{Column: col, Alias: p.parseOptionalAlias()}, nil
+	}
+	return SelectItem{Expr: expr, Alias: p.parseOptionalAlias()}, nil
 }
 
 func (p *parser) parseAggregate() (*AggregateCall, error) {
@@ -1067,19 +1210,19 @@ func (p *parser) parseFactor() (Expr, error) {
 		p.next() // NOT
 		return p.parseExists(true)
 	}
-	// A "(" introduces either a grouped boolean expression or, when followed
-	// by SELECT, a scalar subquery used as a comparison operand.
+	// A "(" introduces a grouped boolean expression, a scalar subquery used as
+	// a comparison operand, or a parenthesized arithmetic operand like
+	// (a - 5) * 2 > 10. Try the boolean grouping first and rewind on failure so
+	// the predicate path can consume the "(" as part of a value expression.
 	if p.peek().Type == TokenLParen && !p.lparenStartsSubquery() {
+		savedPos, savedParams := p.pos, p.params
 		p.next()
 		inner, err := p.parseOr()
-		if err != nil {
-			return nil, err
+		if err == nil && p.peek().Type == TokenRParen {
+			p.next()
+			return inner, nil
 		}
-		if p.peek().Type != TokenRParen {
-			return nil, fmt.Errorf("%w: expected ), got %q", ErrParse, p.peek().Literal)
-		}
-		p.next()
-		return inner, nil
+		p.pos, p.params = savedPos, savedParams
 	}
 	return p.parsePredicate()
 }
@@ -1319,14 +1462,169 @@ func (p *parser) parseTypedLiteral(prefix string) (Expr, bool, error) {
 	}
 }
 
+// parseOperand parses a value expression with the usual precedence:
+//
+//	additive       := multiplicative (('+' | '-') multiplicative)*
+//	multiplicative := unary (('*' | '/' | '%') unary)*
+//	unary          := ['-'] primary
+//	primary        := literal | column | function | CASE | aggregate
+//	                | '(' additive ')' | '(' SELECT ... ')'
 func (p *parser) parseOperand() (Expr, error) {
-	t := p.peek()
-	if t.Type == TokenLParen && p.lparenStartsSubquery() {
-		sub, err := p.parseParenSelect()
+	return p.parseAdditive()
+}
+
+func (p *parser) parseAdditive() (Expr, error) {
+	left, err := p.parseMultiplicative()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek().Type == TokenOperator && (p.peek().Literal == "+" || p.peek().Literal == "-") {
+		op := p.next().Literal
+		right, err := p.parseMultiplicative()
 		if err != nil {
 			return nil, err
 		}
-		return &ScalarSubquery{Select: sub}, nil
+		left = &ArithExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseMultiplicative() (Expr, error) {
+	left, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		var op string
+		switch {
+		case p.peek().Type == TokenStar:
+			op = "*"
+		case p.peek().Type == TokenOperator && (p.peek().Literal == "/" || p.peek().Literal == "%"):
+			op = p.peek().Literal
+		default:
+			return left, nil
+		}
+		p.next()
+		right, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		left = &ArithExpr{Op: op, Left: left, Right: right}
+	}
+}
+
+// parseUnary handles a leading unary minus. A negated numeric literal folds
+// into the literal itself (so DEFAULT -5 stays a plain literal); any other
+// operand desugars to (0 - operand).
+func (p *parser) parseUnary() (Expr, error) {
+	if p.peek().Type == TokenOperator && p.peek().Literal == "-" {
+		p.next()
+		operand, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		if lit, ok := operand.(*Literal); ok {
+			switch lit.Kind {
+			case LitInt:
+				return &Literal{Kind: LitInt, Int: -lit.Int}, nil
+			case LitFloat:
+				return &Literal{Kind: LitFloat, Float: -lit.Float}, nil
+			}
+		}
+		return &ArithExpr{Op: "-", Left: &Literal{Kind: LitInt}, Right: operand}, nil
+	}
+	return p.parsePrimaryOperand()
+}
+
+// scalarFuncs are the supported scalar functions usable in value expressions.
+var scalarFuncs = map[string]struct{}{
+	"UPPER": {}, "LOWER": {}, "LENGTH": {}, "ABS": {}, "COALESCE": {},
+}
+
+// parseScalarFunc parses "fn(arg, ...)" for a recognized scalar function. The
+// function-name identifier has not been consumed yet.
+func (p *parser) parseScalarFunc() (Expr, error) {
+	fn := strings.ToUpper(p.next().Literal)
+	p.next() // consume "("
+	call := &FuncCall{Name: fn}
+	for {
+		arg, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		call.Args = append(call.Args, arg)
+		if p.peek().Type != TokenComma {
+			break
+		}
+		p.next()
+	}
+	if p.peek().Type != TokenRParen {
+		return nil, fmt.Errorf("%w: expected ) to close %s(, got %q", ErrParse, fn, p.peek().Literal)
+	}
+	p.next()
+	return call, nil
+}
+
+// parseCase parses a searched CASE expression:
+// CASE WHEN cond THEN result [WHEN ...] [ELSE result] END.
+func (p *parser) parseCase() (Expr, error) {
+	if err := p.expectKeyword("CASE"); err != nil {
+		return nil, err
+	}
+	ce := &CaseExpr{}
+	for p.isKeyword("WHEN") {
+		p.next()
+		cond, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectKeyword("THEN"); err != nil {
+			return nil, err
+		}
+		then, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		ce.Whens = append(ce.Whens, WhenClause{Cond: cond, Then: then})
+	}
+	if len(ce.Whens) == 0 {
+		return nil, fmt.Errorf("%w: CASE requires at least one WHEN clause", ErrParse)
+	}
+	if p.isKeyword("ELSE") {
+		p.next()
+		els, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		ce.Else = els
+	}
+	if err := p.expectKeyword("END"); err != nil {
+		return nil, err
+	}
+	return ce, nil
+}
+
+func (p *parser) parsePrimaryOperand() (Expr, error) {
+	t := p.peek()
+	if t.Type == TokenLParen {
+		if p.lparenStartsSubquery() {
+			sub, err := p.parseParenSelect()
+			if err != nil {
+				return nil, err
+			}
+			return &ScalarSubquery{Select: sub}, nil
+		}
+		// Parenthesized value expression: (age - 5) * 2.
+		p.next()
+		inner, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		if p.peek().Type != TokenRParen {
+			return nil, fmt.Errorf("%w: expected ) to close expression, got %q", ErrParse, p.peek().Literal)
+		}
+		p.next()
+		return inner, nil
 	}
 	switch t.Type {
 	case TokenIdent:
@@ -1345,6 +1643,9 @@ func (p *parser) parseOperand() (Expr, error) {
 					return nil, err
 				}
 				return &AggregateExpr{Call: agg}, nil
+			}
+			if _, ok := scalarFuncs[strings.ToUpper(t.Literal)]; ok {
+				return p.parseScalarFunc()
 			}
 		}
 		return p.parseColumnRef()
@@ -1374,9 +1675,12 @@ func (p *parser) parseOperand() (Expr, error) {
 		p.params++
 		return &Placeholder{Ordinal: ord}, nil
 	case TokenKeyword:
-		if t.Literal == "NULL" {
+		switch t.Literal {
+		case "NULL":
 			p.next()
 			return &Literal{Kind: LitNull}, nil
+		case "CASE":
+			return p.parseCase()
 		}
 	}
 	return nil, fmt.Errorf("%w: expected column or literal, got %q", ErrParse, t.Literal)

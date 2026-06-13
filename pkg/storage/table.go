@@ -22,6 +22,38 @@ const (
 	HeapFormatV2 HeapFormat = iota
 )
 
+// Buffer pool sizes (in 8KB pages) for the heap and index files an engine
+// opens. They are variables, not constants, so the default is large enough to
+// sustain the engine's own write concurrency without exhausting frames (the
+// pool also waits for a frame before failing — see pagestore.BufferPool), and
+// so tests that need to force eviction at low data volumes can shrink them via
+// SetBufferPoolPagesForTest.
+//
+// Defaults: index 256 pages (2MB) and heap 512 pages (4MB) per file. With the
+// engine's concurrent writers each pinning only a handful of pages per
+// operation, this leaves ample headroom over realistic concurrency.
+var (
+	heapBufferPoolPages  = 512
+	indexBufferPoolPages = 256
+)
+
+// SetBufferPoolPagesForTest overrides the heap and index buffer pool sizes and
+// returns a function that restores the previous values. Test-only: it lets
+// eviction/recovery tests trigger eviction without writing huge data sets.
+func SetBufferPoolPagesForTest(heapPages, indexPages int) func() {
+	prevHeap, prevIndex := heapBufferPoolPages, indexBufferPoolPages
+	if heapPages > 0 {
+		heapBufferPoolPages = heapPages
+	}
+	if indexPages > 0 {
+		indexBufferPoolPages = indexPages
+	}
+	return func() {
+		heapBufferPoolPages = prevHeap
+		indexBufferPoolPages = prevIndex
+	}
+}
+
 // NewHeapForTable creates a heap of the chosen implementation at path
 // `path`, returning the heap.Heap interface. The cipher is optional.
 func NewHeapForTable(format HeapFormat, path string, cipher ...crypto.Cipher) (heap.Heap, error) {
@@ -32,8 +64,7 @@ func NewHeapForTable(format HeapFormat, path string, cipher ...crypto.Cipher) (h
 
 	switch format {
 	case HeapFormatV2:
-		// BufferPool default: 64 pages = 512KB of RAM per table.
-		return v2.NewHeapV2(path, 64, c)
+		return v2.NewHeapV2(path, heapBufferPoolPages, c)
 	default:
 		return nil, fmt.Errorf("unknown heap format: %d", format)
 	}
@@ -54,22 +85,22 @@ func NewBTreeForIndex(format BTreeFormat, primary bool, keyType DataType, path s
 	switch format {
 	case BTreeFormatV2:
 		if keyType == TypeVarchar {
-			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.VarcharKeyCodec{})
+			return btreev2.NewBTreeV2Varchar(path, indexBufferPoolPages, cipher, btreev2.VarcharKeyCodec{})
 		}
 		if keyType == TypeBytes {
-			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.BytesKeyCodec{})
+			return btreev2.NewBTreeV2Varchar(path, indexBufferPoolPages, cipher, btreev2.BytesKeyCodec{})
 		}
 		if keyType == TypeUUID {
-			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.UUIDKeyCodec{})
+			return btreev2.NewBTreeV2Varchar(path, indexBufferPoolPages, cipher, btreev2.UUIDKeyCodec{})
 		}
 		if keyType == TypeDecimal {
-			return btreev2.NewBTreeV2Varchar(path, 16, cipher, btreev2.DecimalKeyCodec{})
+			return btreev2.NewBTreeV2Varchar(path, indexBufferPoolPages, cipher, btreev2.DecimalKeyCodec{})
 		}
 		codec, err := codecForDataType(keyType)
 		if err != nil {
 			return nil, err
 		}
-		return btreev2.NewBTreeV2Typed(path, 16, cipher, codec)
+		return btreev2.NewBTreeV2Typed(path, indexBufferPoolPages, cipher, codec)
 	default:
 		return nil, fmt.Errorf("unknown btree format: %d", format)
 	}
@@ -329,7 +360,7 @@ func (tb *TableMetaData) newTable(tableName string, indices []Index, hm heap.Hea
 			if value.Primary {
 				tree, err = NewBTreeForIndex(BTreeFormatV2, true, value.Type, treePath, tb.defaultIndexCipher)
 			} else {
-				tree, err = btreev2.NewBTreeV2Varchar(treePath, 16, tb.defaultIndexCipher, btreev2.CompositeKeyCodec{})
+				tree, err = btreev2.NewBTreeV2Varchar(treePath, indexBufferPoolPages, tb.defaultIndexCipher, btreev2.CompositeKeyCodec{})
 			}
 			if err != nil {
 				return err
@@ -396,7 +427,7 @@ func (tb *TableMetaData) addIndex(tableName string, idx Index) error {
 	}
 
 	treePath := defaultV2IndexPath(table.Heap.Path(), tableName, idx.Name)
-	tree, err := btreev2.NewBTreeV2Varchar(treePath, 16, cipher, btreev2.CompositeKeyCodec{})
+	tree, err := btreev2.NewBTreeV2Varchar(treePath, indexBufferPoolPages, cipher, btreev2.CompositeKeyCodec{})
 	if err != nil {
 		return err
 	}

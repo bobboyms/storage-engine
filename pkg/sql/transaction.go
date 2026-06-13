@@ -98,7 +98,12 @@ func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error
 		return nil, err
 	}
 	if sel.ForUpdate {
-		if err := t.lockRows(ctx, schema, rows); err != nil {
+		// FOR UPDATE must observe the latest committed version of each locked
+		// row, not this transaction's (possibly stale) snapshot. Returning the
+		// snapshot value here silently loses concurrent updates in any
+		// read-modify-write built on FOR UPDATE (e.g. a balance transfer).
+		rows, err = t.lockAndRefreshRows(ctx, schema, sel.Alias, rows, sel.Where)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -111,7 +116,7 @@ func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error
 		sortRows(rows, order)
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
-	return projectRows(rows, expandProjection(sel.Items, schema)), nil
+	return projectRows(rows, expandProjection(sel.Items, schema), nil)
 }
 
 // table resolves a table name against the transaction's catalog.
@@ -185,16 +190,43 @@ func (t *Tx) scanRows(ctx context.Context, schema *TableSchema, alias string, re
 	return rows, nil
 }
 
-func (t *Tx) lockRows(ctx context.Context, schema *TableSchema, rows []Row) error {
+// lockAndRefreshRows takes the row lock on each candidate row (via
+// GetForUpdate) and rebuilds the result from the latest committed version the
+// lock exposes — so once a concurrent holder commits, this transaction sees
+// its change instead of the stale snapshot. Rows deleted by a committed
+// concurrent transaction drop out, and the residual predicate is re-evaluated
+// against the fresh value so a row that no longer matches is excluded. This is
+// the engine's READ COMMITTED-style FOR UPDATE: it does not re-scan for new
+// phantom rows, only refreshes the rows the snapshot already matched.
+func (t *Tx) lockAndRefreshRows(ctx context.Context, schema *TableSchema, alias string, rows []Row, residual Expr) ([]Row, error) {
 	pk, _ := schema.PrimaryIndex()
 	pkCol, _ := schema.Column(pk.Column)
+	refreshed := make([]Row, 0, len(rows))
 	for _, row := range rows {
 		key := NormalizeValue(row[pk.Column], pkCol.Type)
-		if _, _, err := t.wtx.GetForUpdate(ctx, schema.Name, pk.Name, key); err != nil {
-			return fmt.Errorf("%w: lock row: %v", ErrExec, err)
+		raw, found, err := t.wtx.GetForUpdate(ctx, schema.Name, pk.Name, key)
+		if err != nil {
+			return nil, fmt.Errorf("%w: lock row: %w", ErrExec, err)
 		}
+		if !found {
+			continue // deleted by a concurrent committed transaction
+		}
+		fresh, err := decodeRow(t.codec, schema, alias, raw)
+		if err != nil {
+			return nil, err
+		}
+		if residual != nil {
+			keep, err := Evaluate(residual, fresh)
+			if err != nil {
+				return nil, err
+			}
+			if !keep {
+				continue
+			}
+		}
+		refreshed = append(refreshed, fresh)
 	}
-	return nil
+	return refreshed, nil
 }
 
 // Exec parses and executes an INSERT, UPDATE, or DELETE within the
@@ -204,6 +236,13 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (int64, error)
 	if err != nil {
 		return 0, err
 	}
+	return t.execStmt(ctx, stmt)
+}
+
+// execStmt dispatches a parsed data-modifying statement within the
+// transaction. DDL and transaction-control statements are not transactional
+// here and are rejected.
+func (t *Tx) execStmt(ctx context.Context, stmt Statement) (int64, error) {
 	switch s := stmt.(type) {
 	case *InsertStmt:
 		return t.execInsert(ctx, s)
@@ -212,7 +251,7 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (int64, error)
 	case *DeleteStmt:
 		return t.execDelete(ctx, s)
 	default:
-		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, or DELETE", ErrExec)
+		return 0, fmt.Errorf("%w: only INSERT, UPDATE, and DELETE are allowed inside a transaction", ErrExec)
 	}
 }
 
@@ -221,18 +260,28 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: unknown table %q", ErrExec, stmt.Table)
 	}
-	// Validate every row before staging any write, so a malformed later row
-	// does not leave earlier rows staged in the transaction.
-	docs, err := encodeInsertRows(schema, stmt)
+	// Assign AUTO_INCREMENT values, then validate every row before staging any
+	// write, so a malformed later row does not leave earlier rows staged in the
+	// transaction.
+	columns, rows, err := t.exec.resolveAutoIncrement(ctx, schema, stmt.Columns, stmt.Rows)
 	if err != nil {
 		return 0, err
+	}
+	docs, err := encodeInsertRows(schema, columns, rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, d := range docs {
+		if err := enforceRowIntegrity(ctx, t.catalog, schema, d.row, t.fkLookup()); err != nil {
+			return 0, err
+		}
 	}
 	for _, d := range docs {
 		if err := t.wtx.WriteRow(ctx, stmt.Table, d.json, d.keys, true); err != nil {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: insert row: %w", ErrExec, err)
 		}
 	}
 	return int64(len(docs)), nil
@@ -258,15 +307,23 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var affected int64
+	// Prepare and validate every updated row before staging any write, so a
+	// constraint violation on a later row does not leave earlier rows staged.
+	updates := make([]preparedUpdate, 0, len(matches))
 	for _, raw := range matches {
 		doc, err := rawToMap(t.codec, raw)
 		if err != nil {
 			return 0, err
 		}
-		for _, a := range stmt.Assignments {
-			col, _ := schema.Column(a.Column)
-			doc[a.Column] = literalToDocValue(a.Value.(*Literal), col.Type)
+		typedRow, err := decodeRow(t.codec, schema, "", raw)
+		if err != nil {
+			return 0, err
+		}
+		if err := applyAssignments(schema, stmt.Assignments, doc, typedRow); err != nil {
+			return 0, err
+		}
+		if err := enforceRowIntegrity(ctx, t.catalog, schema, typedRow, t.fkLookup()); err != nil {
+			return 0, err
 		}
 		keys, err := keysFromMap(schema, doc)
 		if err != nil {
@@ -276,11 +333,16 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%w: encode document: %v", ErrExec, err)
 		}
-		if err := t.wtx.WriteRow(ctx, stmt.Table, string(jsonDoc), keys, false); err != nil {
+		updates = append(updates, preparedUpdate{json: string(jsonDoc), keys: keys})
+	}
+
+	var affected int64
+	for _, u := range updates {
+		if err := t.wtx.WriteRow(ctx, stmt.Table, u.json, u.keys, false); err != nil {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: upsert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: upsert row: %w", ErrExec, err)
 		}
 		affected++
 	}
@@ -306,6 +368,9 @@ func (t *Tx) execDelete(ctx context.Context, stmt *DeleteStmt) (int64, error) {
 	pkCol, _ := schema.Column(pk.Column)
 	keys, err := t.matchingPrimaryKeys(ctx, schema, stmt.Where, pk.Column, pkCol.Type)
 	if err != nil {
+		return 0, err
+	}
+	if err := enforceDeleteRestrict(ctx, t.catalog, schema, keys, t.integrityScan()); err != nil {
 		return 0, err
 	}
 	var affected int64
@@ -392,28 +457,28 @@ func (t *Tx) matchingPrimaryKeys(ctx context.Context, schema *TableSchema, where
 }
 
 // buildInsertDoc validates one INSERT row (a VALUES tuple positionally aligned
-// with columns) and returns its document map and the index key map required to
-// write it.
-func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, error) {
+// with columns) and returns its document map, the index key map required to
+// write it, and the typed row used for constraint validation.
+func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[string]any, map[string]types.Comparable, Row, error) {
 	if len(columns) != len(values) {
-		return nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
+		return nil, nil, nil, fmt.Errorf("%w: %d columns but %d values", ErrExec, len(columns), len(values))
 	}
 	doc := make(map[string]any, len(columns))
 	literals := make(map[string]*Literal, len(columns))
 	for i, name := range columns {
 		col, ok := schema.Column(name)
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: unknown column %q", ErrExec, name)
 		}
 		lit, ok := values[i].(*Literal)
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: value for %q is not a literal", ErrExec, name)
 		}
 		if lit.Kind == LitNull && col.NotNull {
-			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
+			return nil, nil, nil, fmt.Errorf("%w: column %q is NOT NULL", ErrExec, name)
 		}
 		if _, err := ColumnValue(lit, col.Type); err != nil {
-			return nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
+			return nil, nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
 		}
 		doc[name] = literalToDocValue(lit, col.Type)
 		literals[name] = lit
@@ -429,13 +494,27 @@ func buildInsertDoc(schema *TableSchema, columns []string, values []Expr) (map[s
 			doc[col.Name] = literalToDocValue(col.Default, col.Type)
 			literals[col.Name] = col.Default
 		case col.NotNull:
-			return nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
+			return nil, nil, nil, fmt.Errorf("%w: column %q is NOT NULL and has no default", ErrExec, col.Name)
 		}
 	}
 	keys, err := keysForInsert(schema, literals)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	addCompositeKeyFields(doc, schema, keys)
-	return doc, keys, nil
+
+	typed := make(Row, len(schema.Columns))
+	for _, col := range schema.Columns {
+		lit, ok := literals[col.Name]
+		if !ok {
+			typed[col.Name] = types.NullKey{}
+			continue
+		}
+		v, err := ColumnValue(lit, col.Type)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%w: %v", ErrExec, err)
+		}
+		typed[col.Name] = v
+	}
+	return doc, keys, typed, nil
 }

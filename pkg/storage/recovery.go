@@ -102,6 +102,13 @@ type recoveryAnalysis struct {
 	// represent structural ops that crashed mid-flight; recovery
 	// restores the captured before-images for their pages.
 	PartialNTAs map[uint64]ntaBeginRecord
+	// FlushedSinceCheckpoint holds the page-file paths with EntryPageRedo
+	// records after the last checkpoint: files that took buffer pool flushes
+	// (evictions) not covered by a full FlushAll. Their on-disk state is a
+	// mixed-vintage cut — possibly with zero-filled hole pages — so B+ trees
+	// on this list cannot be trusted structurally and must be rebuilt from
+	// the heap before logical redo replays through them.
+	FlushedSinceCheckpoint map[string]struct{}
 }
 
 type ntaBeginRecord struct {
@@ -186,6 +193,10 @@ func (ra *recoveryAnalysis) ingestCheckpoint(payload []byte) error {
 		// replay.
 		return nil
 	}
+	// A checkpoint record is only written after flushAllDirtyPages succeeds,
+	// so every flush logged before this point is now part of a complete,
+	// consistent on-disk image: earlier evictions stop being suspect.
+	ra.FlushedSinceCheckpoint = make(map[string]struct{})
 	if beginLSN < ra.CheckpointLSN {
 		return nil
 	}
@@ -215,6 +226,8 @@ func newRecoveryAnalysis() *recoveryAnalysis {
 		LoserTxs:     make(map[uint64]struct{}),
 		UndoneLSNs:   make(map[uint64]map[uint64]struct{}),
 		PartialNTAs:  make(map[uint64]ntaBeginRecord),
+
+		FlushedSinceCheckpoint: make(map[string]struct{}),
 	}
 }
 
@@ -317,6 +330,17 @@ func (se *StorageEngine) analyzeRecoveryWithCipher(walPath string, cipher crypto
 				wal.ReleaseEntry(entry)
 				return nil, fmt.Errorf("analysis parse NTA at entry %d: %w", count, err)
 			}
+			wal.ReleaseEntry(entry)
+			continue
+		}
+
+		if entry.Header.EntryType == wal.EntryPageRedo {
+			path, _, _, err := deserializePageRedoPayload(entry.Payload)
+			if err != nil {
+				wal.ReleaseEntry(entry)
+				return nil, fmt.Errorf("analysis parse page redo at entry %d: %w", count, err)
+			}
+			result.FlushedSinceCheckpoint[path] = struct{}{}
 			wal.ReleaseEntry(entry)
 			continue
 		}
@@ -581,7 +605,7 @@ func (se *StorageEngine) redoPageEntry(entry *wal.WALEntry, targets map[string]p
 	if err != nil {
 		return false, err
 	}
-	target := targets[path]
+	target := resolvePageRedoTarget(targets, path)
 	if target == nil {
 		return false, nil
 	}

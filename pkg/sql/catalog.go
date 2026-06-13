@@ -30,6 +30,15 @@ var ErrDuplicateColumn = errors.New("sql: duplicate column")
 // enforcement that returns this error is added in a later increment.
 var ErrUniqueViolation = errors.New("sql: unique constraint violation")
 
+// ErrCheckViolation is returned when an INSERT or UPDATE produces a row whose
+// CHECK constraint evaluates to false.
+var ErrCheckViolation = errors.New("sql: check constraint violation")
+
+// ErrForeignKeyViolation is returned when a write would break referential
+// integrity: a child row referencing a missing parent, or a parent delete/drop
+// while child rows still reference it.
+var ErrForeignKeyViolation = errors.New("sql: foreign key constraint violation")
+
 // Column describes a single column of a table together with the engine data
 // type used to encode its values. NotNull rejects NULL values on INSERT and
 // UPDATE; Default, when non-nil, is the literal stored when an INSERT omits
@@ -40,6 +49,9 @@ type Column struct {
 	Type    storage.DataType
 	NotNull bool
 	Default *Literal
+	// AutoIncrement marks an INT primary-key column whose value is assigned
+	// from a per-table counter when an INSERT omits it or provides NULL.
+	AutoIncrement bool
 }
 
 // IndexDef describes an index. A single-column index serves Column; a composite
@@ -59,11 +71,16 @@ type IndexDef struct {
 // composite reports whether idx spans more than one column.
 func (idx IndexDef) composite() bool { return len(idx.Columns) > 1 }
 
-// TableSchema describes the columns and indexes of a single table.
+// TableSchema describes the columns, indexes, and integrity constraints of a
+// single table. Checks are boolean expressions every stored row must satisfy
+// (NULL operands make a check pass, matching SQL's UNKNOWN semantics).
+// ForeignKeys constrain column values to a parent table's primary key.
 type TableSchema struct {
-	Name    string
-	Columns []Column
-	Indexes []IndexDef
+	Name        string
+	Columns     []Column
+	Indexes     []IndexDef
+	Checks      []Expr
+	ForeignKeys []ForeignKey
 }
 
 // Column returns the column with the given name and whether it exists.
@@ -134,6 +151,24 @@ func (s TableSchema) validate() error {
 		}
 	}
 
+	pkColumn := ""
+	for _, idx := range s.Indexes {
+		if idx.Primary {
+			pkColumn = idx.Column
+		}
+	}
+	for _, c := range s.Columns {
+		if !c.AutoIncrement {
+			continue
+		}
+		if c.Type != storage.TypeInt {
+			return fmt.Errorf("%w: AUTO_INCREMENT column %q must be INT, got %s", ErrInvalidSchema, c.Name, c.Type)
+		}
+		if c.Name != pkColumn {
+			return fmt.Errorf("%w: AUTO_INCREMENT column %q must be the primary key", ErrInvalidSchema, c.Name)
+		}
+	}
+
 	seenIdx := make(map[string]struct{}, len(s.Indexes))
 	primaries := 0
 	for _, idx := range s.Indexes {
@@ -163,7 +198,77 @@ func (s TableSchema) validate() error {
 	if primaries != 1 {
 		return fmt.Errorf("%w: table %q must have exactly one primary index, found %d", ErrInvalidSchema, s.Name, primaries)
 	}
+
+	for _, chk := range s.Checks {
+		if chk == nil {
+			return fmt.Errorf("%w: table %q has a nil CHECK expression", ErrInvalidSchema, s.Name)
+		}
+		if containsSubquery(chk) {
+			return fmt.Errorf("%w: CHECK %s: subqueries are not allowed in CHECK constraints", ErrInvalidSchema, chk.String())
+		}
+		if err := validateExprColumns(chk, &s, ""); err != nil {
+			return fmt.Errorf("%w: CHECK %s: %v", ErrInvalidSchema, chk.String(), err)
+		}
+	}
+	for _, fk := range s.ForeignKeys {
+		if _, ok := s.Column(fk.Column); !ok {
+			return fmt.Errorf("%w: foreign key on unknown column %q in table %q", ErrInvalidSchema, fk.Column, s.Name)
+		}
+		if fk.RefTable == "" || fk.RefColumn == "" {
+			return fmt.Errorf("%w: foreign key on %q must name a referenced table and column", ErrInvalidSchema, fk.Column)
+		}
+	}
 	return nil
+}
+
+// containsSubquery reports whether expr contains any subquery node.
+func containsSubquery(expr Expr) bool {
+	switch e := expr.(type) {
+	case *ScalarSubquery, *InSubqueryExpr, *ExistsExpr:
+		return true
+	case *IsNullExpr:
+		return containsSubquery(e.Operand)
+	case *BinaryExpr:
+		return containsSubquery(e.Left) || containsSubquery(e.Right)
+	case *ArithExpr:
+		return containsSubquery(e.Left) || containsSubquery(e.Right)
+	case *FuncCall:
+		for _, a := range e.Args {
+			if containsSubquery(a) {
+				return true
+			}
+		}
+	case *CaseExpr:
+		for _, w := range e.Whens {
+			if containsSubquery(w.Cond) || containsSubquery(w.Then) {
+				return true
+			}
+		}
+		if e.Else != nil {
+			return containsSubquery(e.Else)
+		}
+	}
+	return false
+}
+
+// referencingForeignKeys returns every foreign key in the catalog that
+// references the given table, paired with the child schema declaring it.
+func (c *Catalog) referencingForeignKeys(table string) []fkReference {
+	var refs []fkReference
+	for _, ts := range c.tables {
+		for _, fk := range ts.ForeignKeys {
+			if fk.RefTable == table {
+				refs = append(refs, fkReference{child: ts, fk: fk})
+			}
+		}
+	}
+	return refs
+}
+
+// fkReference pairs a child table schema with one of its foreign keys.
+type fkReference struct {
+	child *TableSchema
+	fk    ForeignKey
 }
 
 // Catalog holds the registered table schemas for a SQL session.

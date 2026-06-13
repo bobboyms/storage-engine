@@ -104,3 +104,26 @@ jobs:
 
       - name: Run required environmental fault tests
         run: make test-faults-env
+
+  simulation:
+    name: simulation tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Production-shaped banking workload: concurrent transfers whose money
+      # must stay conserved, plus a kill -9 crash-recovery variant. Scale 1
+      # (10k accounts, 48 workers, ~12k transfers) already forces the
+      # concurrency and conservation checks within the CI time budget; the
+      # workload is fsync-bound so higher scales grow super-linearly. Run
+      # `make test-simulation-stress` (scale 4+) locally for heavier volume.
+      - name: Run banking simulation
+        run: go test ./tests/simulation -tags simulation -count=1 -v -timeout 25m
+        env:
+          STORAGE_ENGINE_SIM_SCALE: "1"

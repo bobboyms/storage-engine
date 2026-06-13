@@ -5,11 +5,20 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-// ErrBufferPoolFull occurs when all pages in the pool are pinned and
-// there is no room to bring in a new one.
+// ErrBufferPoolFull occurs when every page in the pool stays pinned for the
+// whole frame-wait timeout, so a new page can never be brought in. Under
+// normal contention a fetch waits for a pinned frame to be released; this
+// error means the working set genuinely exceeds the pool capacity.
 var ErrBufferPoolFull = errors.New("pagestore: buffer pool has no free frames (all pages are pinned)")
+
+// defaultFrameWaitTimeout bounds how long a fetch waits for a pinned frame to
+// be released before giving up with ErrBufferPoolFull. It is generous because
+// buffer-pool pins are short-lived (one page access); reaching it signals
+// real over-subscription, not transient contention.
+const defaultFrameWaitTimeout = 10 * time.Second
 
 // BufferPool é um cache LRU de pages em RAM em cima de um PageFile.
 //
@@ -42,6 +51,10 @@ type BufferPool struct {
 	mu     sync.Mutex
 	frames map[PageID]*frame
 	lru    *list.List // front = mais recente, back = menos recente
+
+	// frameWaitTimeout bounds how long fetch/NewPage wait for a pinned frame
+	// to be released before failing with ErrBufferPoolFull.
+	frameWaitTimeout time.Duration
 
 	beforeFlush func(pageID PageID, page *Page) error
 
@@ -113,15 +126,28 @@ func NewBufferPool(pf *PageFile, capacity int) *BufferPool {
 		capacity = 1
 	}
 	return &BufferPool{
-		pf:       pf,
-		capacity: capacity,
-		frames:   make(map[PageID]*frame, capacity),
-		lru:      list.New(),
+		pf:               pf,
+		capacity:         capacity,
+		frames:           make(map[PageID]*frame, capacity),
+		lru:              list.New(),
+		frameWaitTimeout: defaultFrameWaitTimeout,
 	}
 }
 
 // Capacity devolve a capacidade configurada.
 func (bp *BufferPool) Capacity() int { return bp.capacity }
+
+// SetFrameWaitTimeout overrides how long fetch/NewPage wait for a pinned
+// frame to be released before failing with ErrBufferPoolFull. A non-positive
+// value restores the default. Primarily a tuning/testing knob.
+func (bp *BufferPool) SetFrameWaitTimeout(d time.Duration) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	if d <= 0 {
+		d = defaultFrameWaitTimeout
+	}
+	bp.frameWaitTimeout = d
+}
 
 // Size devolve quantos frames estão ocupados no momento.
 func (bp *BufferPool) Size() int {
@@ -210,11 +236,9 @@ func (bp *BufferPool) fetch(pageID PageID, write bool) (*PageHandle, error) {
 	bp.misses.Add(1)
 
 	// Miss: garante espaço antes de carregar.
-	for len(bp.frames) >= bp.capacity {
-		if !bp.tryEvictLocked() {
-			bp.mu.Unlock()
-			return nil, ErrBufferPoolFull
-		}
+	if err := bp.makeRoomLocked(); err != nil {
+		bp.mu.Unlock()
+		return nil, err
 	}
 
 	// Carrega do disco com pool.mu segurada (simplificação Fase 2).
@@ -239,6 +263,39 @@ func (bp *BufferPool) acquireLatch(f *frame, write bool) {
 		f.rw.Lock()
 	} else {
 		f.rw.RLock()
+	}
+}
+
+// makeRoomLocked ensures there is room for one new frame. Called with bp.mu
+// held. If the pool is full it evicts an unpinned frame; if every frame is
+// pinned it releases bp.mu, waits briefly for some other goroutine to release
+// a pin, and retries — up to frameWaitTimeout. This turns a transient
+// concurrency spike into added latency instead of an ErrBufferPoolFull that
+// would degrade the engine. Only genuine over-subscription (a working set
+// larger than the pool) reaches the timeout and returns the error. On return
+// (nil) bp.mu is held and there is room; on error bp.mu is held too.
+func (bp *BufferPool) makeRoomLocked() error {
+	if len(bp.frames) < bp.capacity {
+		return nil
+	}
+	deadline := time.Now().Add(bp.frameWaitTimeout)
+	backoff := 50 * time.Microsecond
+	for {
+		if len(bp.frames) < bp.capacity || bp.tryEvictLocked() {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return ErrBufferPoolFull
+		}
+		// Every resident frame is pinned right now. Drop the lock so the
+		// goroutines holding those pins can finish and release them, then
+		// retry. The backoff caps quickly so latency stays low.
+		bp.mu.Unlock()
+		time.Sleep(backoff)
+		if backoff < 2*time.Millisecond {
+			backoff *= 2
+		}
+		bp.mu.Lock()
 	}
 }
 
@@ -291,11 +348,9 @@ func (bp *BufferPool) NewPage() (*PageHandle, error) {
 	}
 
 	bp.mu.Lock()
-	for len(bp.frames) >= bp.capacity {
-		if !bp.tryEvictLocked() {
-			bp.mu.Unlock()
-			return nil, ErrBufferPoolFull
-		}
+	if err := bp.makeRoomLocked(); err != nil {
+		bp.mu.Unlock()
+		return nil, err
 	}
 
 	f := &frame{pageID: pageID}

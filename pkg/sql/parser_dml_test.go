@@ -91,14 +91,14 @@ func TestParseDeleteWithoutWhere(t *testing.T) {
 
 func TestParseDMLErrors(t *testing.T) {
 	inputs := []string{
-		"INSERT users (id) VALUES (1)",          // missing INTO
-		"INSERT INTO users (id) (1)",            // missing VALUES
-		"INSERT INTO users (id) VALUES (a)",     // non-literal value
-		"INSERT INTO users VALUES (1)",          // missing column list
-		"UPDATE users name = 'x'",               // missing SET
-		"UPDATE users SET name 'x'",             // missing = in assignment
-		"UPDATE users SET name = id WHERE id=1", // non-literal assignment value
-		"DELETE users WHERE id = 1",             // missing FROM
+		"INSERT users (id) VALUES (1)",       // missing INTO
+		"INSERT INTO users (id) (1)",         // missing VALUES
+		"INSERT INTO users (id) VALUES (a)",  // non-literal value
+		"INSERT INTO users VALUES (1)",       // missing column list
+		"UPDATE users name = 'x'",            // missing SET
+		"UPDATE users SET name 'x'",          // missing = in assignment
+		"UPDATE users SET name = WHERE id=1", // missing assignment value
+		"DELETE users WHERE id = 1",          // missing FROM
 	}
 	for _, in := range inputs {
 		t.Run(in, func(t *testing.T) {

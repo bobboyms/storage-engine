@@ -80,7 +80,7 @@ func (e *Executor) Migrate(ctx context.Context, statements []string) error {
 	}
 
 	for i, step := range steps {
-		if err := e.applyDDL(step.stmt); err != nil {
+		if err := e.applyDDL(ctx, step.stmt); err != nil {
 			rollback()
 			return fmt.Errorf("migrate step %d (%s): %w", i+1, step.sql, err)
 		}
@@ -121,9 +121,12 @@ func validateDDL(shadow []TableSchema, stmt Statement) ([]TableSchema, error) {
 			ns  TableSchema
 			err error
 		)
-		if s.Drop {
+		switch {
+		case s.Rename:
+			ns, err = evolveRenameColumn(shadow[pos], s.Column.Name, s.NewName)
+		case s.Drop:
 			ns, err = evolveDropColumn(shadow[pos], s.Column.Name)
-		} else {
+		default:
 			ns, err = evolveAddColumn(shadow[pos], s.Column)
 		}
 		if err != nil {
@@ -138,13 +141,13 @@ func validateDDL(shadow []TableSchema, stmt Statement) ([]TableSchema, error) {
 
 // applyDDL performs the physical and in-memory effects of one DDL statement
 // without persisting the schema file (the caller persists once at the end).
-func (e *Executor) applyDDL(stmt Statement) error {
+func (e *Executor) applyDDL(ctx context.Context, stmt Statement) error {
 	switch s := stmt.(type) {
 	case *CreateTableStmt:
 		_, err := e.applyCreate(s)
 		return err
 	case *AlterTableStmt:
-		_, err := e.applyAlter(s)
+		_, err := e.applyAlter(ctx, s)
 		return err
 	default:
 		return fmt.Errorf("%w: Migrate only accepts CREATE TABLE and ALTER TABLE", ErrExec)

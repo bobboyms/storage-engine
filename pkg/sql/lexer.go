@@ -64,6 +64,10 @@ var keywords = map[string]struct{}{
 	"DESCRIBE": {}, "UNIQUE": {}, "DEFAULT": {},
 	"UNION": {}, "ALL": {},
 	"OVER": {}, "PARTITION": {},
+	"CASE": {}, "WHEN": {}, "THEN": {}, "ELSE": {}, "END": {},
+	"CHECK": {}, "FOREIGN": {}, "REFERENCES": {}, "RENAME": {}, "TO": {},
+	"AUTO_INCREMENT": {},
+	"BEGIN":          {}, "COMMIT": {}, "ROLLBACK": {}, "START": {}, "TRANSACTION": {}, "WORK": {},
 }
 
 // Lex tokenizes input into a slice of tokens terminated by a TokenEOF token.
@@ -97,6 +101,9 @@ func Lex(input string) ([]Token, error) {
 			i++
 		case c == '?':
 			toks = append(toks, Token{Type: TokenPlaceholder, Literal: "?", Pos: i})
+			i++
+		case c == '+' || c == '-' || c == '/' || c == '%':
+			toks = append(toks, Token{Type: TokenOperator, Literal: string(c), Pos: i})
 			i++
 		case c == '=' || c == '<' || c == '>' || c == '!':
 			tok, next, err := lexOperator(input, i)

@@ -96,7 +96,7 @@ func queryFrom(ctx context.Context, sel *SelectStmt, ec *evalContext, src fromSo
 		sortRows(rows, sel.OrderBy)
 	}
 	rows = applyOffsetLimit(rows, sel.Offset, sel.Limit)
-	return projectRows(rows, expandProjectionSources(sel.Items, sources)), nil
+	return projectRows(rows, expandProjectionSources(sel.Items, sources), ec)
 }
 
 func buildSources(ctx context.Context, sel *SelectStmt, src fromSource) ([]source, error) {
@@ -296,6 +296,8 @@ func expandProjectionSources(items []SelectItem, sources []source) []projSpec {
 			}
 		case it.Column != nil:
 			specs = append(specs, projSpec{name: it.OutputName(), source: it.Column.String()})
+		case it.Expr != nil:
+			specs = append(specs, projSpec{name: it.OutputName(), expr: it.Expr})
 		}
 	}
 	return specs
