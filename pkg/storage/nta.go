@@ -72,19 +72,25 @@ type pageWriter interface {
 // rollbackPartialNTAs restores the captured before-images for every
 // nested top action that did not see its NTACommit. Called once,
 // during recovery, after the redo / logical-undo passes finish.
+// Pages of files in skipPaths (trees recovery already rebuilt from the
+// heap) are left alone: their before-images describe the replaced file.
 //
 // The writes go directly to the underlying page file (bypassing the
 // buffer pool) because recovery still owns the engine exclusively at
 // this point; any in-memory frame for the affected pages will be
 // re-fetched fresh on the first read after recovery completes.
-func (se *StorageEngine) rollbackPartialNTAs(analysis *recoveryAnalysis) (int, error) {
+func (se *StorageEngine) rollbackPartialNTAs(analysis *recoveryAnalysis, skipPaths map[string]struct{}) (int, error) {
 	if se == nil || analysis == nil || len(analysis.PartialNTAs) == 0 {
 		return 0, nil
 	}
 	writers := se.ntaPageWriters()
 	rolledBack := 0
 	for ntaLSN, nta := range analysis.PartialNTAs {
+		restored := false
 		for _, p := range nta.Pages {
+			if _, skip := skipPaths[p.Path]; skip {
+				continue
+			}
 			writer, ok := writers[p.Path]
 			if !ok {
 				return rolledBack, fmt.Errorf("storage: NTA rollback: no writer registered for path %q (nta lsn %d)", p.Path, ntaLSN)
@@ -92,8 +98,11 @@ func (se *StorageEngine) rollbackPartialNTAs(analysis *recoveryAnalysis) (int, e
 			if err := writer.WritePageBytes(p.PageID, p.PreImage); err != nil {
 				return rolledBack, fmt.Errorf("storage: NTA rollback page %s/%d: %w", p.Path, p.PageID, err)
 			}
+			restored = true
 		}
-		rolledBack++
+		if restored {
+			rolledBack++
+		}
 	}
 	return rolledBack, nil
 }

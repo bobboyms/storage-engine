@@ -87,3 +87,63 @@ func TestRebuildIndex_AbortsOnDuplicateKeys(t *testing.T) {
 		t.Fatalf("users has %d visible rows after aborted rebuild, want 3", got)
 	}
 }
+
+// TestRebuildIndex_RecoveryModeResolvesDuplicatesByCreateLSN pins the crash
+// recovery policy: when an eviction persisted an UPDATE's new version but not
+// the page holding the old version's delete mark, both look live. The rebuild
+// must keep the newest CreateLSN and re-stamp the lost delete mark instead of
+// aborting.
+func TestRebuildIndex_RecoveryModeResolvesDuplicatesByCreateLSN(t *testing.T) {
+	ctx := context.Background()
+	se := newVerifyEngine(t, t.TempDir())
+	table := usersTable(t, se)
+
+	// A second live record claiming pk "u-0" with a NEWER CreateLSN — the
+	// shape a lost delete mark leaves behind.
+	doc, err := bsoncodec.New().Parse(`{"id": "u-0", "name": "n-0"}`)
+	if err != nil {
+		t.Fatalf("parse doc: %v", err)
+	}
+	raw, err := doc.Bytes()
+	if err != nil {
+		t.Fatalf("encode doc: %v", err)
+	}
+	newerLSN := uint64(999)
+	winnerRid, err := table.Heap.Write(raw, newerLSN, heapv2.NoRecordID)
+	if err != nil {
+		t.Fatalf("write duplicate: %v", err)
+	}
+	// Recovery always finishes with the tracker at the WAL's max LSN, so
+	// snapshots taken after it can see the surviving version.
+	se.lsnTracker.Set(newerLSN)
+
+	if err := rebuildIndex(ctx, se.TableMetaData, nil, "users", "id", true); err != nil {
+		t.Fatalf("recovery-mode rebuild: %v", err)
+	}
+
+	offset, found, err := table.Indices["id"].Tree.Get(types.VarcharKey("u-0"))
+	if err != nil || !found {
+		t.Fatalf("u-0 lookup after rebuild: found=%v err=%v", found, err)
+	}
+	if offset != winnerRid {
+		t.Fatalf("u-0 points at rid %d, want the newer record %d", offset, winnerRid)
+	}
+	if got := countVisibleRows(t, se, "users"); got != 3 {
+		t.Fatalf("users has %d visible rows after rebuild, want 3", got)
+	}
+	// The older duplicate must carry the re-stamped delete mark.
+	liveCopies := 0
+	heapV2 := table.Heap.(*heapv2.HeapV2)
+	err = heapV2.ForEachRecord(ctx, func(_ int64, rh heapv2.RecordHeader, _ []byte) error {
+		if rh.Valid {
+			liveCopies++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan heap: %v", err)
+	}
+	if liveCopies != 3 {
+		t.Fatalf("heap has %d live records, want 3 (loser re-stamped as deleted)", liveCopies)
+	}
+}

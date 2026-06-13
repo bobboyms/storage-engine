@@ -98,7 +98,12 @@ func (t *Tx) execSelect(ctx context.Context, sel *SelectStmt) (*ResultSet, error
 		return nil, err
 	}
 	if sel.ForUpdate {
-		if err := t.lockRows(ctx, schema, rows); err != nil {
+		// FOR UPDATE must observe the latest committed version of each locked
+		// row, not this transaction's (possibly stale) snapshot. Returning the
+		// snapshot value here silently loses concurrent updates in any
+		// read-modify-write built on FOR UPDATE (e.g. a balance transfer).
+		rows, err = t.lockAndRefreshRows(ctx, schema, sel.Alias, rows, sel.Where)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -185,16 +190,43 @@ func (t *Tx) scanRows(ctx context.Context, schema *TableSchema, alias string, re
 	return rows, nil
 }
 
-func (t *Tx) lockRows(ctx context.Context, schema *TableSchema, rows []Row) error {
+// lockAndRefreshRows takes the row lock on each candidate row (via
+// GetForUpdate) and rebuilds the result from the latest committed version the
+// lock exposes — so once a concurrent holder commits, this transaction sees
+// its change instead of the stale snapshot. Rows deleted by a committed
+// concurrent transaction drop out, and the residual predicate is re-evaluated
+// against the fresh value so a row that no longer matches is excluded. This is
+// the engine's READ COMMITTED-style FOR UPDATE: it does not re-scan for new
+// phantom rows, only refreshes the rows the snapshot already matched.
+func (t *Tx) lockAndRefreshRows(ctx context.Context, schema *TableSchema, alias string, rows []Row, residual Expr) ([]Row, error) {
 	pk, _ := schema.PrimaryIndex()
 	pkCol, _ := schema.Column(pk.Column)
+	refreshed := make([]Row, 0, len(rows))
 	for _, row := range rows {
 		key := NormalizeValue(row[pk.Column], pkCol.Type)
-		if _, _, err := t.wtx.GetForUpdate(ctx, schema.Name, pk.Name, key); err != nil {
-			return fmt.Errorf("%w: lock row: %v", ErrExec, err)
+		raw, found, err := t.wtx.GetForUpdate(ctx, schema.Name, pk.Name, key)
+		if err != nil {
+			return nil, fmt.Errorf("%w: lock row: %w", ErrExec, err)
 		}
+		if !found {
+			continue // deleted by a concurrent committed transaction
+		}
+		fresh, err := decodeRow(t.codec, schema, alias, raw)
+		if err != nil {
+			return nil, err
+		}
+		if residual != nil {
+			keep, err := Evaluate(residual, fresh)
+			if err != nil {
+				return nil, err
+			}
+			if !keep {
+				continue
+			}
+		}
+		refreshed = append(refreshed, fresh)
 	}
-	return nil
+	return refreshed, nil
 }
 
 // Exec parses and executes an INSERT, UPDATE, or DELETE within the
@@ -249,7 +281,7 @@ func (t *Tx) execInsert(ctx context.Context, stmt *InsertStmt) (int64, error) {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: insert row: %w", ErrExec, err)
 		}
 	}
 	return int64(len(docs)), nil
@@ -310,7 +342,7 @@ func (t *Tx) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, error) {
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: upsert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: upsert row: %w", ErrExec, err)
 		}
 		affected++
 	}

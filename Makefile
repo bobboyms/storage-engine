@@ -1,4 +1,4 @@
-.PHONY: test test-race test-chaos test-faults test-faults-env test-stress test-stress-race test-safety build run clean help lint lint-fix vuln tidy-check
+.PHONY: test test-race test-chaos test-faults test-faults-env test-stress test-stress-race test-simulation test-simulation-stress test-safety bench build run clean help lint lint-fix vuln tidy-check
 
 # Default target
 all: build
@@ -73,7 +73,24 @@ test-stress-race:
 	@echo "Running stress tests with race detector..."
 	@go test ./tests/stress -tags stress -race -count=1 -v
 
-test-safety: test-race test-chaos test-faults test-stress-race
+test-simulation:
+	@echo "Running production-shaped simulation tests..."
+	@go test ./tests/simulation -tags simulation -count=1 -v -timeout 30m
+
+# High-volume, high-concurrency variant. STORAGE_ENGINE_SIM_SCALE multiplies
+# account counts and operation volume; bump it to stress harder locally.
+test-simulation-stress:
+	@echo "Running simulation tests at high volume (scale=$${STORAGE_ENGINE_SIM_SCALE:-4})..."
+	@STORAGE_ENGINE_SIM_SCALE=$${STORAGE_ENGINE_SIM_SCALE:-4} go test ./tests/simulation -tags simulation -count=1 -v -timeout 60m
+
+test-safety: test-race test-chaos test-faults test-stress-race test-simulation
+
+# Run the performance benchmark suite (insert, lookup, scan, commit latency,
+# crash recovery). Numbers are hardware-dependent: run on the target machine
+# and compare runs with benchstat, not against CI.
+bench:
+	@echo "Running benchmarks..."
+	@go test ./tests/bench -bench=. -benchmem -count=1 -run='^$$'
 
 # Verify go.mod / go.sum are tidy (no unused or missing module entries).
 # Fails with a diff if `go mod tidy` would change anything.
@@ -118,7 +135,10 @@ help:
 	@echo "  make test-faults-env - Run required ENOSPC/fsync environmental fault tests"
 	@echo "  make test-stress - Run concurrent stress tests"
 	@echo "  make test-stress-race - Run concurrent stress tests with race detector"
-	@echo "  make test-safety - Run race, chaos, faults, and stress suites"
+	@echo "  make test-simulation - Run production-shaped banking simulation (conservation + crash)"
+	@echo "  make test-simulation-stress - Run the simulation at high volume (STORAGE_ENGINE_SIM_SCALE)"
+	@echo "  make test-safety - Run race, chaos, faults, stress, and simulation suites"
+	@echo "  make bench   - Run performance benchmarks (writes, reads, recovery)"
 	@echo "  make lint    - Run go mod tidy check + golangci-lint"
 	@echo "  make lint-fix - Run golangci-lint and auto-fix"
 	@echo "  make tidy-check - Fail if go.mod/go.sum need 'go mod tidy'"

@@ -386,6 +386,19 @@ func (se *StorageEngine) Close() error {
 		}
 	}
 	if se.WAL != nil {
+		// A clean close just flushed every dirty page (tree/heap Close above),
+		// so the on-disk image is a complete consistent cut. Record that with
+		// a checkpoint entry: recovery uses it to tell a clean shutdown from a
+		// crash after partial eviction flushes (which force index rebuilds).
+		// Best-effort — a failure only costs a more conservative reopen.
+		// Skipped when a close error means the flush guarantee does not hold,
+		// and when the runtime is degraded: a failed post-commit apply left
+		// committed data that exists only in the WAL, and a checkpoint here
+		// would tell the next recovery to skip exactly that replay.
+		if lsn := se.lsnTracker.Current(); err == nil && se.runtimeReadyError() == nil && lsn > 0 && !isPoisonedLSN(lsn) {
+			payload := serializeCheckpointPayloadV2(lsn, nil, nil)
+			_ = se.WAL.WriteCheckpointRecordPayload(lsn, payload)
+		}
 		if wErr := se.WAL.Close(); wErr != nil {
 			if err == nil {
 				err = wErr
@@ -962,6 +975,14 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	if err != nil {
 		return err
 	}
+	if se.recoveryLimitLSN > 0 {
+		// Point-in-time recovery replays a source log over RESTORED files: a
+		// checkpoint in that log certifies what was on the source's disk, not
+		// on the restore target, so trusting it would skip replay the target
+		// never received. Full replay is idempotent; only the cost grows.
+		analysis.CheckpointLSN = 0
+		analysis.DPT = nil
+	}
 	if analysis.MaxLSN > maxLSN {
 		maxLSN = analysis.MaxLSN
 	}
@@ -979,6 +1000,14 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	}
 	if physMaxLSN > maxLSN {
 		maxLSN = physMaxLSN
+	}
+
+	// Trees of tables that took eviction flushes after the last checkpoint
+	// are a mixed-vintage cut on disk and cannot be replayed through; rebuild
+	// them from the heap before logical redo probes them.
+	rebuiltPaths, indexesRebuilt, err := se.rebuildEvictedIndexes(ctx, analysis)
+	if err != nil {
+		return err
 	}
 
 	count, skipped, logMaxLSN, err := se.runLogicalRedo(ctx, walPath, cipher, analysis, loadedLSNs)
@@ -1002,7 +1031,9 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 	// 2b. Roll back nested top actions that started but never
 	// committed. Their captured before-images get written back to
 	// the on-disk pages so a half-applied split / merge is reverted.
-	partialNTAsRolledBack, err := se.rollbackPartialNTAs(analysis)
+	// Rebuilt trees are excluded: their before-images describe pages of
+	// the replaced file and would corrupt the fresh one.
+	partialNTAsRolledBack, err := se.rollbackPartialNTAs(analysis, rebuiltPaths)
 	if err != nil {
 		return err
 	}
@@ -1021,6 +1052,7 @@ func (se *StorageEngine) RecoverWithCipher(ctx context.Context, walPath string, 
 		CLRsApplied:           clrsApplied,
 		LoserTxsUndone:        loserTxsUndone,
 		PartialNTAsRolledBack: partialNTAsRolledBack,
+		IndexesRebuilt:        indexesRebuilt,
 		CheckpointLSN:         analysis.CheckpointLSN,
 		MaxLSN:                maxLSN,
 		Duration:              time.Since(recoveryStart),

@@ -40,8 +40,12 @@ type RecoveryEvent struct {
 	// PartialNTAsRolledBack counts the nested top actions whose Commit
 	// never reached disk and whose before-images were restored.
 	PartialNTAsRolledBack int
-	CheckpointLSN         uint64
-	MaxLSN                uint64
+	// IndexesRebuilt counts the B+ trees recovery rebuilt from the heap
+	// because their files took eviction flushes after the last checkpoint
+	// and the on-disk image could not be trusted structurally.
+	IndexesRebuilt int
+	CheckpointLSN  uint64
+	MaxLSN         uint64
 	// Duration is the wall-clock time spent inside the recovery routine
 	// (analysis + redo + undo). Zero when no WAL was present.
 	Duration time.Duration
@@ -240,6 +244,7 @@ func (se *StorageEngine) fireRecoveryComplete(ev RecoveryEvent) {
 		"clrs_applied", ev.CLRsApplied,
 		"loser_txs_undone", ev.LoserTxsUndone,
 		"partial_ntas_rolled_back", ev.PartialNTAsRolledBack,
+		"indexes_rebuilt", ev.IndexesRebuilt,
 		"checkpoint_lsn", ev.CheckpointLSN,
 		"max_lsn", ev.MaxLSN,
 		"duration", ev.Duration,

@@ -29,11 +29,13 @@ Treat this codebase as data infrastructure: small regressions can affect durabil
 - `tests/chaos/`: chaos/crash and recovery tests.
 - `tests/faults/`: fault-injection tests for corruption, ENOSPC, and fsync failures.
 - `tests/stress/`: stress and concurrency tests.
+- `tests/simulation/`: production-shaped workload tests (banking model) whose oracle is money conservation under concurrency and crash recovery.
+- `tests/bench/`: performance benchmark suite (writes, reads, commit latency, crash recovery).
 - `experiments/`: isolated experiments, currently including pagestore work.
 - `examples/`: executable usage examples for the storage engine, transactions, backup/restore, TDE, indexes, CRUD, vacuum, isolation, and recovery.
 - `docs/`: documentation, ADRs, production guides, tutorials, and architecture plans.
 - `.agents/skills/`: local project skills that guide Codex behavior.
-- `.github/workflows/`: CI pipelines for vet, build, unit tests, race tests, chaos tests, stress tests, and fault tests.
+- `.github/workflows/`: CI pipelines for vet, build, unit tests, race tests, chaos tests, stress tests, fault tests, and simulation tests.
 
 ## Available Skills
 
@@ -124,15 +126,17 @@ make test-chaos
 make test-faults
 make test-stress
 make test-stress-race
+make test-simulation
 make test-safety
 ```
 
 ## When to Run Specialized Suites
 
-- Changes in WAL, recovery, checkpointing, durability, fsync, or page files: run relevant package tests and consider `make test-faults`, `make test-chaos`, and `make test-safety`.
-- Changes in concurrency, MVCC, transactions, buffer pool, or locks: run focused tests, the relevant package suite, and `make test-race`.
+- Changes in WAL, recovery, checkpointing, durability, fsync, or page files: run relevant package tests and consider `make test-faults`, `make test-chaos`, `make test-simulation`, and `make test-safety`.
+- Changes in concurrency, MVCC, transactions, buffer pool, or locks: run focused tests, the relevant package suite, `make test-race`, and `make test-simulation`.
 - Changes in stress paths or behavior under load: run `make test-stress` or `make test-stress-race`.
 - Changes in faults, ENOSPC, corruption, or simulated filesystems: run `make test-faults`.
+- Changes that could affect transactional correctness, isolation, or durability end to end: run `make test-simulation` (banking conservation + crash recovery); crank `STORAGE_ENGINE_SIM_SCALE` via `make test-simulation-stress` for higher volume.
 - General API or storage changes: run `go test ./...` and the full coverage gate.
 
 ## CI
@@ -149,6 +153,7 @@ The CI in `.github/workflows/ci.yml` runs:
 - `go test ./tests/chaos -tags chaos -count=1 -v`
 - `go test ./tests/stress -tags stress -race -count=1 -v`
 - fault tests with the `faults` tag, including WAL, heap, BTree, ENOSPC, and fsync.
+- `go test ./tests/simulation -tags simulation` (job `simulation`, banking conservation + crash recovery, `STORAGE_ENGINE_SIM_SCALE=2`).
 
 `.github/workflows/codeql.yml` runs CodeQL (`security-and-quality` query suite) on push/PR to `main` and weekly on Mondays at 06:00 UTC. Findings appear under the repository's Code scanning alerts.
 

@@ -472,5 +472,48 @@ func (h *HeapV2) HealPoisonedPageLSNs(ctx context.Context, lsn uint64) (int, err
 	return healed, h.bp.FlushAll()
 }
 
+// HealZeroPages formats every all-zero on-disk page as an empty slotted
+// page and returns how many were healed. A zero page is a hole: a crash
+// after buffer pool eviction extended the file past pages that were never
+// flushed, so their records exist only in the WAL. Healing them lets
+// recovery scans read the heap end to end; the missing records are
+// re-applied by logical redo. Pages with any non-zero byte are left alone —
+// real corruption must keep failing loudly.
+func (h *HeapV2) HealZeroPages(ctx context.Context) (int, error) {
+	healed := 0
+	numPages := h.pf.NumPages()
+	for pageID := pagestore.PageID(1); uint64(pageID) < numPages; pageID++ {
+		if pageID%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return healed, err
+			}
+		}
+		raw, err := h.pf.ReadPageRaw(pageID)
+		if err != nil {
+			return healed, err
+		}
+		if !isAllZero(raw[:]) {
+			continue
+		}
+		var page pagestore.Page
+		InitSlottedPage(&page, h.maxBodySize)
+		if err := h.pf.WritePage(pageID, &page); err != nil {
+			return healed, err
+		}
+		h.bp.ReplacePageImage(pageID, &page)
+		healed++
+	}
+	return healed, nil
+}
+
+func isAllZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // FSM retorna o Free Space Map desta heap. Exposto para testes e diagnóstico.
 func (h *HeapV2) FSM() *FreeSpaceMap { return h.fsm }

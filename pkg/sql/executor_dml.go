@@ -94,7 +94,7 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: insert row: %w", ErrExec, err)
 		}
 		return 1, nil
 	}
@@ -106,11 +106,11 @@ func (e *Executor) execInsert(ctx context.Context, stmt *InsertStmt) (int64, err
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: insert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: insert row: %w", ErrExec, err)
 		}
 	}
 	if err := wtx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("%w: commit multi-row insert: %v", ErrExec, err)
+		return 0, fmt.Errorf("%w: commit multi-row insert: %w", ErrExec, err)
 	}
 	return int64(len(docs)), nil
 }
@@ -235,7 +235,7 @@ func (e *Executor) execUpdate(ctx context.Context, stmt *UpdateStmt) (int64, err
 			if ue := asUniqueViolation(err); ue != nil {
 				return 0, ue
 			}
-			return 0, fmt.Errorf("%w: upsert row: %v", ErrExec, err)
+			return 0, fmt.Errorf("%w: upsert row: %w", ErrExec, err)
 		}
 		affected++
 	}
