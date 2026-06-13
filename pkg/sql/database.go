@@ -221,6 +221,15 @@ func (e *Executor) Close() error {
 	if e.engine == nil {
 		return nil
 	}
+	// Roll back a session transaction left open by an unmatched SQL-text BEGIN
+	// so its staged writes are discarded and the engine handle is released
+	// cleanly.
+	e.sessionMu.Lock()
+	if e.sessionTx != nil {
+		_ = e.sessionTx.Rollback(context.Background())
+		e.sessionTx = nil
+	}
+	e.sessionMu.Unlock()
 	_, _ = e.RunMaintenance(context.Background())
 	err := e.engine.Close()
 	// Release the directory lock last so the engine has finished all file I/O

@@ -307,6 +307,27 @@ type DescribeStmt struct {
 
 func (*DescribeStmt) stmtNode() {}
 
+// TxControl enumerates the transaction-control actions expressible as SQL text.
+type TxControl int
+
+const (
+	// TxBegin starts a session transaction (BEGIN / START TRANSACTION).
+	TxBegin TxControl = iota
+	// TxCommit commits the open session transaction (COMMIT).
+	TxCommit
+	// TxRollback discards the open session transaction (ROLLBACK).
+	TxRollback
+)
+
+// TxControlStmt represents a transaction-control statement (BEGIN, COMMIT, or
+// ROLLBACK) driven from SQL text. It opens or closes a session transaction on
+// the executor, so subsequent statements run inside it until it ends.
+type TxControlStmt struct {
+	Action TxControl
+}
+
+func (*TxControlStmt) stmtNode() {}
+
 // Expr is a WHERE-clause expression node.
 type Expr interface {
 	// String returns a canonical, fully parenthesized representation.

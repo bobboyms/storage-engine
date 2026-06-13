@@ -69,7 +69,17 @@ type Executor struct {
 	aiMu       sync.Mutex
 	aiCounters map[string]int64
 	aiSeeded   map[string]struct{}
+
+	// sessionMu guards sessionTx, the transaction opened by a SQL-text BEGIN.
+	// While it is set, Exec/Query route DML and SELECTs through it (so the
+	// session sees its own staged writes) until a COMMIT or ROLLBACK clears it.
+	sessionMu sync.Mutex
+	sessionTx *Tx
 }
+
+// ErrNoTransaction is returned by a SQL-text COMMIT or ROLLBACK issued when no
+// session transaction is open, and by other transaction-control misuse.
+var ErrNoTransaction = errors.New("sql: no transaction in progress")
 
 // NewExecutor builds an Executor. The codec must match the one the engine uses
 // to encode documents (the engine's default is bsoncodec).
@@ -93,6 +103,13 @@ func (e *Executor) Query(ctx context.Context, query string, args ...any) (*Resul
 	if err != nil {
 		return nil, err
 	}
+	// A plain SELECT issued while a SQL-text transaction is open runs through it
+	// so the session observes its own staged writes (read-your-writes).
+	if sel, ok := stmt.(*SelectStmt); ok {
+		if tx := e.currentSessionTx(); tx != nil {
+			return tx.execSelect(ctx, sel)
+		}
+	}
 	switch s := stmt.(type) {
 	case *SelectStmt:
 		return e.execSelect(ctx, s, nil)
@@ -102,6 +119,45 @@ func (e *Executor) Query(ctx context.Context, query string, args ...any) (*Resul
 		return e.execDescribe(s)
 	default:
 		return nil, fmt.Errorf("%w: Query expects a SELECT or DESCRIBE statement", ErrExec)
+	}
+}
+
+// currentSessionTx returns the open session transaction, or nil when none is
+// active.
+func (e *Executor) currentSessionTx() *Tx {
+	e.sessionMu.Lock()
+	defer e.sessionMu.Unlock()
+	return e.sessionTx
+}
+
+// execTxControl applies a SQL-text BEGIN, COMMIT, or ROLLBACK against the
+// executor's session-transaction state.
+func (e *Executor) execTxControl(ctx context.Context, stmt *TxControlStmt) (int64, error) {
+	e.sessionMu.Lock()
+	defer e.sessionMu.Unlock()
+	switch stmt.Action {
+	case TxBegin:
+		if e.sessionTx != nil {
+			return 0, fmt.Errorf("%w: a transaction is already in progress", ErrExec)
+		}
+		e.sessionTx = e.Begin()
+		return 0, nil
+	case TxCommit:
+		if e.sessionTx == nil {
+			return 0, fmt.Errorf("%w: COMMIT", ErrNoTransaction)
+		}
+		tx := e.sessionTx
+		e.sessionTx = nil
+		return 0, tx.Commit(ctx)
+	case TxRollback:
+		if e.sessionTx == nil {
+			return 0, fmt.Errorf("%w: ROLLBACK", ErrNoTransaction)
+		}
+		tx := e.sessionTx
+		e.sessionTx = nil
+		return 0, tx.Rollback(ctx)
+	default:
+		return 0, fmt.Errorf("%w: unknown transaction control action", ErrExec)
 	}
 }
 

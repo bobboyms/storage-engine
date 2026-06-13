@@ -204,6 +204,13 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (int64, error)
 	if err != nil {
 		return 0, err
 	}
+	return t.execStmt(ctx, stmt)
+}
+
+// execStmt dispatches a parsed data-modifying statement within the
+// transaction. DDL and transaction-control statements are not transactional
+// here and are rejected.
+func (t *Tx) execStmt(ctx context.Context, stmt Statement) (int64, error) {
 	switch s := stmt.(type) {
 	case *InsertStmt:
 		return t.execInsert(ctx, s)
@@ -212,7 +219,7 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (int64, error)
 	case *DeleteStmt:
 		return t.execDelete(ctx, s)
 	default:
-		return 0, fmt.Errorf("%w: Exec expects INSERT, UPDATE, or DELETE", ErrExec)
+		return 0, fmt.Errorf("%w: only INSERT, UPDATE, and DELETE are allowed inside a transaction", ErrExec)
 	}
 }
 

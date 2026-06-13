@@ -109,9 +109,41 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseDropTable()
 	case "DESCRIBE", "DESC":
 		return p.parseDescribe()
+	case "BEGIN", "START", "COMMIT", "ROLLBACK":
+		return p.parseTxControl()
 	default:
 		return nil, fmt.Errorf("%w: unsupported statement %q", ErrParse, t.Literal)
 	}
+}
+
+// parseTxControl parses a transaction-control statement: BEGIN [TRANSACTION],
+// START TRANSACTION, COMMIT [TRANSACTION|WORK], or ROLLBACK [TRANSACTION|WORK].
+func (p *parser) parseTxControl() (*TxControlStmt, error) {
+	kw := p.next().Literal
+	stmt := &TxControlStmt{}
+	switch kw {
+	case "BEGIN":
+		stmt.Action = TxBegin
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	case "START":
+		stmt.Action = TxBegin
+		if err := p.expectKeyword("TRANSACTION"); err != nil {
+			return nil, err
+		}
+	case "COMMIT":
+		stmt.Action = TxCommit
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	case "ROLLBACK":
+		stmt.Action = TxRollback
+		if p.isKeyword("TRANSACTION") || p.isKeyword("WORK") {
+			p.next()
+		}
+	}
+	return stmt, nil
 }
 
 func (p *parser) parseCreateTable() (*CreateTableStmt, error) {

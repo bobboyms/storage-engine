@@ -33,6 +33,15 @@ func (e *Executor) Exec(ctx context.Context, query string, args ...any) (int64, 
 	if err != nil {
 		return 0, err
 	}
+	// Transaction control opens or closes the session transaction.
+	if tc, ok := stmt.(*TxControlStmt); ok {
+		return e.execTxControl(ctx, tc)
+	}
+	// While a SQL-text transaction is open, DML runs through it; DDL (which is
+	// not transactional here) is rejected by the transaction's dispatcher.
+	if tx := e.currentSessionTx(); tx != nil {
+		return tx.execStmt(ctx, stmt)
+	}
 	switch s := stmt.(type) {
 	case *InsertStmt:
 		return e.execInsert(ctx, s)
